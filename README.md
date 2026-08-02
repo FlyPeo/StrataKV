@@ -31,7 +31,24 @@ StrataKV 只在 Linux/WSL 上以本地进程运行，不使用 Docker、Compose 
 - MVCC、乐观事务、悲观锁和 Primary-First 2PC；
 - HTTP/JSON Gateway、业务 CLI、管理工具和 C++ SDK；
 - 本地进程启停、节点重启、日志、状态检查和可靠性测试；
-- RocksDB 持久化，`skiplist` 仅用于开发测试。
+- RocksDB 作为唯一的本地持久化存储引擎。
+
+源码按职责划分：
+
+| 目录 | 职责 |
+|---|---|
+| `src/storage` | RocksDB 适配与存储抽象 |
+| `src/raft` | Raft 共识、状态机与持久化 |
+| `src/transaction` | MVCC、锁、时间戳、路由与 2PC |
+| `src/rpc` | 自研 RPC 传输与服务分发 |
+| `src/proto` | Raft 和 KV 的 Protobuf 契约及生成代码 |
+| `src/server` | 存储节点进程入口 |
+| `src/admin` | 集群运维工具入口 |
+| `src/sdk` | C++ 客户端 SDK |
+| `src/gateway` | HTTP/JSON 网关入口 |
+| `src/cli` | 业务命令行客户端入口 |
+| `src/common` | 公共配置与工具 |
+| `src/pulsar` | 协程运行时子模块 |
 
 ## 2. 快速开始
 

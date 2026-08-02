@@ -24,7 +24,6 @@ Options:
   --nodes N          Physical local processes. Default: 3.
   --replicas R       Raft replicas in every Region. Default: 3.
   --project NAME     Persistent deployment name. Default: stratakv-local.
-  --engine NAME      rocksdb (default) or skiplist.
   --gateway-port P   Local HTTP Gateway port. Default: 8080.
   --max-raft-state B Snapshot threshold base in bytes. Default: 1048576.
   --node node-N      Physical node selected by restart-node/logs/local-data.
@@ -45,7 +44,6 @@ if [ "$#" -gt 0 ]; then shift; fi
 nodes=3
 replicas=3
 project=stratakv-local
-engine=rocksdb
 gateway_port=8080
 max_raft_state=1048576
 selected_node=all
@@ -57,7 +55,6 @@ while [ "$#" -gt 0 ]; do
     --nodes) nodes=${2:?--nodes requires a value}; shift 2 ;;
     --replicas) replicas=${2:?--replicas requires a value}; shift 2 ;;
     --project) project=${2:?--project requires a value}; shift 2 ;;
-    --engine) engine=${2:?--engine requires a value}; shift 2 ;;
     --gateway-port) gateway_port=${2:?--gateway-port requires a value}; shift 2 ;;
     --max-raft-state) max_raft_state=${2:?--max-raft-state requires a value}; shift 2 ;;
     --node) selected_node=${2:?--node requires a value}; shift 2 ;;
@@ -85,7 +82,6 @@ load_settings() {
   }
   nodes=$(sed -n 's/^nodes=//p' "$settings_file")
   replicas=$(sed -n 's/^replicas=//p' "$settings_file")
-  engine=$(sed -n 's/^engine=//p' "$settings_file")
   gateway_port=$(sed -n 's/^gateway_port=//p' "$settings_file")
   saved_max_raft_state=$(sed -n 's/^max_raft_state=//p' "$settings_file")
   [ -z "$saved_max_raft_state" ] || max_raft_state=$saved_max_raft_state
@@ -100,7 +96,6 @@ validate_topology() {
   is_uint "$max_raft_state" && [ "$max_raft_state" -gt 0 ] || {
     echo "--max-raft-state must be a positive integer." >&2; exit 2;
   }
-  case "$engine" in rocksdb|skiplist) ;; *) echo "--engine must be rocksdb or skiplist." >&2; exit 2 ;; esac
   [ "$nodes" -eq 3 ] && [ "$replicas" -eq 3 ] || {
     echo "Native local deployment currently requires --nodes 3 --replicas 3." >&2
     exit 2
@@ -156,7 +151,6 @@ write_regions() {
     echo "project=${project}"
     echo "nodes=3"
     echo "replicas=3"
-    echo "engine=${engine}"
     echo "gateway_port=${gateway_port}"
     echo "max_raft_state=${max_raft_state}"
   } >"$settings_file"
@@ -198,7 +192,7 @@ start_node() {
   log="${logs_dir}/${name}.log"
   (
     cd "${runtime_dir}/${name}"
-    KV_ENGINE_BACKEND="$engine" setsid "$node_bin" \
+    setsid "$node_bin" \
       --node-id "$node_id" \
       --regions-config "$regions_file" \
       --max-raft-state "$max_raft_state" >>"$log" 2>&1 </dev/null &

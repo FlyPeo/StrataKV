@@ -35,18 +35,17 @@ find_package(Protobuf REQUIRED)
 # 这样编译器会先在 build 目录找最新的 .pb.h，而不是去源码目录找旧的
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/rpc)
-include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/raftCore)
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/raft)
 
 # 3. 包含源码头文件路径
 include_directories(${PROJECT_SOURCE_DIR}/src/common/include)
+include_directories(${PROJECT_SOURCE_DIR}/src/rpc)
 include_directories(${PROJECT_SOURCE_DIR}/src/rpc/include)
-include_directories(${PROJECT_SOURCE_DIR}/src/raftCore/include)
+include_directories(${PROJECT_SOURCE_DIR}/src/raft/include)
 include_directories(${PROJECT_SOURCE_DIR})
-include_directories(${PROJECT_SOURCE_DIR}/src/raftRpcPro)
-include_directories(${PROJECT_SOURCE_DIR}/src/raftRpcPro/include)
-include_directories(${PROJECT_SOURCE_DIR}/src/skipList/include)
-include_directories(${PROJECT_SOURCE_DIR}/src/kvEngine/include)
-include_directories(${PROJECT_SOURCE_DIR}/src/txn/include)
+include_directories(${PROJECT_SOURCE_DIR}/src/proto)
+include_directories(${PROJECT_SOURCE_DIR}/src/storage/include)
+include_directories(${PROJECT_SOURCE_DIR}/src/transaction/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/sdk/include)
 include_directories(${PROJECT_SOURCE_DIR}/test)
 
@@ -59,15 +58,15 @@ add_subdirectory(test)
 
 # 5. 核心库构建
 # 确保所有子目录传回来的变量都已经包含了相应的 .pb.cc
-add_library(skip_list_on_raft STATIC 
-    ${src_raftCore} 
-    ${src_kvEngine}
-    ${src_raftRpcPro}
-    ${src_txn}
+add_library(stratakv_core STATIC
+    ${src_raft}
+    ${src_storage}
+    ${src_proto}
+    ${src_transaction}
 )
 
-target_link_libraries(skip_list_on_raft 
-    rpc_lib
+target_link_libraries(stratakv_core
+    stratakv_rpc
     Pulsar::pulsar
     muduo_net 
     muduo_base 
@@ -78,28 +77,28 @@ target_link_libraries(skip_list_on_raft
 )
 
 # 可部署的单节点进程。通过不同的 node-id、端口和集群配置启动三个实例，组成一个 Raft group。
-add_executable(stratakv-node src/server/stratakvd_main.cpp)
-target_link_libraries(stratakv-node PRIVATE skip_list_on_raft)
+add_executable(stratakv-node src/server/node_main.cpp)
+target_link_libraries(stratakv-node PRIVATE stratakv_core)
 
 # 面向部署用户的最小 KV 客户端。自动在配置的 peer 中寻找当前 Leader。
-add_executable(stratakv-admin src/client/stratakv_main.cpp)
-target_link_libraries(stratakv-admin PRIVATE skip_list_on_raft rpc_lib)
+add_executable(stratakv-admin src/admin/admin_main.cpp)
+target_link_libraries(stratakv-admin PRIVATE stratakv_core stratakv_rpc)
 
 # Public developer SDK.  It deliberately exposes transactions, not the internal
 # Raft RPC protocol used between StrataKV nodes.
 add_library(stratakv_sdk STATIC src/sdk/client.cpp)
 target_include_directories(stratakv_sdk PUBLIC ${PROJECT_SOURCE_DIR}/src/sdk/include)
-target_link_libraries(stratakv_sdk PUBLIC skip_list_on_raft rpc_lib)
+target_link_libraries(stratakv_sdk PUBLIC stratakv_core stratakv_rpc)
 install(TARGETS stratakv_sdk ARCHIVE DESTINATION lib)
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/src/sdk/include/stratakv DESTINATION include)
 
 # Stable HTTP/JSON entrypoint for non-C++ users and operational integrations.
-add_executable(stratakv-gateway src/gateway/stratakv_gateway_main.cpp)
+add_executable(stratakv-gateway src/gateway/gateway_main.cpp)
 target_link_libraries(stratakv-gateway PRIVATE stratakv_sdk pthread)
 
 # End-user command-line client. It calls the public Gateway rather than the
 # internal Raft RPC protocol, matching how non-operator applications connect.
-add_executable(stratakv-client src/user_client/stratakv_user_main.cpp)
+add_executable(stratakv-client src/cli/client_main.cpp)
 target_link_libraries(stratakv-client PRIVATE pthread)
 
 install(TARGETS
