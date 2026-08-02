@@ -277,7 +277,6 @@ bash deploy/stratakv-server rebuild --project my-db
 | `deploy/runtime/` | 配置、PID、日志、Raft 状态和 RocksDB | 删除会丢失项目数据 |
 | `test/` | 测试源码 | 建议保留 |
 | `test-results/` | 自动测试报告 | 可重新生成，删除会失去历史报告 |
-| `docs/` | 面试导航、事实基线、API、学习与设计/优化记录 | 建议保留 |
 
 每个运行项目使用独立目录：
 
@@ -465,7 +464,6 @@ bin/
 lib/
 src/
 deploy/（runtime 除外）
-docs/
 test/
 ```
 

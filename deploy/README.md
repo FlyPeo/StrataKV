@@ -146,8 +146,8 @@ bash deploy/stratakv-reliability run \
 ```
 
 脚本使用独立的 `reliability-db` 本地目录，运行时重启一个 Leader 所在节点，
-逐笔验证三 Region 原子性，再重启整个本地集群验证 RocksDB 持久化。详情见
-[可靠性测试文档](../docs/reliability-testing.md)。
+逐笔验证三 Region 原子性，再重启整个本地集群验证 RocksDB 持久化。完整参数可通过
+`bash deploy/stratakv-reliability --help` 查看。
 
 ## 常见问题
 
