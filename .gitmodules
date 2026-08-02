@@ -1,0 +1,3 @@
+[submodule "src/pulsar"]
+	path = src/pulsar
+	url = https://github.com/FlyPeo/Pulsar.git

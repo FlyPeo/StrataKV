@@ -1,0 +1,446 @@
+#!/usr/bin/env sh
+# Build and operate a persistent StrataKV cluster as native local processes.
+set -eu
+
+deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_dir=$(CDPATH= cd -- "${deploy_dir}/.." && pwd)
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bash deploy/stratakv-server up [options]
+  bash deploy/stratakv-server run [options]
+  bash deploy/stratakv-server config [options]
+  bash deploy/stratakv-server rebuild [--project NAME]
+  bash deploy/stratakv-server restart-node [--project NAME] --node node-N
+  bash deploy/stratakv-server status [--project NAME]
+  bash deploy/stratakv-server verify [--project NAME]
+  bash deploy/stratakv-server logs [--project NAME] [--node node-N]
+  bash deploy/stratakv-server local-data [--project NAME] [--node node-N] [--prefix PREFIX]
+  bash deploy/stratakv-server down [--project NAME]
+  bash deploy/stratakv-server reset [--project NAME]
+
+Options:
+  --nodes N          Physical local processes. Default: 3.
+  --replicas R       Raft replicas in every Region. Default: 3.
+  --project NAME     Persistent deployment name. Default: stratakv-local.
+  --engine NAME      rocksdb (default) or skiplist.
+  --gateway-port P   Local HTTP Gateway port. Default: 8080.
+  --max-raft-state B Snapshot threshold base in bytes. Default: 1048576.
+  --node node-N      Physical node selected by restart-node/logs/local-data.
+  --prefix PREFIX    Key prefix used by local-data.
+  --no-build         Reuse the current bin/ executables.
+
+The local topology has three fixed Regions: ["",h), [h,p), [p,+inf).
+Runtime data, PIDs and logs live under deploy/runtime/<project>/.
+No Docker command, container, image or volume is used.
+EOF
+}
+
+is_uint() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+is_project() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; *) return 0 ;; esac; }
+
+command=${1:-help}
+if [ "$#" -gt 0 ]; then shift; fi
+nodes=3
+replicas=3
+project=stratakv-local
+engine=rocksdb
+gateway_port=8080
+max_raft_state=1048576
+selected_node=all
+inspect_prefix=
+build_enabled=true
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --nodes) nodes=${2:?--nodes requires a value}; shift 2 ;;
+    --replicas) replicas=${2:?--replicas requires a value}; shift 2 ;;
+    --project) project=${2:?--project requires a value}; shift 2 ;;
+    --engine) engine=${2:?--engine requires a value}; shift 2 ;;
+    --gateway-port) gateway_port=${2:?--gateway-port requires a value}; shift 2 ;;
+    --max-raft-state) max_raft_state=${2:?--max-raft-state requires a value}; shift 2 ;;
+    --node) selected_node=${2:?--node requires a value}; shift 2 ;;
+    --prefix) inspect_prefix=${2:?--prefix requires a value}; shift 2 ;;
+    --no-build) build_enabled=false; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+is_project "$project" || { echo "--project may use only letters, digits, _ and -." >&2; exit 2; }
+runtime_dir="${deploy_dir}/runtime/${project}"
+regions_file="${runtime_dir}/regions.conf"
+settings_file="${runtime_dir}/runtime.conf"
+pids_dir="${runtime_dir}/pids"
+logs_dir="${runtime_dir}/logs"
+node_bin="${repo_dir}/bin/stratakv-node"
+gateway_bin="${repo_dir}/bin/stratakv-gateway"
+admin_bin="${repo_dir}/bin/stratakv-admin"
+
+load_settings() {
+  [ -f "$settings_file" ] || {
+    echo "No local deployment for project ${project}. Run stratakv-server up first." >&2
+    return 1
+  }
+  nodes=$(sed -n 's/^nodes=//p' "$settings_file")
+  replicas=$(sed -n 's/^replicas=//p' "$settings_file")
+  engine=$(sed -n 's/^engine=//p' "$settings_file")
+  gateway_port=$(sed -n 's/^gateway_port=//p' "$settings_file")
+  saved_max_raft_state=$(sed -n 's/^max_raft_state=//p' "$settings_file")
+  [ -z "$saved_max_raft_state" ] || max_raft_state=$saved_max_raft_state
+}
+
+validate_topology() {
+  is_uint "$nodes" && [ "$nodes" -gt 0 ] || { echo "--nodes must be a positive integer." >&2; exit 2; }
+  is_uint "$replicas" && [ "$replicas" -gt 0 ] || { echo "--replicas must be a positive integer." >&2; exit 2; }
+  is_uint "$gateway_port" && [ "$gateway_port" -gt 0 ] && [ "$gateway_port" -le 65535 ] || {
+    echo "--gateway-port must be between 1 and 65535." >&2; exit 2;
+  }
+  is_uint "$max_raft_state" && [ "$max_raft_state" -gt 0 ] || {
+    echo "--max-raft-state must be a positive integer." >&2; exit 2;
+  }
+  case "$engine" in rocksdb|skiplist) ;; *) echo "--engine must be rocksdb or skiplist." >&2; exit 2 ;; esac
+  [ "$nodes" -eq 3 ] && [ "$replicas" -eq 3 ] || {
+    echo "Native local deployment currently requires --nodes 3 --replicas 3." >&2
+    exit 2
+  }
+  case "$selected_node" in all|node-0|node-1|node-2) ;;
+    *) echo "--node must be node-0, node-1, node-2 or all." >&2; exit 2 ;;
+  esac
+}
+
+build_programs() {
+  [ "$build_enabled" = true ] || return 0
+  asan=${STRATAKV_ENABLE_ASAN:-OFF}
+  cmake -S "$repo_dir" -B "${repo_dir}/build" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DSTRATAKV_ENABLE_ASAN="$asan"
+  cmake --build "${repo_dir}/build" -j"$(nproc)" \
+    --target stratakv-node stratakv-admin stratakv-gateway stratakv-client stratakv-test-reliability
+}
+
+write_regions() {
+  mkdir -p "$runtime_dir"
+  {
+    echo "# Generated by deploy/stratakv-server for native local processes."
+    echo "region.count=3"
+  } >"$regions_file"
+  region=0
+  while [ "$region" -lt 3 ]; do
+    case "$region" in
+      0) region_id=100; start_key=; end_key=h; port_base=26200 ;;
+      1) region_id=101; start_key=h; end_key=p; port_base=26300 ;;
+      2) region_id=102; start_key=p; end_key=; port_base=26400 ;;
+    esac
+    {
+      echo
+      echo "region.${region}.id=${region_id}"
+      echo "region.${region}.start_key=${start_key}"
+      echo "region.${region}.end_key=${end_key}"
+      echo "region.${region}.peer.count=3"
+    } >>"$regions_file"
+    peer=0
+    while [ "$peer" -lt 3 ]; do
+      port=$((port_base + peer))
+      {
+        echo "region.${region}.peer.${peer}.node_id=${peer}"
+        echo "region.${region}.peer.${peer}.host=127.0.0.1"
+        echo "region.${region}.peer.${peer}.port=${port}"
+      } >>"$regions_file"
+      peer=$((peer + 1))
+    done
+    region=$((region + 1))
+  done
+  {
+    echo "project=${project}"
+    echo "nodes=3"
+    echo "replicas=3"
+    echo "engine=${engine}"
+    echo "gateway_port=${gateway_port}"
+    echo "max_raft_state=${max_raft_state}"
+  } >"$settings_file"
+}
+
+pid_file() { printf '%s/%s.pid' "$pids_dir" "$1"; }
+
+managed_pid() {
+  name=$1
+  file=$(pid_file "$name")
+  [ -f "$file" ] || return 1
+  pid=$(sed -n '1p' "$file")
+  is_uint "$pid" || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  expected=$node_bin
+  [ "$name" = gateway ] && expected=$gateway_bin
+  actual=$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)
+  expected=$(readlink -f "$expected")
+  # Replacing an executable while its process is alive makes procfs report
+  # "/path/to/program (deleted)". It is still the managed process and must be
+  # stopped; otherwise a rebuild can leave a stale server occupying the port.
+  case "$actual" in
+    "$expected"|"$expected (deleted)") ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$pid"
+}
+
+start_node() {
+  name=$1
+  node_id=${name#node-}
+  if managed_pid "$name" >/dev/null 2>&1; then
+    echo "${name} is already running." >&2
+    return 1
+  fi
+  mkdir -p "$pids_dir" "$logs_dir" "${runtime_dir}/${name}"
+  rm -f "${runtime_dir}/${name}"/run_data/raft_status_region_*.json \
+    "${runtime_dir}/${name}"/run_data/raft_log_region_*.json
+  log="${logs_dir}/${name}.log"
+  (
+    cd "${runtime_dir}/${name}"
+    KV_ENGINE_BACKEND="$engine" setsid "$node_bin" \
+      --node-id "$node_id" \
+      --regions-config "$regions_file" \
+      --max-raft-state "$max_raft_state" >>"$log" 2>&1 </dev/null &
+    echo "$!" >"$(pid_file "$name")"
+  )
+}
+
+start_gateway() {
+  if managed_pid gateway >/dev/null 2>&1; then
+    echo "gateway is already running." >&2
+    return 1
+  fi
+  mkdir -p "$pids_dir" "$logs_dir" "${runtime_dir}/gateway"
+  log="${logs_dir}/gateway.log"
+  (
+    cd "${runtime_dir}/gateway"
+    setsid "$gateway_bin" \
+      --regions-config "$regions_file" \
+      --host 127.0.0.1 \
+      --port "$gateway_port" >>"$log" 2>&1 </dev/null &
+    echo "$!" >"$(pid_file gateway)"
+  )
+}
+
+stop_process() {
+  name=$1
+  file=$(pid_file "$name")
+  if ! pid=$(managed_pid "$name" 2>/dev/null); then
+    rm -f "$file"
+    return 0
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  attempt=0
+  while [ "$attempt" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  rm -f "$file"
+}
+
+leader_count() {
+  region_id=$1
+  count=0
+  for file in "${runtime_dir}"/node-*/run_data/raft_status_region_"${region_id}"_*.json; do
+    [ -f "$file" ] || continue
+    if grep -q '"isLeader":true' "$file"; then count=$((count + 1)); fi
+  done
+  printf '%s' "$count"
+}
+
+caught_up_count() {
+  count=0
+  for file in "${runtime_dir}"/node-*/run_data/raft_status_region_*.json; do
+    [ -f "$file" ] || continue
+    commit_index=$(sed -n 's/.*"commitIndex":\([0-9][0-9]*\).*/\1/p' "$file")
+    last_applied=$(sed -n 's/.*"lastApplied":\([0-9][0-9]*\).*/\1/p' "$file")
+    last_log_index=$(sed -n 's/.*"lastLogIndex":\([0-9][0-9]*\).*/\1/p' "$file")
+    if [ -n "$commit_index" ] && [ "$commit_index" = "$last_applied" ] &&
+       [ "$commit_index" = "$last_log_index" ]; then
+      count=$((count + 1))
+    fi
+  done
+  printf '%s' "$count"
+}
+
+wait_for_cluster() {
+  attempt=0
+  while [ "$attempt" -lt 300 ]; do
+    running=0
+    for name in node-0 node-1 node-2; do
+      if managed_pid "$name" >/dev/null 2>&1; then running=$((running + 1)); fi
+    done
+    statuses=$(find "${runtime_dir}"/node-*/run_data -maxdepth 1 \
+      -name 'raft_status_region_*.json' -type f 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$running" -eq 3 ] && [ "$statuses" -eq 9 ] &&
+       [ "$(leader_count 100)" -eq 1 ] &&
+       [ "$(leader_count 101)" -eq 1 ] &&
+       [ "$(leader_count 102)" -eq 1 ] &&
+       [ "$(caught_up_count)" -eq 9 ]; then
+      return 0
+    fi
+    [ "$running" -eq 3 ] || {
+      echo "A local StrataKV node exited during startup. See ${logs_dir}." >&2
+      return 1
+    }
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  echo "Local Raft cluster did not elect and catch up all three Regions within 300 seconds." >&2
+  return 1
+}
+
+wait_for_gateway() {
+  attempt=0
+  while [ "$attempt" -lt 60 ]; do
+    managed_pid gateway >/dev/null 2>&1 || {
+      echo "Gateway exited during startup. See ${logs_dir}/gateway.log." >&2
+      return 1
+    }
+    if curl -fsS "http://127.0.0.1:${gateway_port}/healthz" >/dev/null 2>&1; then return 0; fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  echo "Gateway did not become healthy within 60 seconds." >&2
+  return 1
+}
+
+generate() {
+  validate_topology
+  write_regions
+  echo "Generated native topology: project=${project} nodes=3 replicas-per-region=3"
+  echo "Regions: ${regions_file}"
+  echo "Runtime: ${runtime_dir}"
+}
+
+start_all() {
+  generate
+  build_programs
+  for name in node-0 node-1 node-2; do start_node "$name"; done
+  wait_for_cluster
+  start_gateway
+  wait_for_gateway
+  echo "StrataKV local cluster is ready: http://127.0.0.1:${gateway_port}"
+}
+
+stop_all() {
+  stop_process gateway
+  stop_process node-2
+  stop_process node-1
+  stop_process node-0
+}
+
+show_status() {
+  load_settings
+  for name in node-0 node-1 node-2 gateway; do
+    if pid=$(managed_pid "$name" 2>/dev/null); then
+      echo "${name}: running pid=${pid}"
+    else
+      echo "${name}: stopped"
+    fi
+  done
+  echo "gateway=http://127.0.0.1:${gateway_port}"
+  for region_id in 100 101 102; do
+    echo "region-${region_id}: leaders=$(leader_count "$region_id")"
+  done
+}
+
+verify_cluster() {
+  load_settings
+  for name in node-0 node-1 node-2 gateway; do
+    managed_pid "$name" >/dev/null || { echo "Verification failed: ${name} is stopped." >&2; return 1; }
+  done
+  for region_id in 100 101 102; do
+    [ "$(leader_count "$region_id")" -eq 1 ] || {
+      echo "Verification failed: Region ${region_id} does not have exactly one Leader." >&2
+      return 1
+    }
+  done
+  curl -fsS "http://127.0.0.1:${gateway_port}/healthz" >/dev/null
+  echo "Verification passed: 3 local nodes, 9 Region peers, 3 Leaders and Gateway are healthy."
+}
+
+restart_one() {
+  load_settings
+  validate_topology
+  [ "$selected_node" != all ] || { echo "restart-node requires --node node-N." >&2; exit 2; }
+  stop_process "$selected_node"
+  start_node "$selected_node"
+  attempt=0
+  while [ "$attempt" -lt 60 ]; do
+    if managed_pid "$selected_node" >/dev/null 2>&1; then
+      files=$(find "${runtime_dir}/${selected_node}/run_data" -maxdepth 1 \
+        -name 'raft_status_region_*.json' -type f 2>/dev/null | wc -l | tr -d ' ')
+      [ "$files" -eq 3 ] && { echo "Restarted ${selected_node} as a local process."; return 0; }
+    else
+      echo "${selected_node} exited during restart. See ${logs_dir}/${selected_node}.log." >&2
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  echo "${selected_node} did not recover within 60 seconds." >&2
+  return 1
+}
+
+show_logs() {
+  load_settings
+  case "$selected_node" in
+    all) tail -n 100 "${logs_dir}"/*.log ;;
+    *) tail -n 200 "${logs_dir}/${selected_node}.log" ;;
+  esac
+}
+
+local_data() {
+  load_settings
+  validate_topology
+  for name in node-0 node-1 node-2; do
+    [ "$selected_node" = all ] || [ "$selected_node" = "$name" ] || continue
+    node_id=${name#node-}
+    for base in 26200 26300 26400; do
+      port=$((base + node_id))
+      echo "=== ${name} / 127.0.0.1:${port} ==="
+      STRATAKV_ENDPOINTS="127.0.0.1:${port}" "$admin_bin" local-list "$inspect_prefix"
+    done
+  done
+}
+
+case "$command" in
+  up) start_all ;;
+  run)
+    start_all
+    cleanup() { trap - EXIT INT TERM; stop_all; }
+    trap cleanup EXIT INT TERM
+    echo "Following local Gateway log; press Ctrl+C to stop the cluster."
+    tail -n 20 -f "${logs_dir}/gateway.log"
+    ;;
+  config) generate ;;
+  rebuild)
+    load_settings
+    stop_all
+    build_enabled=true
+    start_all
+    ;;
+  restart-node) restart_one ;;
+  status) show_status ;;
+  verify) verify_cluster ;;
+  logs) show_logs ;;
+  local-data) local_data ;;
+  down)
+    load_settings
+    stop_all
+    echo "Stopped local StrataKV project ${project}; data preserved in ${runtime_dir}."
+    ;;
+  reset)
+    load_settings
+    stop_all
+    case "$runtime_dir" in "${deploy_dir}/runtime/"*) rm -rf -- "$runtime_dir" ;; *) exit 1 ;; esac
+    echo "Deleted local StrataKV project ${project}."
+    ;;
+  help|-h|--help) usage ;;
+  *) echo "Unknown command: $command" >&2; usage >&2; exit 2 ;;
+esac

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+result_dir="${1:-${project_dir}/test-results/fiber/ai-resume-20260801}"
+benchmark="${project_dir}/bin/stratakv-test-fiber-benchmark"
+
+mkdir -p "${result_dir}"
+
+cmake -S "${project_dir}" -B "${project_dir}/build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "${project_dir}/build" --target stratakv-test-fiber-benchmark stratakv-test-fiber-sync -j2
+
+{
+  date --iso-8601=seconds
+  uname -srmo
+  lscpu
+  free -h
+  c++ --version
+  cmake --version
+  sha256sum "${benchmark}" "${project_dir}/bin/stratakv-test-fiber-sync"
+} >"${result_dir}/environment.txt"
+
+"${project_dir}/bin/stratakv-test-fiber-sync" >"${result_dir}/functional-sync.txt" 2>&1
+
+run_case() {
+  local name="$1"
+  local repeats="$2"
+  shift 2
+  for ((round = 1; round <= repeats; ++round)); do
+    echo "[fiber-benchmark] ${name} round ${round}/${repeats}"
+    "$@" 2>&1 | tee "${result_dir}/${name}-r${round}.txt"
+  done
+}
+
+# Boost.Context-style microbenchmark: Release, warm-up in the executable,
+# steady clock overhead correction, and a single pinned logical CPU.
+run_case context 5 "${benchmark}" --case context --iterations 5000000 --cpu 0
+run_case lifecycle 3 "${benchmark}" --case lifecycle --count 10000 --cpu 0
+
+# One-worker single-CPU baseline and a four-worker scaling point.
+run_case scheduler-w1 5 taskset -c 0 "${benchmark}" --case scheduler --count 100000 --threads 1
+run_case scheduler-w4 5 taskset -c 0-3 "${benchmark}" --case scheduler --count 100000 --threads 4
+
+# libco/libgo-style scheduler integration cases: timer, hooked sleep and
+# loopback socket I/O.  The TCP peer is native and the coroutine clients are
+# scheduled by one IOManager worker.
+run_case timer 5 "${benchmark}" --case timer --count 10000 --threads 1 --delay-ms 50 --cpu 0
+run_case hook-sleep 5 "${benchmark}" --case hook-sleep --count 10000 --threads 1 --delay-ms 10 --cpu 0
+run_case hook-echo 5 taskset -c 0-1 "${benchmark}" --case hook-echo --count 1000 --threads 1 --payload-bytes 64 --round-trips 10
+
+# Wake-all correctness/throughput plus serialized mutex handoff pressure.
+run_case sync 3 taskset -c 0-3 "${benchmark}" --case sync --count 1000 --threads 4 --delay-ms 1
+run_case sync-heavy 3 taskset -c 0-3 "${benchmark}" --case sync --count 10000 --threads 4 --delay-ms 0
+
+if rg -n 'correctness=FAIL|\[assert by\]|timed out|stratakv-test-fiber-benchmark:' "${result_dir}"/*.txt; then
+  echo "[fiber-benchmark] FAIL; an assertion, timeout, or correctness failure was recorded" >&2
+  exit 1
+fi
+
+echo "[fiber-benchmark] PASS; raw results: ${result_dir}"

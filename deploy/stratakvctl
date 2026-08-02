@@ -1,0 +1,93 @@
+#!/usr/bin/env sh
+# Compatibility command set backed entirely by native local processes.
+set -eu
+
+deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+project=${STRATAKV_PROJECT:-stratakv-local}
+gateway_port=${STRATAKV_GATEWAY_PORT:-8080}
+gateway="http://127.0.0.1:${gateway_port}"
+
+usage() {
+  cat <<'EOF'
+Usage: bash deploy/stratakvctl <command> [args]
+
+Commands:
+  init                         Build native executables.
+  up                           Start the local 3-node cluster.
+  down                         Stop local processes and preserve data.
+  status                       Show local process and Region status.
+  verify                       Verify nodes, Leaders and Gateway.
+  gateway-health               Check the HTTP Gateway.
+  gateway-smoke                Run one cross-Region transaction.
+  user-put <key> <value>       Write through the local Gateway.
+  user-get <key>               Read through the local Gateway.
+  user-delete <key>            Delete through the local Gateway.
+  user-demo                    Write one key in each Region.
+  user-shell                   Open the native interactive client.
+  user-batch <file>            Run native client commands from a file.
+  metrics                      Print Gateway metrics.
+  restart-node <node-N>        Restart one local physical node process.
+  logs [node-N]                Show native process logs.
+  reset                        Stop and delete this local project's data.
+
+Set STRATAKV_PROJECT and STRATAKV_GATEWAY_PORT to select another local project.
+Docker is not used.
+EOF
+}
+
+server() { bash "${deploy_dir}/stratakv-server" "$@" --project "$project"; }
+client() { bash "${deploy_dir}/stratakv-client" "$@" --project "$project"; }
+
+case "${1:-}" in
+  init)
+    cmake -S "${deploy_dir}/.." -B "${deploy_dir}/../build" -DCMAKE_BUILD_TYPE=Release
+    cmake --build "${deploy_dir}/../build" -j"$(nproc)"
+    ;;
+  up) server up --gateway-port "$gateway_port" ;;
+  down) server down ;;
+  status) server status ;;
+  verify) server verify ;;
+  gateway-health) curl -fsS "${gateway}/healthz"; echo ;;
+  gateway-smoke)
+    run_id=$(date +%s)
+    command_file=$(mktemp)
+    trap 'rm -f "$command_file"' EXIT
+    {
+      echo begin
+      echo "put apple:${run_id} value-a"
+      echo "put hello:${run_id} value-h"
+      echo "put zoo:${run_id} value-z"
+      echo commit
+    } >"$command_file"
+    client batch "$command_file"
+    ;;
+  user-put) [ "$#" -eq 3 ] || { usage >&2; exit 2; }; client put "$2" "$3" ;;
+  user-get) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; client get "$2" ;;
+  user-delete) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; client delete "$2" ;;
+  user-demo)
+    run_id=$(date +%s)
+    command_file=$(mktemp)
+    trap 'rm -f "$command_file"' EXIT
+    {
+      echo begin
+      echo "put apple:${run_id} value-a"
+      echo "put hello:${run_id} value-h"
+      echo "put zoo:${run_id} value-z"
+      echo commit
+    } >"$command_file"
+    client batch "$command_file"
+    ;;
+  user-shell) client shell ;;
+  user-batch) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; client batch "$2" ;;
+  metrics) curl -fsS "${gateway}/metrics" ;;
+  restart-node)
+    [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+    server restart-node --node "$2"
+    ;;
+  logs)
+    if [ "$#" -eq 2 ]; then server logs --node "$2"; else server logs; fi
+    ;;
+  reset) server reset ;;
+  help|-h|--help|'') usage ;;
+  *) echo "Unsupported local command: $1" >&2; usage >&2; exit 2 ;;
+esac

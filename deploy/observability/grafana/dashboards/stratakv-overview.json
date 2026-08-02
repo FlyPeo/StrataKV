@@ -1,0 +1,55 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "auto"},
+      "targets": [{"expr": "sum(stratakv_gateway_open_transactions)", "refId": "A"}],
+      "title": "Open Transactions",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "id": 2,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "auto"},
+      "targets": [{"expr": "sum(rate(stratakv_gateway_transactions_committed_total[1m]))", "refId": "A"}],
+      "title": "Committed Transactions / sec",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "id": 3,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "auto"},
+      "targets": [{"expr": "sum(rate(stratakv_gateway_failures_total[1m]))", "refId": "A"}],
+      "title": "Gateway Failures / sec",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 8},
+      "id": 4,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"expr": "sum(rate(stratakv_gateway_transactions_started_total[1m]))", "legendFormat": "started", "refId": "A"},
+        {"expr": "sum(rate(stratakv_gateway_transactions_committed_total[1m]))", "legendFormat": "committed", "refId": "B"},
+        {"expr": "sum(rate(stratakv_gateway_transactions_rolled_back_total[1m]))", "legendFormat": "rolled back", "refId": "C"}
+      ],
+      "title": "Gateway Transaction Rate",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["stratakv"],
+  "title": "StrataKV Gateway Overview",
+  "uid": "stratakv-overview",
+  "version": 1
+}

@@ -1,0 +1,17 @@
+/*
+
+!/.gitignore
+!/.gitmodules
+!/README.md
+!/CMakeLists.txt
+
+!/src/
+!/src/**
+
+!/test/
+!/test/**
+
+!/deploy/
+!/deploy/**
+
+/deploy/runtime/

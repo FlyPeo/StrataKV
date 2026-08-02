@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: StrataKV
+    orgId: 1
+    folder: StrataKV
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards

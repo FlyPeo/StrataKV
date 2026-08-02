@@ -1,0 +1,9 @@
+# One atomic transaction spanning Regions 100, 101, and 102.
+begin
+put apple:bulk-demo reserved
+put hello:bulk-demo order-created
+put zoo:bulk-demo audit-written
+commit
+get apple:bulk-demo
+get hello:bulk-demo
+get zoo:bulk-demo

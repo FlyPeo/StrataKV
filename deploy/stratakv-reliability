@@ -1,0 +1,321 @@
+#!/usr/bin/env sh
+# Run native local-process reliability testing with node restart injection.
+set -eu
+
+deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_dir=$(CDPATH= cd -- "${deploy_dir}/.." && pwd)
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bash deploy/stratakv-reliability run [options]
+
+Options:
+  --project NAME          Isolated local project. Default: reliability-db.
+  --transactions N       Cross-Region transactions. Default: 10000.
+  --workers N            Concurrent workload workers. Default: 16.
+  --retries N            Attempts per transaction/read. Default: 20.
+  --request-timeout-ms N Per-request socket timeout. Default: 180000.
+  --run-id ID             Stable test ID. Default: current date and time.
+  --gateway-port P        Local Gateway port. Default: 18080.
+  --max-runtime-seconds N Fail a stalled workload after N seconds. Default: 900.
+  --progress-seconds N    Print workload progress every N seconds. Default: 10.
+  --fault MODE            restart-node or none. Default: restart-node.
+  --keep-running          Leave native processes running after the test.
+
+The test builds and starts native StrataKV processes, writes each transaction
+across Regions 100/101/102, restarts a Leader-hosting node process, verifies
+all values, restarts the complete local cluster, and verifies persistence.
+Docker is not used.
+EOF
+}
+
+command=${1:-help}
+if [ "$#" -gt 0 ]; then shift; fi
+[ "$command" = run ] || {
+  usage
+  [ "$command" = help ] || [ "$command" = -h ] || [ "$command" = --help ]
+  exit
+}
+
+project=reliability-db
+transactions=10000
+workers=16
+retries=20
+request_timeout_ms=180000
+run_id=$(date +%Y%m%d-%H%M%S)
+gateway_port=18080
+max_runtime_seconds=900
+progress_seconds=10
+fault=restart-node
+keep_running=false
+fault_node=none
+fault_status=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project) project=${2:?--project requires a value}; shift 2 ;;
+    --transactions) transactions=${2:?--transactions requires a value}; shift 2 ;;
+    --workers) workers=${2:?--workers requires a value}; shift 2 ;;
+    --retries) retries=${2:?--retries requires a value}; shift 2 ;;
+    --request-timeout-ms) request_timeout_ms=${2:?--request-timeout-ms requires a value}; shift 2 ;;
+    --run-id) run_id=${2:?--run-id requires a value}; shift 2 ;;
+    --gateway-port) gateway_port=${2:?--gateway-port requires a value}; shift 2 ;;
+    --max-runtime-seconds) max_runtime_seconds=${2:?--max-runtime-seconds requires a value}; shift 2 ;;
+    --progress-seconds) progress_seconds=${2:?--progress-seconds requires a value}; shift 2 ;;
+    --fault) fault=${2:?--fault requires a value}; shift 2 ;;
+    --keep-running) keep_running=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+case "$project" in ''|*[!A-Za-z0-9_-]*) echo "Invalid --project." >&2; exit 2 ;; esac
+case "$run_id" in ''|*[!A-Za-z0-9_-]*) echo "Invalid --run-id." >&2; exit 2 ;; esac
+case "$fault" in restart-node|none) ;; *) echo "--fault must be restart-node or none." >&2; exit 2 ;; esac
+for number in "$transactions" "$workers" "$retries" "$request_timeout_ms" "$gateway_port" "$max_runtime_seconds" "$progress_seconds"; do
+  case "$number" in ''|*[!0-9]*|0) echo "Counts and ports must be positive integers." >&2; exit 2 ;; esac
+done
+
+command -v cmake >/dev/null || { echo "cmake is required." >&2; exit 1; }
+command -v curl >/dev/null || { echo "curl is required." >&2; exit 1; }
+
+result_dir="${repo_dir}/test-results/reliability/${run_id}"
+mkdir -p "$result_dir"
+history="${result_dir}/history.jsonl"
+workload_log="${result_dir}/workload.log"
+persistence_log="${result_dir}/persistence.log"
+fault_log="${result_dir}/fault.log"
+summary="${result_dir}/summary.txt"
+runtime_dir="${deploy_dir}/runtime/${project}"
+gateway="http://127.0.0.1:${gateway_port}"
+cluster_running=false
+workload_pid=
+
+copy_logs() {
+  phase=$1
+  if [ -d "${runtime_dir}/logs" ]; then
+    mkdir -p "${result_dir}/${phase}"
+    cp -f "${runtime_dir}"/logs/*.log "${result_dir}/${phase}/" 2>/dev/null || true
+  fi
+}
+
+stop_cluster() {
+  if [ "$cluster_running" = true ] && [ "$keep_running" = false ]; then
+    bash "${deploy_dir}/stratakv-server" down --project "$project" >/dev/null 2>&1 || true
+    cluster_running=false
+  fi
+}
+
+stop_workload() {
+  if [ -n "$workload_pid" ] && kill -0 "$workload_pid" 2>/dev/null; then
+    kill -TERM "$workload_pid" 2>/dev/null || true
+    attempt=0
+    while [ "$attempt" -lt 5 ] && kill -0 "$workload_pid" 2>/dev/null; do
+      sleep 1
+      attempt=$((attempt + 1))
+    done
+    kill -KILL "$workload_pid" 2>/dev/null || true
+  fi
+}
+
+handle_signal() {
+  trap - EXIT INT TERM
+  stop_workload
+  copy_logs interrupted
+  stop_cluster
+  exit 130
+}
+
+trap stop_cluster EXIT
+trap handle_signal INT TERM
+
+start_cluster() {
+  no_build=${1:-false}
+  cluster_running=true
+  if [ "$no_build" = true ]; then
+    bash "${deploy_dir}/stratakv-server" up \
+      --project "$project" --nodes 3 --replicas 3 \
+      --gateway-port "$gateway_port" --no-build
+  else
+    bash "${deploy_dir}/stratakv-server" up \
+      --project "$project" --nodes 3 --replicas 3 \
+      --gateway-port "$gateway_port"
+  fi
+}
+
+node_running() {
+  node=$1
+  pid_file="${runtime_dir}/pids/${node}.pid"
+  [ -f "$pid_file" ] || return 1
+  pid=$(sed -n '1p' "$pid_file")
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null
+}
+
+find_leader_node() {
+  for candidate in node-0 node-1 node-2; do
+    if grep -q '"isLeader":true' "${runtime_dir}/${candidate}"/run_data/raft_status_region_*.json 2>/dev/null; then
+      echo "$candidate"
+      return
+    fi
+  done
+  echo node-1
+}
+
+write_failure_summary() {
+  reason=$1
+  persistence_status=${2:-not_run}
+  {
+    echo "run_id=${run_id}"
+    echo "project=${project}"
+    echo "deployment=native-local-processes"
+    echo "transactions=${transactions}"
+    echo "workers=${workers}"
+    echo "request_timeout_ms=${request_timeout_ms}"
+    echo "fault=${fault}"
+    echo "fault_node=${fault_node}"
+    echo "fault_exit_code=${fault_status}"
+    echo "workload_exit_code=${workload_status}"
+    echo "persistence_exit_code=${persistence_status}"
+    echo "failure_reason=${reason}"
+    echo "result=FAIL"
+  } >"$summary"
+}
+
+cd "$repo_dir"
+echo "[1/5] Building and starting native local StrataKV processes..."
+start_cluster false
+
+echo "[2/5] Running ${transactions} cross-Region transactions with ${workers} workers..."
+"${repo_dir}/bin/stratakv-test-reliability" \
+  --gateway "$gateway" \
+  --transactions "$transactions" \
+  --workers "$workers" \
+  --retries "$retries" \
+  --timeout-ms "$request_timeout_ms" \
+  --run-id "$run_id" \
+  --history "$history" >"$workload_log" 2>&1 &
+workload_pid=$!
+workload_started_at=$(date +%s)
+
+if [ "$fault" = restart-node ]; then
+  sleep 2
+  if kill -0 "$workload_pid" 2>/dev/null; then
+    fault_node=$(find_leader_node)
+    echo "[3/5] Restarting local process ${fault_node} while the workload is active..."
+    set +e
+    {
+      echo "fault_node=${fault_node}"
+      bash "${deploy_dir}/stratakv-server" restart-node --project "$project" --node "$fault_node"
+    } >"$fault_log" 2>&1
+    fault_status=$?
+    set -e
+  else
+    echo "Workload completed before fault injection; increase --transactions." >"$fault_log"
+    fault_status=1
+  fi
+else
+  echo "[3/5] Fault injection disabled."
+  echo "Fault injection disabled." >"$fault_log"
+fi
+
+monitor_status=0
+failure_reason=none
+while kill -0 "$workload_pid" 2>/dev/null; do
+  now=$(date +%s)
+  elapsed=$((now - workload_started_at))
+
+  failed_nodes=
+  for candidate in node-0 node-1 node-2 gateway; do
+    if ! node_running "$candidate"; then
+      failed_nodes="${failed_nodes}${failed_nodes:+,}${candidate}"
+    fi
+  done
+  if [ -n "$failed_nodes" ]; then
+    failure_reason="node_crash:${failed_nodes}"
+    monitor_status=125
+    echo "Detected failed local StrataKV process(es): ${failed_nodes}" | tee -a "$fault_log"
+    stop_workload
+    break
+  fi
+
+  if [ "$elapsed" -ge "$max_runtime_seconds" ]; then
+    failure_reason=workload_timeout
+    monitor_status=124
+    echo "Workload exceeded ${max_runtime_seconds} seconds." | tee -a "$fault_log"
+    stop_workload
+    break
+  fi
+
+  committed=$(curl -fsS "${gateway}/metrics" 2>/dev/null |
+    sed -n 's/^stratakv_gateway_transactions_committed_total //p' | tail -n 1 || true)
+  open_transactions=$(curl -fsS "${gateway}/metrics" 2>/dev/null |
+    sed -n 's/^stratakv_gateway_open_transactions //p' | tail -n 1 || true)
+  echo "[progress] elapsed=${elapsed}s gateway_commits=${committed:-unavailable} target=${transactions} open=${open_transactions:-unavailable}"
+  sleep "$progress_seconds"
+done
+
+set +e
+wait "$workload_pid"
+workload_status=$?
+set -e
+workload_pid=
+if [ "$monitor_status" -ne 0 ]; then workload_status=$monitor_status; fi
+copy_logs cluster-before-restart
+
+if [ "$fault_status" -ne 0 ] || [ "$workload_status" -ne 0 ]; then
+  if [ "$failure_reason" = none ] && [ "$fault_status" -ne 0 ]; then
+    failure_reason=fault_injection_failed
+  elif [ "$failure_reason" = none ]; then
+    failure_reason=workload_failed
+  fi
+  write_failure_summary "$failure_reason"
+  cat "$workload_log"
+  cat "$fault_log"
+  cat "$summary"
+  echo "Results: ${result_dir}"
+  exit 1
+fi
+
+echo "[4/5] Restarting all native processes while preserving local RocksDB data..."
+bash "${deploy_dir}/stratakv-server" down --project "$project"
+cluster_running=false
+start_cluster true
+
+echo "[5/5] Verifying all expected values after local-process restart..."
+set +e
+"${repo_dir}/bin/stratakv-test-reliability" \
+  --verify-only \
+  --gateway "$gateway" \
+  --transactions "$transactions" \
+  --workers "$workers" \
+  --retries "$retries" \
+  --timeout-ms "$request_timeout_ms" \
+  --run-id "$run_id" \
+  --history "${result_dir}/persistence-history.jsonl" >"$persistence_log" 2>&1
+persistence_status=$?
+set -e
+copy_logs cluster-after-restart
+
+{
+  echo "run_id=${run_id}"
+  echo "project=${project}"
+  echo "deployment=native-local-processes"
+  echo "transactions=${transactions}"
+  echo "workers=${workers}"
+  echo "request_timeout_ms=${request_timeout_ms}"
+  echo "fault=${fault}"
+  echo "fault_node=${fault_node}"
+  echo "fault_exit_code=${fault_status}"
+  echo "workload_exit_code=${workload_status}"
+  echo "persistence_exit_code=${persistence_status}"
+  if [ "$persistence_status" -eq 0 ]; then echo "result=PASS"; else echo "result=FAIL"; fi
+} >"$summary"
+
+cat "$workload_log"
+cat "$persistence_log"
+cat "$summary"
+echo "Results: ${result_dir}"
+
+[ "$persistence_status" -eq 0 ]
