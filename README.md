@@ -45,9 +45,37 @@ StrataKV 当前不使用 Docker、Compose、Kubernetes 或 Helm。
 - Linux 或 WSL2；
 - 支持 C++17 的 GCC/Clang；
 - CMake 3.22 或更高版本；
-- Protobuf、RocksDB、Boost.Serialization、pthread、dl 和 Muduo。
+- 下表列出的直接依赖。
 
 以下环境已经实际用于构建：Ubuntu 24.04 / WSL2、GCC 13.3、CMake 3.22+。
+
+#### 直接链接依赖
+
+| 依赖 | CMake/链接名称 | 项目中的用途 | 获取方式 |
+| --- | --- | --- | --- |
+| Pulsar | `Pulsar::pulsar` | Fiber、调度器、epoll、Timer 和 Hook I/O | Git submodule：`src/pulsar` |
+| Protobuf | `find_package(Protobuf REQUIRED)`、`${Protobuf_LIBRARIES}` | Raft/KV RPC 消息、Service、Stub 和反射分发 | `libprotobuf-dev`；修改 `.proto` 时还需要 `protoc` |
+| RocksDB | `rocksdb` | 唯一的本地 KV 持久化引擎、WriteBatch 和前缀扫描 | `librocksdb-dev` |
+| Boost.Serialization | `boost_serialization` | Raft 状态、快照和 RocksDB 快照数据的序列化 | `libboost-serialization-dev` |
+| Muduo | `muduo_net`、`muduo_base` | TCP Server、EventLoop、连接与 Buffer | 安装 Muduo 头文件及 `libmuduo_net/base` |
+| POSIX Threads | `pthread` | 节点、Gateway、SDK 和测试的多线程执行 | Linux 系统线程库 |
+| Dynamic Loader | `dl` | Pulsar 使用 `dlsym` 解析被 Hook 的原始系统调用 | Linux `libdl` |
+
+Pulsar 是仓库内的子模块，其自身不再引入其他第三方 C++ 库。C++ 标准库、
+Linux socket/epoll、文件系统和进程接口属于系统能力，不是额外仓库依赖。
+
+#### 构建与运行工具
+
+| 工具 | 是否必需 | 用途 |
+| --- | --- | --- |
+| C++17 编译器、CMake、Make/Ninja | 构建必需 | 配置和编译所有目标 |
+| Bash、GNU coreutils、util-linux | 本地部署必需 | 脚本、`setsid`、`taskset`、`lscpu` 等 |
+| curl | 本地部署必需 | Gateway 健康检查、指标和可靠性测试 |
+| iproute2 (`ss`) | 排障可选 | 检查端口占用 |
+| GDB | 调试可选 | 线程、堆栈和崩溃分析 |
+
+当前 CMake 只编码了 CMake 3.22 和 C++17 要求，没有为 RocksDB、Muduo、
+Boost 设置项目自定义的最低版本；README 因此不声明未经验证的版本下限。
 
 Ubuntu 24.04 可先安装发行版依赖：
 
@@ -57,6 +85,8 @@ sudo apt install -y \
   build-essential \
   cmake \
   curl \
+  util-linux \
+  iproute2 \
   protobuf-compiler \
   libprotobuf-dev \
   librocksdb-dev \
@@ -64,8 +94,7 @@ sudo apt install -y \
 ```
 
 项目还需要 `libmuduo_net` 和 `libmuduo_base`。如果系统没有 Muduo 开发包，
-需要先从 Muduo 源码构建并安装。`gdb`、`lsof` 和 `net-tools` 仅用于调试，
-不是编译必需依赖。
+需要先从 Muduo 源码构建并安装。GDB 仅用于调试，不是编译必需依赖。
 
 检查主要工具和动态库：
 
