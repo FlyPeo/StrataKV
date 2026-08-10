@@ -1,9 +1,13 @@
 
-# 获取当前源文件所在目录的绝对路径
-get_filename_component(SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
+protobuf_generate_cpp(RPC_PROTO_SRCS RPC_PROTO_HDRS rpc_header.proto)
 
-# 将该目录下所有源文件添加到 SRC_LIST 变量中
-aux_source_directory(${SRC_DIR} SRC_LIST)
-
-add_library(stratakv_rpc ${SRC_LIST} ${src_common})
-target_link_libraries(stratakv_rpc boost_serialization)
+add_library(stratakv_rpc
+    mprpc_channel.cpp
+    mprpc_config.cpp
+    mprpc_controller.cpp
+    rpc_provider.cpp
+    ${RPC_PROTO_SRCS}
+    ${src_common}
+)
+target_include_directories(stratakv_rpc PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(stratakv_rpc PUBLIC boost_serialization)

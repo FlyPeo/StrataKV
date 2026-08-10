@@ -25,6 +25,12 @@ Options:
   --replicas R       Raft replicas in every Region. Default: 3.
   --project NAME     Persistent deployment name. Default: stratakv-local.
   --gateway-port P   Local HTTP Gateway port. Default: 8080.
+  --gateway-runtime MODE
+                     Gateway concurrency mode: thread or fiber. Default: thread.
+  --gateway-workers N
+                     IOManager workers in fiber mode. Default: 4.
+  --gateway-request-workers N
+                     Native blocking-request workers in fiber mode. Default: 16.
   --max-raft-state B Snapshot threshold base in bytes. Default: 1048576.
   --node node-N      Physical node selected by restart-node/logs/local-data.
   --prefix PREFIX    Key prefix used by local-data.
@@ -45,6 +51,9 @@ nodes=3
 replicas=3
 project=stratakv-local
 gateway_port=8080
+gateway_runtime=thread
+gateway_workers=4
+gateway_request_workers=16
 max_raft_state=1048576
 selected_node=all
 inspect_prefix=
@@ -56,6 +65,9 @@ while [ "$#" -gt 0 ]; do
     --replicas) replicas=${2:?--replicas requires a value}; shift 2 ;;
     --project) project=${2:?--project requires a value}; shift 2 ;;
     --gateway-port) gateway_port=${2:?--gateway-port requires a value}; shift 2 ;;
+    --gateway-runtime) gateway_runtime=${2:?--gateway-runtime requires a value}; shift 2 ;;
+    --gateway-workers) gateway_workers=${2:?--gateway-workers requires a value}; shift 2 ;;
+    --gateway-request-workers) gateway_request_workers=${2:?--gateway-request-workers requires a value}; shift 2 ;;
     --max-raft-state) max_raft_state=${2:?--max-raft-state requires a value}; shift 2 ;;
     --node) selected_node=${2:?--node requires a value}; shift 2 ;;
     --prefix) inspect_prefix=${2:?--prefix requires a value}; shift 2 ;;
@@ -83,6 +95,12 @@ load_settings() {
   nodes=$(sed -n 's/^nodes=//p' "$settings_file")
   replicas=$(sed -n 's/^replicas=//p' "$settings_file")
   gateway_port=$(sed -n 's/^gateway_port=//p' "$settings_file")
+  saved_gateway_runtime=$(sed -n 's/^gateway_runtime=//p' "$settings_file")
+  [ -z "$saved_gateway_runtime" ] || gateway_runtime=$saved_gateway_runtime
+  saved_gateway_workers=$(sed -n 's/^gateway_workers=//p' "$settings_file")
+  [ -z "$saved_gateway_workers" ] || gateway_workers=$saved_gateway_workers
+  saved_gateway_request_workers=$(sed -n 's/^gateway_request_workers=//p' "$settings_file")
+  [ -z "$saved_gateway_request_workers" ] || gateway_request_workers=$saved_gateway_request_workers
   saved_max_raft_state=$(sed -n 's/^max_raft_state=//p' "$settings_file")
   [ -z "$saved_max_raft_state" ] || max_raft_state=$saved_max_raft_state
 }
@@ -92,6 +110,15 @@ validate_topology() {
   is_uint "$replicas" && [ "$replicas" -gt 0 ] || { echo "--replicas must be a positive integer." >&2; exit 2; }
   is_uint "$gateway_port" && [ "$gateway_port" -gt 0 ] && [ "$gateway_port" -le 65535 ] || {
     echo "--gateway-port must be between 1 and 65535." >&2; exit 2;
+  }
+  case "$gateway_runtime" in fiber|thread) ;;
+    *) echo "--gateway-runtime must be fiber or thread." >&2; exit 2 ;;
+  esac
+  is_uint "$gateway_workers" && [ "$gateway_workers" -gt 0 ] && [ "$gateway_workers" -le 256 ] || {
+    echo "--gateway-workers must be between 1 and 256." >&2; exit 2;
+  }
+  is_uint "$gateway_request_workers" && [ "$gateway_request_workers" -gt 0 ] && [ "$gateway_request_workers" -le 256 ] || {
+    echo "--gateway-request-workers must be between 1 and 256." >&2; exit 2;
   }
   is_uint "$max_raft_state" && [ "$max_raft_state" -gt 0 ] || {
     echo "--max-raft-state must be a positive integer." >&2; exit 2;
@@ -152,6 +179,9 @@ write_regions() {
     echo "nodes=3"
     echo "replicas=3"
     echo "gateway_port=${gateway_port}"
+    echo "gateway_runtime=${gateway_runtime}"
+    echo "gateway_workers=${gateway_workers}"
+    echo "gateway_request_workers=${gateway_request_workers}"
     echo "max_raft_state=${max_raft_state}"
   } >"$settings_file"
 }
@@ -212,7 +242,10 @@ start_gateway() {
     setsid "$gateway_bin" \
       --regions-config "$regions_file" \
       --host 127.0.0.1 \
-      --port "$gateway_port" >>"$log" 2>&1 </dev/null &
+      --port "$gateway_port" \
+      --runtime "$gateway_runtime" \
+      --workers "$gateway_workers" \
+      --request-workers "$gateway_request_workers" >>"$log" 2>&1 </dev/null &
     echo "$!" >"$(pid_file gateway)"
   )
 }
@@ -338,6 +371,7 @@ show_status() {
     fi
   done
   echo "gateway=http://127.0.0.1:${gateway_port}"
+  echo "gateway-runtime=${gateway_runtime} io-workers=${gateway_workers} request-workers=${gateway_request_workers}"
   for region_id in 100 101 102; do
     echo "region-${region_id}: leaders=$(leader_count "$region_id")"
   done

@@ -64,6 +64,10 @@ StrataKV 当前不使用 Docker、Compose、Kubernetes 或 Helm。
 Pulsar 是仓库内的子模块，其自身不再引入其他第三方 C++ 库。C++ 标准库、
 Linux socket/epoll、文件系统和进程接口属于系统能力，不是额外仓库依赖。
 
+Pulsar 在 StrataKV 中的边界是“可选 Gateway HTTP 网络运行时”。
+它不承载 SDK、2PC、同步 RPC、Raft 或 RocksDB 执行；默认 Gateway
+仍使用 `thread` 模式。
+
 #### 构建与运行工具
 
 | 工具 | 是否必需 | 用途 |
@@ -131,8 +135,9 @@ cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
-构建产物输出到源码目录中的 `bin/` 和 `lib/`。当前 CTest 注册的是
-`stratakv-test-fiber-sync`；集群可靠性测试需要单独运行，见第 7 节。
+构建产物输出到源码目录中的 `bin/` 和 `lib/`。当前 CTest 注册了
+Fiber 同步原语和有界线程池正确性测试；集群可靠性测试需要单独
+运行，见第 7 节。
 
 ### 2.4 启动三节点本地集群
 
@@ -147,6 +152,24 @@ bash deploy/stratakv-server up \
 该命令会自动构建并启动三个 `stratakv-node` 和一个
 `stratakv-gateway`，创建 Region 100、101、102。运行配置、PID、日志和
 数据库保存在 `deploy/runtime/my-db/`。
+
+Gateway 默认使用延迟更稳定的 `thread` 模式。线程配额严格或需要承接大量
+并发连接时，可以显式启用有界 Fiber worker：
+
+```bash
+bash deploy/stratakv-server up \
+  --project my-db \
+  --gateway-runtime fiber \
+  --gateway-workers 4 \
+  --gateway-request-workers 16
+```
+
+Fiber 模式只用协程处理 HTTP socket 收发；SDK、同步 RPC 和事务逻辑
+会进入 16 个有界原生请求线程，2PC 的跨 Region 工作再进入独立的
+8 线程执行池。请求队列满时 Gateway 返回 503，不会无界堆积。这个
+模式的确定收益是高连接扇入时线程数有上界，不承诺所有负载都有
+更高吞吐或更低 P99；选择前应使用目标负载做 A/B。实测和取舍见
+[优化记录](docs/优化记录/优化.md#2026-08-10pulsar-协程运行时接入与-ab-取舍)。
 
 如果已经完成构建，可以跳过构建步骤：
 
@@ -237,6 +260,7 @@ bash deploy/stratakv-server reset --project my-db
 | `bin/stratakv-client` | 业务 CLI，支持单条命令和交互事务 |
 | `bin/stratakv-admin` | 直连内部 RPC 的开发与运维工具 |
 | `bin/stratakv-test-fiber-sync` | Pulsar 同步原语正确性测试 |
+| `bin/stratakv-test-bounded-thread-pool` | 有界线程池与过载背压正确性测试 |
 | `bin/stratakv-test-fiber-benchmark` | Pulsar 性能与压力基准 |
 | `bin/stratakv-test-reliability` | 集群事务与持久化验证负载 |
 
@@ -300,6 +324,7 @@ cmake --build build --target stratakv-client
 cmake --build build --target stratakv-admin
 cmake --build build --target stratakv_sdk
 cmake --build build --target stratakv-test-fiber-sync
+cmake --build build --target stratakv-test-bounded-thread-pool
 cmake --build build --target stratakv-test-fiber-benchmark
 cmake --build build --target stratakv-test-reliability
 ```
@@ -399,8 +424,8 @@ deploy/runtime/<project>/
 ctest --test-dir build --output-on-failure
 ```
 
-当前 CTest 自动执行 Pulsar Fiber 同步测试。集群测试不会自动注册到 CTest，
-避免在普通构建过程中启动服务和写入持久化数据。
+当前 CTest 自动执行 Pulsar Fiber 同步和有界线程池测试。集群测试
+不会自动注册到 CTest，避免在普通构建过程中启动服务和写入持久化数据。
 
 ### 7.2 集群冒烟测试
 

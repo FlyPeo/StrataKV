@@ -9,7 +9,12 @@
 #include <thread>
 #include <vector>
 
+#include "bounded_thread_pool.h"
+
 namespace {
+constexpr size_t kRegionTaskWorkers = 8;
+constexpr size_t kRegionTaskQueueCapacity = 2048;
+
 // 生成当前时间的毫秒值，供锁过期扫描和恢复逻辑使用。
 uint64_t NowMs() {
   using namespace std::chrono;
@@ -50,12 +55,19 @@ const char* TxnStatusName(TxnStatus status) {
   }
   return "Unknown";
 }
+
+void RetrySleep(std::chrono::milliseconds delay) {
+  std::this_thread::sleep_for(delay);
+}
 }  // namespace
 
 // 构造分布式事务协调器，建立 shard 路由、锁解析器和各 shard 的后台锁管理线程。
 DistributedTransactionCoordinator::DistributedTransactionCoordinator(std::shared_ptr<ShardRouter> router,
                                                                      std::shared_ptr<TimestampOracle> tso)
-    : router_(std::move(router)), tso_(std::move(tso)), lockResolver_(std::make_shared<LockResolver>(router_)) {
+    : router_(std::move(router)),
+      tso_(std::move(tso)),
+      regionExecutor_(std::make_unique<BoundedThreadPool>(kRegionTaskWorkers, kRegionTaskQueueCapacity)),
+      lockResolver_(std::make_shared<LockResolver>(router_)) {
   uint64_t maxObservedTs = 0;
   for (const auto& shard : router_->Shards()) {
     maxObservedTs = std::max(maxObservedTs, shard->MaxObservedTs());
@@ -124,37 +136,51 @@ TxnStatus DistributedTransactionCoordinator::Commit(const Transaction& txn, cons
     mutationsByShard[router_->ShardId(mutation.first)].push_back(mutation);
   }
 
-  std::vector<std::string> prewritten;
-  std::vector<std::future<PrewriteResult>> prewriteFutures;
+  std::vector<std::vector<std::pair<std::string, TxnMutation>>> prewriteBatches;
   for (const auto& shardMutations : mutationsByShard) {
-    prewriteFutures.emplace_back(std::async(std::launch::async, [this, shardMutations, primaryKey, &txn, options]() {
-      PrewriteResult result;
-      for (const auto& mutation : shardMutations.second) {
-        TxnStatus status = TxnStatus::Ok;
-        if (mutation.second.isDelete) {
-          status = router_->Route(mutation.first)->PrewriteDelete(mutation.first, primaryKey, txn.StartTs(),
-                                                                  options.lockTtlMs);
-        } else {
-          status = router_->Route(mutation.first)->Prewrite(mutation.first, mutation.second.value, primaryKey,
-                                                            txn.StartTs(), options.lockTtlMs);
-        }
-        if (status != TxnStatus::Ok) {
-          result.status = status;
-          return result;
-        }
-        result.prewrittenKeys.push_back(mutation.first);
+    prewriteBatches.push_back(shardMutations.second);
+  }
+  auto prewriteShard = [this, primaryKey, &txn, options](
+                           const std::vector<std::pair<std::string, TxnMutation>>& shardMutations) {
+    PrewriteResult result;
+    for (const auto& mutation : shardMutations) {
+      TxnStatus status = TxnStatus::Ok;
+      if (mutation.second.isDelete) {
+        status = router_->Route(mutation.first)->PrewriteDelete(mutation.first, primaryKey, txn.StartTs(),
+                                                                options.lockTtlMs);
+      } else {
+        status = router_->Route(mutation.first)->Prewrite(mutation.first, mutation.second.value, primaryKey,
+                                                          txn.StartTs(), options.lockTtlMs);
       }
-      return result;
-    }));
+      if (status != TxnStatus::Ok) {
+        result.status = status;
+        return result;
+      }
+      result.prewrittenKeys.push_back(mutation.first);
+    }
+    return result;
+  };
+
+  std::vector<PrewriteResult> prewriteResults(prewriteBatches.size());
+  std::vector<std::future<PrewriteResult>> prewriteFutures;
+  prewriteFutures.reserve(prewriteBatches.size());
+  for (const auto& batch : prewriteBatches) {
+    prewriteFutures.emplace_back(
+        regionExecutor_->Submit([prewriteShard, batch]() { return prewriteShard(batch); }));
+  }
+  for (size_t index = 0; index < prewriteFutures.size(); ++index) {
+    try {
+      prewriteResults[index] = prewriteFutures[index].get();
+    } catch (...) {
+      prewriteResults[index].status = TxnStatus::StorageError;
+    }
   }
 
+  std::vector<std::string> prewritten;
   TxnStatus firstError = TxnStatus::Ok;
-  for (auto& future : prewriteFutures) {
-    PrewriteResult result = future.get();
-    if (result.status != TxnStatus::Ok) {
-      if (firstError == TxnStatus::Ok) {
-        firstError = result.status;
-      }
+  for (const PrewriteResult& result : prewriteResults) {
+    if (result.status != TxnStatus::Ok && firstError == TxnStatus::Ok) {
+      firstError = result.status;
     }
     prewritten.insert(prewritten.end(), result.prewrittenKeys.begin(), result.prewrittenKeys.end());
   }
@@ -190,30 +216,48 @@ TxnStatus DistributedTransactionCoordinator::Commit(const Transaction& txn, cons
     secondaryKeysByShard[router_->ShardId(key)].push_back(key);
   }
 
-  std::vector<std::future<std::vector<SecondaryCommitFailure>>> commitFutures;
+  std::vector<std::vector<std::string>> secondaryBatches;
   for (const auto& shardKeys : secondaryKeysByShard) {
-    commitFutures.emplace_back(std::async(std::launch::async, [this, shardKeys, &txn, commitTs]() {
-      std::vector<SecondaryCommitFailure> failures;
-      for (const auto& key : shardKeys.second) {
-        TxnStatus status = TxnStatus::StorageError;
-        for (int attempt = 0; attempt < 3; ++attempt) {
-          status = router_->Route(key)->Commit(key, txn.StartTs(), commitTs);
-          if (status == TxnStatus::Ok || status == TxnStatus::AlreadyCommitted) {
-            break;
-          }
-          if (attempt < 2) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(25 * (1 << attempt)));
-          }
+    secondaryBatches.push_back(shardKeys.second);
+  }
+  auto commitSecondaries = [this, &txn, commitTs](const std::vector<std::string>& keys) {
+    std::vector<SecondaryCommitFailure> failures;
+    for (const auto& key : keys) {
+      TxnStatus status = TxnStatus::StorageError;
+      for (int attempt = 0; attempt < 3; ++attempt) {
+        status = router_->Route(key)->Commit(key, txn.StartTs(), commitTs);
+        if (status == TxnStatus::Ok || status == TxnStatus::AlreadyCommitted) {
+          break;
         }
-        if (status != TxnStatus::Ok && status != TxnStatus::AlreadyCommitted) {
-          failures.push_back({key, status});
+        if (attempt < 2) {
+          RetrySleep(std::chrono::milliseconds(25 * (1 << attempt)));
         }
       }
-      return failures;
-    }));
+      if (status != TxnStatus::Ok && status != TxnStatus::AlreadyCommitted) {
+        failures.push_back({key, status});
+      }
+    }
+    return failures;
+  };
+
+  std::vector<std::vector<SecondaryCommitFailure>> secondaryResults(secondaryBatches.size());
+  std::vector<std::future<std::vector<SecondaryCommitFailure>>> secondaryFutures;
+  secondaryFutures.reserve(secondaryBatches.size());
+  for (const auto& batch : secondaryBatches) {
+    secondaryFutures.emplace_back(
+        regionExecutor_->Submit([commitSecondaries, batch]() { return commitSecondaries(batch); }));
   }
-  for (auto& future : commitFutures) {
-    for (const auto& failure : future.get()) {
+  for (size_t index = 0; index < secondaryFutures.size(); ++index) {
+    try {
+      secondaryResults[index] = secondaryFutures[index].get();
+    } catch (...) {
+      for (const auto& key : secondaryBatches[index]) {
+        secondaryResults[index].push_back({key, TxnStatus::StorageError});
+      }
+    }
+  }
+  for (const auto& result : secondaryResults) {
+    for (const auto& failure : result) {
       // Primary 已经提交，因此事务在逻辑上已提交，不能再向客户端返回失败。
       // 后台锁解析器会根据 primary 的 commitTs 继续收尾；这里保留明确状态，
       // 避免把并不存在的“异步队列”写进日志并掩盖真正的失败原因。

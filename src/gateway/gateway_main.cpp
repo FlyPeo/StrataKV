@@ -19,6 +19,11 @@
 #include <thread>
 #include <unordered_map>
 
+#include <pulsar/fd_manager.hpp>
+#include <pulsar/iomanager.hpp>
+#include <pulsar/sync.hpp>
+
+#include "bounded_thread_pool.h"
 #include "stratakv/client.h"
 
 namespace {
@@ -158,7 +163,23 @@ HttpResponse Error(int status, const std::string& code, const std::string& messa
 
 class Gateway {
  public:
-  explicit Gateway(std::shared_ptr<stratakv::Client> client) : client_(std::move(client)) {}
+  Gateway(std::shared_ptr<stratakv::Client> client, std::string runtimeMode, size_t runtimeWorkers,
+          BoundedThreadPool* requestExecutor)
+      : client_(std::move(client)),
+        runtimeMode_(std::move(runtimeMode)),
+        runtimeWorkers_(runtimeWorkers),
+        requestExecutor_(requestExecutor) {}
+
+  void ConnectionOpened() {
+    acceptedConnections_.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t active = activeConnections_.fetch_add(1, std::memory_order_relaxed) + 1;
+    uint64_t peak = peakConnections_.load(std::memory_order_relaxed);
+    while (active > peak &&
+           !peakConnections_.compare_exchange_weak(peak, active, std::memory_order_relaxed)) {
+    }
+  }
+
+  void ConnectionClosed() { activeConnections_.fetch_sub(1, std::memory_order_relaxed); }
 
   HttpResponse Handle(const HttpRequest& request) {
     requests_.fetch_add(1, std::memory_order_relaxed);
@@ -273,11 +294,42 @@ class Gateway {
            << "stratakv_gateway_failures_total " << failed_.load() << "\n"
            << "# HELP stratakv_gateway_open_transactions Number of active in-memory transaction sessions.\n"
            << "# TYPE stratakv_gateway_open_transactions gauge\n"
-           << "stratakv_gateway_open_transactions " << openTransactions << "\n";
+           << "stratakv_gateway_open_transactions " << openTransactions << "\n"
+           << "# HELP stratakv_gateway_runtime_info Active Gateway concurrency runtime.\n"
+           << "# TYPE stratakv_gateway_runtime_info gauge\n"
+           << "stratakv_gateway_runtime_info{mode=\"" << runtimeMode_ << "\",io_workers=\"" << runtimeWorkers_
+           << "\",request_workers=\"" << (requestExecutor_ == nullptr ? 0 : requestExecutor_->workers())
+           << "\"} 1\n"
+           << "# HELP stratakv_gateway_connections_total Accepted HTTP connections.\n"
+           << "# TYPE stratakv_gateway_connections_total counter\n"
+           << "stratakv_gateway_connections_total " << acceptedConnections_.load() << "\n"
+           << "# HELP stratakv_gateway_active_connections Current HTTP connection handlers.\n"
+           << "# TYPE stratakv_gateway_active_connections gauge\n"
+           << "stratakv_gateway_active_connections " << activeConnections_.load() << "\n"
+           << "# HELP stratakv_gateway_peak_connections Maximum concurrent HTTP connection handlers.\n"
+           << "# TYPE stratakv_gateway_peak_connections gauge\n"
+           << "stratakv_gateway_peak_connections " << peakConnections_.load() << "\n";
+    if (requestExecutor_ != nullptr) {
+      output << "# HELP stratakv_gateway_request_executor_queue_depth Blocking requests waiting for a native worker.\n"
+             << "# TYPE stratakv_gateway_request_executor_queue_depth gauge\n"
+             << "stratakv_gateway_request_executor_queue_depth " << requestExecutor_->queued() << "\n"
+             << "# HELP stratakv_gateway_request_executor_active_workers Native workers executing blocking requests.\n"
+             << "# TYPE stratakv_gateway_request_executor_active_workers gauge\n"
+             << "stratakv_gateway_request_executor_active_workers " << requestExecutor_->active() << "\n"
+             << "# HELP stratakv_gateway_request_executor_queue_capacity Maximum queued blocking requests.\n"
+             << "# TYPE stratakv_gateway_request_executor_queue_capacity gauge\n"
+             << "stratakv_gateway_request_executor_queue_capacity " << requestExecutor_->queueCapacity() << "\n"
+             << "# HELP stratakv_gateway_request_executor_rejected_total Requests rejected by executor backpressure.\n"
+             << "# TYPE stratakv_gateway_request_executor_rejected_total counter\n"
+             << "stratakv_gateway_request_executor_rejected_total " << requestExecutor_->rejected() << "\n";
+    }
     return output.str();
   }
 
   std::shared_ptr<stratakv::Client> client_;
+  const std::string runtimeMode_;
+  const size_t runtimeWorkers_;
+  BoundedThreadPool* const requestExecutor_;
   std::mutex transactionsMutex_;
   std::unordered_map<std::string, std::shared_ptr<stratakv::Transaction>> transactions_;
   std::atomic<uint64_t> nextId_{1};
@@ -286,6 +338,9 @@ class Gateway {
   std::atomic<uint64_t> committed_{0};
   std::atomic<uint64_t> rolledBack_{0};
   std::atomic<uint64_t> failed_{0};
+  std::atomic<uint64_t> acceptedConnections_{0};
+  std::atomic<uint64_t> activeConnections_{0};
+  std::atomic<uint64_t> peakConnections_{0};
 };
 
 bool ReadRequest(int fd, HttpRequest* request) {
@@ -396,7 +451,18 @@ void LogRequest(const HttpRequest& request, const HttpResponse& response, long l
   std::cout << ",\"http_status\":" << response.status << ",\"latency_ms\":" << latencyMs << "}" << std::endl;
 }
 
-void HandleConnection(int fd, Gateway* gateway) {
+struct RequestCompletion {
+  pulsar::FiberSemaphore completed;
+  HttpResponse response;
+};
+
+void HandleConnection(int fd, Gateway* gateway, BoundedThreadPool* requestExecutor) {
+  gateway->ConnectionOpened();
+  struct ConnectionGuard {
+    Gateway* gateway;
+    ~ConnectionGuard() { gateway->ConnectionClosed(); }
+  } guard{gateway};
+
   HttpRequest request;
   if (!ReadRequest(fd, &request)) {
     SendResponse(fd, Error(400, "INVALID_REQUEST", "unable to parse HTTP request"));
@@ -405,10 +471,33 @@ void HandleConnection(int fd, Gateway* gateway) {
   }
   const auto start = std::chrono::steady_clock::now();
   HttpResponse response;
-  try {
-    response = gateway->Handle(request);
-  } catch (const std::exception& error) {
-    response = Error(503, "UNAVAILABLE", error.what());
+  if (requestExecutor == nullptr) {
+    try {
+      response = gateway->Handle(request);
+    } catch (const std::exception& error) {
+      response = Error(503, "UNAVAILABLE", error.what());
+    } catch (...) {
+      response = Error(503, "UNAVAILABLE", "request execution failed");
+    }
+  } else {
+    auto completion = std::make_shared<RequestCompletion>();
+    const bool accepted = requestExecutor->TrySchedule([gateway, request, completion]() {
+      try {
+        completion->response = gateway->Handle(request);
+      } catch (const std::exception& error) {
+        completion->response = Error(503, "UNAVAILABLE", error.what());
+      } catch (...) {
+        completion->response = Error(503, "UNAVAILABLE", "request execution failed");
+      }
+      completion->completed.signal();
+    });
+    if (!accepted) {
+      response = Error(503, "GATEWAY_BUSY", "request executor queue is full");
+    } else if (completion->completed.wait() != 0) {
+      response = Error(503, "UNAVAILABLE", "request execution was interrupted");
+    } else {
+      response = std::move(completion->response);
+    }
   }
   const long long latencyMs = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - start).count();
@@ -418,7 +507,9 @@ void HandleConnection(int fd, Gateway* gateway) {
 }
 
 void PrintUsage(const char* program) {
-  std::cerr << "Usage: " << program << " --regions-config <path> [--host 0.0.0.0] [--port 8080]\n";
+  std::cerr << "Usage: " << program
+            << " --regions-config <path> [--host 0.0.0.0] [--port 8080]"
+               " [--runtime thread|fiber] [--workers 4] [--request-workers 16]\n";
 }
 
 }  // namespace
@@ -426,7 +517,13 @@ void PrintUsage(const char* program) {
 int main(int argc, char** argv) {
   std::string regionConfigPath;
   std::string host = "0.0.0.0";
+  // Keep the established pthread path as the latency-oriented default. Fiber
+  // mode is an explicit bounded-thread option for high connection fan-in; the
+  // benchmark record documents its resource win and tail-latency trade-off.
+  std::string runtimeMode = "thread";
   int port = 8080;
+  int runtimeWorkers = 4;
+  int requestWorkers = 16;
   for (int index = 1; index < argc; index += 2) {
     if (index + 1 >= argc) {
       PrintUsage(argv[0]);
@@ -436,20 +533,34 @@ int main(int argc, char** argv) {
     const std::string value = argv[index + 1];
     if (option == "--regions-config") regionConfigPath = value;
     else if (option == "--host") host = value;
+    else if (option == "--runtime") runtimeMode = value;
     else if (option == "--port") {
       try { port = std::stoi(value); } catch (const std::exception&) { port = 0; }
+    } else if (option == "--workers") {
+      try { runtimeWorkers = std::stoi(value); } catch (const std::exception&) { runtimeWorkers = 0; }
+    } else if (option == "--request-workers") {
+      try { requestWorkers = std::stoi(value); } catch (const std::exception&) { requestWorkers = 0; }
     } else {
       PrintUsage(argv[0]);
       return 2;
     }
   }
-  if (regionConfigPath.empty() || port <= 0 || port > 65535) {
+  if (regionConfigPath.empty() || port <= 0 || port > 65535 || runtimeWorkers <= 0 || runtimeWorkers > 256 ||
+      requestWorkers <= 0 || requestWorkers > 256 ||
+      (runtimeMode != "fiber" && runtimeMode != "thread")) {
     PrintUsage(argv[0]);
     return 2;
   }
 
   try {
-    Gateway gateway(stratakv::Client::Connect(regionConfigPath));
+    std::unique_ptr<BoundedThreadPool> requestExecutor;
+    if (runtimeMode == "fiber") {
+      requestExecutor = std::make_unique<BoundedThreadPool>(
+          static_cast<size_t>(requestWorkers), static_cast<size_t>(requestWorkers) * 16);
+    }
+    Gateway gateway(stratakv::Client::Connect(regionConfigPath), runtimeMode,
+                    runtimeMode == "fiber" ? static_cast<size_t>(runtimeWorkers) : 0,
+                    requestExecutor.get());
     const int listener = socket(AF_INET, SOCK_STREAM, 0);
     if (listener < 0) throw std::runtime_error("cannot create listener socket");
     int reuse = 1;
@@ -463,15 +574,46 @@ int main(int argc, char** argv) {
       throw std::runtime_error("cannot bind gateway listener on " + host + ':' + std::to_string(port));
     }
     std::cout << "{\"level\":\"info\",\"component\":\"gateway\",\"event\":\"started\",\"host\":\""
-              << JsonEscape(host) << "\",\"port\":" << port << "}" << std::endl;
-    while (true) {
-      const int client = accept(listener, nullptr, nullptr);
-      if (client < 0) {
-        if (errno == EINTR) continue;
-        continue;
+              << JsonEscape(host) << "\",\"port\":" << port << ",\"runtime\":\"" << runtimeMode
+              << "\",\"io_workers\":" << (runtimeMode == "fiber" ? runtimeWorkers : 0)
+              << ",\"request_workers\":" << (runtimeMode == "fiber" ? requestWorkers : 0)
+              << "}" << std::endl;
+
+    if (runtimeMode == "thread") {
+      while (true) {
+        const int client = accept(listener, nullptr, nullptr);
+        if (client < 0) {
+          if (errno == EINTR) continue;
+          continue;
+        }
+        std::thread(HandleConnection, client, &gateway, nullptr).detach();
       }
-      std::thread(HandleConnection, client, &gateway).detach();
     }
+
+    // The listener was created on the main thread before Hook was enabled.
+    // Register it explicitly so accept() becomes an epoll-backed Fiber wait.
+    if (!pulsar::FdMgr::GetInstance()->get(listener, true)) {
+      close(listener);
+      throw std::runtime_error("cannot register gateway listener with Pulsar");
+    }
+    pulsar::IOManager runtime(static_cast<size_t>(runtimeWorkers), false, "stratakv-gateway");
+    runtime.scheduler([listener, &gateway, &runtime, requestPool = requestExecutor.get()]() {
+      while (true) {
+        const int client = accept(listener, nullptr, nullptr);
+        if (client < 0) {
+          if (errno == EINTR) continue;
+          usleep(1000);
+          continue;
+        }
+        runtime.scheduler([client, &gateway, requestPool]() {
+          HandleConnection(client, &gateway, requestPool);
+        });
+      }
+    });
+
+    // The runtime owns all request workers. The process is service-style and
+    // terminates through the normal SIGTERM/SIGINT process lifecycle.
+    while (true) pause();
   } catch (const std::exception& error) {
     std::cerr << "{\"level\":\"error\",\"component\":\"gateway\",\"message\":\"" << JsonEscape(error.what()) << "\"}" << std::endl;
     return 1;

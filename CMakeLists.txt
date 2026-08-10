@@ -30,12 +30,14 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
 
 # 1. 查找依赖
 find_package(Protobuf REQUIRED)
+include_directories(${Protobuf_INCLUDE_DIRS})
 
 # 2. 优先包含编译生成的路径 (解决路径污染的关键)
 # 这样编译器会先在 build 目录找最新的 .pb.h，而不是去源码目录找旧的
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/rpc)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/raft)
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/proto)
 
 # 3. 包含源码头文件路径
 include_directories(${PROJECT_SOURCE_DIR}/src/common/include)
@@ -64,6 +66,7 @@ add_library(stratakv_core STATIC
     ${src_proto}
     ${src_transaction}
 )
+add_dependencies(stratakv_core stratakv_proto_codegen)
 
 target_link_libraries(stratakv_core
     stratakv_rpc

@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "mprpc_controller.h"
-#include "rpc_header.pb.h"
+#include <rpc_header.pb.h>
 #include "util.h"
 
 namespace {
@@ -44,6 +44,7 @@ bool SetSocketTimeouts(int fd, std::string* errMsg) {
   }
   return true;
 }
+
 }
 
 /*
@@ -220,7 +221,7 @@ bool MprpcChannel::newConnect(int* clientFd, const char* ip, uint16_t port, std:
 }
 
 MprpcChannel::Connection& MprpcChannel::PickConnection() {
-  size_t index = m_nextConnection.fetch_add(1, std::memory_order_relaxed) % m_connections.size();
+  const size_t index = m_nextConnection.fetch_add(1, std::memory_order_relaxed) % m_connections.size();
   return *m_connections[index];
 }
 

@@ -12,6 +12,8 @@
 #include "timestamp_oracle.h"
 #include "transaction_coordinator.h"
 
+class BoundedThreadPool;
+
 class DistributedTransactionCoordinator {
  public:
   DistributedTransactionCoordinator(std::shared_ptr<ShardRouter> router, std::shared_ptr<TimestampOracle> tso);
@@ -28,6 +30,9 @@ class DistributedTransactionCoordinator {
  private:
   std::shared_ptr<ShardRouter> router_;
   std::shared_ptr<TimestampOracle> tso_;
+  // Cross-Region RPC/storage work is blocking and therefore belongs on a
+  // bounded native executor, separate from Gateway network Fibers.
+  std::unique_ptr<BoundedThreadPool> regionExecutor_;
   std::shared_ptr<LockResolver> lockResolver_;
   std::vector<std::unique_ptr<LockManager>> lockManagers_;
   std::vector<std::unique_ptr<DataGcManager>> dataGcManagers_;

@@ -9,7 +9,7 @@
 #include <cstring>
 #include <fstream>
 #include <string>
-#include "rpc_header.pb.h"
+#include <rpc_header.pb.h>
 #include "util.h"
 
 namespace {

@@ -1,9 +1,5 @@
 
-# 获取当前源文件所在目录的绝对路径
-get_filename_component(SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS raft_rpc.proto kv_server_rpc.proto)
+add_custom_target(stratakv_proto_codegen DEPENDS ${PROTO_SRCS} ${PROTO_HDRS})
 
-# 将该目录下所有源文件添加到 SRC_LIST 变量中
-aux_source_directory(${SRC_DIR} SRC_LIST)
-
-
-set(src_proto ${SRC_LIST} CACHE INTERNAL "Generated Protobuf source files")
+set(src_proto ${PROTO_SRCS} CACHE INTERNAL "Generated Protobuf source files")

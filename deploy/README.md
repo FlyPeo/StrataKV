@@ -27,6 +27,24 @@ bash deploy/stratakv-server up \
 同一台机器目前只能启动一套使用默认 Raft 端口的集群。另一个项目如需同时
 运行，必须先扩展脚本使其支持自定义 Raft 端口。
 
+### Gateway 运行模式
+
+Gateway 默认使用 `thread` 模式。高连接扇入或需要严格约束线程数时，
+可显式启用 Pulsar Fiber 网络运行时：
+
+```bash
+bash deploy/stratakv-server up \
+  --project my-db \
+  --gateway-runtime fiber \
+  --gateway-workers 4 \
+  --gateway-request-workers 16
+```
+
+Fiber 只负责 HTTP socket 的 accept/read/wait/write。SDK、2PC、同步 RPC、
+Raft 和 RocksDB 仍在原生线程或有界线程池中执行；请求队列满时
+返回 HTTP 503。Fiber 模式的主要目标是给连接和线程资源设置上界，
+不保证在所有负载下比 `thread` 模式更快；生产取舍前应使用目标负载做 A/B。
+
 ## 状态与验证
 
 ```bash

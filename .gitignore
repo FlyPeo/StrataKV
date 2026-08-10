@@ -14,4 +14,12 @@
 !/deploy/
 !/deploy/**
 
+!/scripts/
+/scripts/*
+!/scripts/pull_all.sh
+!/scripts/push_all.sh
+
+# Docs is maintained as an independent Git repository.
+/docs/
+
 /deploy/runtime/
