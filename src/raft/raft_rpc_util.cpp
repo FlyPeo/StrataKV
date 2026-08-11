@@ -8,6 +8,7 @@
 #include <mprpc_controller.h>
 
 bool RaftRpcUtil::AppendEntries(raftRpcProctoc::AppendEntriesArgs *args, raftRpcProctoc::AppendEntriesReply *response) {
+  args->set_regionid(regionId_);
   MprpcController controller;
   stub_->AppendEntries(&controller, args, response, nullptr);
   return !controller.Failed();
@@ -15,12 +16,14 @@ bool RaftRpcUtil::AppendEntries(raftRpcProctoc::AppendEntriesArgs *args, raftRpc
 
 bool RaftRpcUtil::InstallSnapshot(raftRpcProctoc::InstallSnapshotRequest *args,
                                   raftRpcProctoc::InstallSnapshotResponse *response) {
+  args->set_regionid(regionId_);
   MprpcController controller;
   stub_->InstallSnapshot(&controller, args, response, nullptr);
   return !controller.Failed();
 }
 
 bool RaftRpcUtil::RequestVote(raftRpcProctoc::RequestVoteArgs *args, raftRpcProctoc::RequestVoteReply *response) {
+  args->set_regionid(regionId_);
   MprpcController controller;
   stub_->RequestVote(&controller, args, response, nullptr);
   return !controller.Failed();
@@ -28,7 +31,7 @@ bool RaftRpcUtil::RequestVote(raftRpcProctoc::RequestVoteArgs *args, raftRpcProc
 
 //先开启服务器，再尝试连接其他的节点，中间给一个间隔时间，等待其他的rpc服务器节点启动
 
-RaftRpcUtil::RaftRpcUtil(std::string ip, short port) {
+RaftRpcUtil::RaftRpcUtil(std::string ip, short port, int regionId) : regionId_(regionId) {
   //*********************************************  */
   //发送rpc设置
   channel_ = new MprpcChannel(ip, port, true);

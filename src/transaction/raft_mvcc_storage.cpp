@@ -65,6 +65,7 @@ TxnStatus RaftMvccStorage::Get(const std::string& key, uint64_t readTs, std::str
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnGetArgs args;
+    args.set_regionid(shardId_);
     args.set_key(key);
     args.set_readts(readTs);
     args.set_clientid(clientId_);
@@ -103,6 +104,7 @@ TxnStatus RaftMvccStorage::Prewrite(const std::string& key, const std::string& v
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnPrewriteArgs args;
+    args.set_regionid(shardId_);
     args.set_key(key);
     args.set_value(value);
     args.set_primarykey(primaryKey);
@@ -141,6 +143,7 @@ TxnStatus RaftMvccStorage::PrewriteDelete(const std::string& key, const std::str
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnPrewriteArgs args;
+    args.set_regionid(shardId_);
     args.set_key(key);
     args.set_value("");
     args.set_primarykey(primaryKey);
@@ -177,6 +180,7 @@ TxnStatus RaftMvccStorage::AcquirePessimisticLock(const std::string& key, const 
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnAcquirePessimisticLockArgs args;
+    args.set_regionid(shardId_);
     args.set_key(key);
     args.set_primarykey(primaryKey);
     args.set_startts(startTs);
@@ -210,6 +214,7 @@ TxnStatus RaftMvccStorage::Commit(const std::string& key, uint64_t startTs, uint
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnCommitArgs args;
+    args.set_regionid(shardId_);
     args.set_key(key);
     args.set_startts(startTs);
     args.set_committs(commitTs);
@@ -244,6 +249,7 @@ TxnStatus RaftMvccStorage::Rollback(const std::string& key, uint64_t startTs) {
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnRollbackArgs args;
+    args.set_regionid(shardId_);
     args.set_key(key);
     args.set_startts(startTs);
     args.set_clientid(clientId_);
@@ -273,6 +279,7 @@ std::optional<MvccLock> RaftMvccStorage::GetLock(const std::string& key) {
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnGetLockArgs args;
+    args.set_regionid(shardId_);
     args.set_key(key);
 
     raftKVRpcProctoc::TxnGetLockReply reply;
@@ -311,6 +318,7 @@ std::optional<uint64_t> RaftMvccStorage::FindCommitTs(const std::string& key, ui
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnFindCommitTsArgs args;
+    args.set_regionid(shardId_);
     args.set_key(key);
     args.set_startts(startTs);
 
@@ -342,6 +350,7 @@ std::vector<std::pair<std::string, MvccLock>> RaftMvccStorage::ExpiredLocks(uint
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnExpiredLocksArgs args;
+    args.set_regionid(shardId_);
     args.set_nowms(nowMs);
 
     raftKVRpcProctoc::TxnExpiredLocksReply reply;
@@ -382,6 +391,7 @@ size_t RaftMvccStorage::GarbageCollect(uint64_t safePointTs) {
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnGarbageCollectArgs args;
+    args.set_regionid(shardId_);
     args.set_safepointts(safePointTs);
     args.set_clientid(maintenanceClientId_);
     args.set_requestid(reqId);
@@ -412,6 +422,7 @@ uint64_t RaftMvccStorage::MaxObservedTs() {
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnMaxObservedTsArgs args;
+    args.set_regionid(shardId_);
 
     raftKVRpcProctoc::TxnMaxObservedTsReply reply;
     MprpcController controller;

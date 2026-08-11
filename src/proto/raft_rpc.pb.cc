@@ -44,6 +44,7 @@ PROTOBUF_CONSTEXPR AppendEntriesArgs::AppendEntriesArgs(
   , /*decltype(_impl_.prevlogindex_)*/0
   , /*decltype(_impl_.prevlogterm_)*/0
   , /*decltype(_impl_.leadercommit_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct AppendEntriesArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR AppendEntriesArgsDefaultTypeInternal()
@@ -76,6 +77,7 @@ PROTOBUF_CONSTEXPR RequestVoteArgs::RequestVoteArgs(
   , /*decltype(_impl_.candidateid_)*/0
   , /*decltype(_impl_.lastlogindex_)*/0
   , /*decltype(_impl_.lastlogterm_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct RequestVoteArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR RequestVoteArgsDefaultTypeInternal()
@@ -108,6 +110,7 @@ PROTOBUF_CONSTEXPR InstallSnapshotRequest::InstallSnapshotRequest(
   , /*decltype(_impl_.term_)*/0
   , /*decltype(_impl_.lastsnapshotincludeindex_)*/0
   , /*decltype(_impl_.lastsnapshotincludeterm_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct InstallSnapshotRequestDefaultTypeInternal {
   PROTOBUF_CONSTEXPR InstallSnapshotRequestDefaultTypeInternal()
@@ -158,6 +161,7 @@ const uint32_t TableStruct_raft_5frpc_2eproto::offsets[] PROTOBUF_SECTION_VARIAB
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::AppendEntriesArgs, _impl_.prevlogterm_),
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::AppendEntriesArgs, _impl_.entries_),
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::AppendEntriesArgs, _impl_.leadercommit_),
+  PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::AppendEntriesArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::AppendEntriesReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -178,6 +182,7 @@ const uint32_t TableStruct_raft_5frpc_2eproto::offsets[] PROTOBUF_SECTION_VARIAB
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::RequestVoteArgs, _impl_.candidateid_),
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::RequestVoteArgs, _impl_.lastlogindex_),
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::RequestVoteArgs, _impl_.lastlogterm_),
+  PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::RequestVoteArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::RequestVoteReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -198,6 +203,7 @@ const uint32_t TableStruct_raft_5frpc_2eproto::offsets[] PROTOBUF_SECTION_VARIAB
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::InstallSnapshotRequest, _impl_.lastsnapshotincludeindex_),
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::InstallSnapshotRequest, _impl_.lastsnapshotincludeterm_),
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::InstallSnapshotRequest, _impl_.data_),
+  PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::InstallSnapshotRequest, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftRpcProctoc::InstallSnapshotResponse, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -209,11 +215,11 @@ const uint32_t TableStruct_raft_5frpc_2eproto::offsets[] PROTOBUF_SECTION_VARIAB
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::raftRpcProctoc::LogEntry)},
   { 9, -1, -1, sizeof(::raftRpcProctoc::AppendEntriesArgs)},
-  { 21, -1, -1, sizeof(::raftRpcProctoc::AppendEntriesReply)},
-  { 31, -1, -1, sizeof(::raftRpcProctoc::RequestVoteArgs)},
-  { 41, -1, -1, sizeof(::raftRpcProctoc::RequestVoteReply)},
-  { 50, -1, -1, sizeof(::raftRpcProctoc::InstallSnapshotRequest)},
-  { 61, -1, -1, sizeof(::raftRpcProctoc::InstallSnapshotResponse)},
+  { 22, -1, -1, sizeof(::raftRpcProctoc::AppendEntriesReply)},
+  { 32, -1, -1, sizeof(::raftRpcProctoc::RequestVoteArgs)},
+  { 43, -1, -1, sizeof(::raftRpcProctoc::RequestVoteReply)},
+  { 52, -1, -1, sizeof(::raftRpcProctoc::InstallSnapshotRequest)},
+  { 64, -1, -1, sizeof(::raftRpcProctoc::InstallSnapshotResponse)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -229,34 +235,35 @@ static const ::_pb::Message* const file_default_instances[] = {
 const char descriptor_table_protodef_raft_5frpc_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
   "\n\016raft_rpc.proto\022\016raftRpcProctoc\">\n\010LogE"
   "ntry\022\017\n\007Command\030\001 \001(\014\022\017\n\007LogTerm\030\002 \001(\005\022\020"
-  "\n\010LogIndex\030\003 \001(\005\"\237\001\n\021AppendEntriesArgs\022\014"
+  "\n\010LogIndex\030\003 \001(\005\"\261\001\n\021AppendEntriesArgs\022\014"
   "\n\004Term\030\001 \001(\005\022\020\n\010LeaderId\030\002 \001(\005\022\024\n\014PrevLo"
   "gIndex\030\003 \001(\005\022\023\n\013PrevLogTerm\030\004 \001(\005\022)\n\007Ent"
   "ries\030\005 \003(\0132\030.raftRpcProctoc.LogEntry\022\024\n\014"
-  "LeaderCommit\030\006 \001(\005\"^\n\022AppendEntriesReply"
-  "\022\014\n\004Term\030\001 \001(\005\022\017\n\007Success\030\002 \001(\010\022\027\n\017Updat"
-  "eNextIndex\030\003 \001(\005\022\020\n\010AppState\030\004 \001(\005\"_\n\017Re"
-  "questVoteArgs\022\014\n\004Term\030\001 \001(\005\022\023\n\013Candidate"
-  "Id\030\002 \001(\005\022\024\n\014LastLogIndex\030\003 \001(\005\022\023\n\013LastLo"
-  "gTerm\030\004 \001(\005\"H\n\020RequestVoteReply\022\014\n\004Term\030"
-  "\001 \001(\005\022\023\n\013VoteGranted\030\002 \001(\010\022\021\n\tVoteState\030"
-  "\003 \001(\005\"\211\001\n\026InstallSnapshotRequest\022\020\n\010Lead"
-  "erId\030\001 \001(\005\022\014\n\004Term\030\002 \001(\005\022 \n\030LastSnapShot"
-  "IncludeIndex\030\003 \001(\005\022\037\n\027LastSnapShotInclud"
-  "eTerm\030\004 \001(\005\022\014\n\004Data\030\005 \001(\014\"\'\n\027InstallSnap"
-  "shotResponse\022\014\n\004Term\030\001 \001(\0052\227\002\n\007raftRpc\022V"
-  "\n\rAppendEntries\022!.raftRpcProctoc.AppendE"
-  "ntriesArgs\032\".raftRpcProctoc.AppendEntrie"
-  "sReply\022b\n\017InstallSnapshot\022&.raftRpcProct"
-  "oc.InstallSnapshotRequest\032\'.raftRpcProct"
-  "oc.InstallSnapshotResponse\022P\n\013RequestVot"
-  "e\022\037.raftRpcProctoc.RequestVoteArgs\032 .raf"
-  "tRpcProctoc.RequestVoteReplyB\003\200\001\001b\006proto"
-  "3"
+  "LeaderCommit\030\006 \001(\005\022\020\n\010RegionId\030\007 \001(\005\"^\n\022"
+  "AppendEntriesReply\022\014\n\004Term\030\001 \001(\005\022\017\n\007Succ"
+  "ess\030\002 \001(\010\022\027\n\017UpdateNextIndex\030\003 \001(\005\022\020\n\010Ap"
+  "pState\030\004 \001(\005\"q\n\017RequestVoteArgs\022\014\n\004Term\030"
+  "\001 \001(\005\022\023\n\013CandidateId\030\002 \001(\005\022\024\n\014LastLogInd"
+  "ex\030\003 \001(\005\022\023\n\013LastLogTerm\030\004 \001(\005\022\020\n\010RegionI"
+  "d\030\005 \001(\005\"H\n\020RequestVoteReply\022\014\n\004Term\030\001 \001("
+  "\005\022\023\n\013VoteGranted\030\002 \001(\010\022\021\n\tVoteState\030\003 \001("
+  "\005\"\233\001\n\026InstallSnapshotRequest\022\020\n\010LeaderId"
+  "\030\001 \001(\005\022\014\n\004Term\030\002 \001(\005\022 \n\030LastSnapShotIncl"
+  "udeIndex\030\003 \001(\005\022\037\n\027LastSnapShotIncludeTer"
+  "m\030\004 \001(\005\022\014\n\004Data\030\005 \001(\014\022\020\n\010RegionId\030\006 \001(\005\""
+  "\'\n\027InstallSnapshotResponse\022\014\n\004Term\030\001 \001(\005"
+  "2\227\002\n\007raftRpc\022V\n\rAppendEntries\022!.raftRpcP"
+  "roctoc.AppendEntriesArgs\032\".raftRpcProcto"
+  "c.AppendEntriesReply\022b\n\017InstallSnapshot\022"
+  "&.raftRpcProctoc.InstallSnapshotRequest\032"
+  "\'.raftRpcProctoc.InstallSnapshotResponse"
+  "\022P\n\013RequestVote\022\037.raftRpcProctoc.Request"
+  "VoteArgs\032 .raftRpcProctoc.RequestVoteRep"
+  "lyB\003\200\001\001b\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_raft_5frpc_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_raft_5frpc_2eproto = {
-    false, false, 1001, descriptor_table_protodef_raft_5frpc_2eproto,
+    false, false, 1055, descriptor_table_protodef_raft_5frpc_2eproto,
     "raft_rpc.proto",
     &descriptor_table_raft_5frpc_2eproto_once, nullptr, 0, 7,
     schemas, file_default_instances, TableStruct_raft_5frpc_2eproto::offsets,
@@ -551,12 +558,13 @@ AppendEntriesArgs::AppendEntriesArgs(const AppendEntriesArgs& from)
     , decltype(_impl_.prevlogindex_){}
     , decltype(_impl_.prevlogterm_){}
     , decltype(_impl_.leadercommit_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
   ::memcpy(&_impl_.term_, &from._impl_.term_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.leadercommit_) -
-    reinterpret_cast<char*>(&_impl_.term_)) + sizeof(_impl_.leadercommit_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.term_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftRpcProctoc.AppendEntriesArgs)
 }
 
@@ -571,6 +579,7 @@ inline void AppendEntriesArgs::SharedCtor(
     , decltype(_impl_.prevlogindex_){0}
     , decltype(_impl_.prevlogterm_){0}
     , decltype(_impl_.leadercommit_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
 }
@@ -601,8 +610,8 @@ void AppendEntriesArgs::Clear() {
 
   _impl_.entries_.Clear();
   ::memset(&_impl_.term_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.leadercommit_) -
-      reinterpret_cast<char*>(&_impl_.term_)) + sizeof(_impl_.leadercommit_));
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.term_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -661,6 +670,14 @@ const char* AppendEntriesArgs::_InternalParse(const char* ptr, ::_pbi::ParseCont
       case 6:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 48)) {
           _impl_.leadercommit_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 7;
+      case 7:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 56)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -732,6 +749,12 @@ uint8_t* AppendEntriesArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(6, this->_internal_leadercommit(), target);
   }
 
+  // int32 RegionId = 7;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(7, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -780,6 +803,11 @@ size_t AppendEntriesArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_leadercommit());
   }
 
+  // int32 RegionId = 7;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -814,6 +842,9 @@ void AppendEntriesArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, cons
   if (from._internal_leadercommit() != 0) {
     _this->_internal_set_leadercommit(from._internal_leadercommit());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -833,8 +864,8 @@ void AppendEntriesArgs::InternalSwap(AppendEntriesArgs* other) {
   _internal_metadata_.InternalSwap(&other->_internal_metadata_);
   _impl_.entries_.InternalSwap(&other->_impl_.entries_);
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(AppendEntriesArgs, _impl_.leadercommit_)
-      + sizeof(AppendEntriesArgs::_impl_.leadercommit_)
+      PROTOBUF_FIELD_OFFSET(AppendEntriesArgs, _impl_.regionid_)
+      + sizeof(AppendEntriesArgs::_impl_.regionid_)
       - PROTOBUF_FIELD_OFFSET(AppendEntriesArgs, _impl_.term_)>(
           reinterpret_cast<char*>(&_impl_.term_),
           reinterpret_cast<char*>(&other->_impl_.term_));
@@ -1125,12 +1156,13 @@ RequestVoteArgs::RequestVoteArgs(const RequestVoteArgs& from)
     , decltype(_impl_.candidateid_){}
     , decltype(_impl_.lastlogindex_){}
     , decltype(_impl_.lastlogterm_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
   ::memcpy(&_impl_.term_, &from._impl_.term_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.lastlogterm_) -
-    reinterpret_cast<char*>(&_impl_.term_)) + sizeof(_impl_.lastlogterm_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.term_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftRpcProctoc.RequestVoteArgs)
 }
 
@@ -1143,6 +1175,7 @@ inline void RequestVoteArgs::SharedCtor(
     , decltype(_impl_.candidateid_){0}
     , decltype(_impl_.lastlogindex_){0}
     , decltype(_impl_.lastlogterm_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
 }
@@ -1171,8 +1204,8 @@ void RequestVoteArgs::Clear() {
   (void) cached_has_bits;
 
   ::memset(&_impl_.term_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.lastlogterm_) -
-      reinterpret_cast<char*>(&_impl_.term_)) + sizeof(_impl_.lastlogterm_));
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.term_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -1210,6 +1243,14 @@ const char* RequestVoteArgs::_InternalParse(const char* ptr, ::_pbi::ParseContex
       case 4:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 32)) {
           _impl_.lastlogterm_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 5;
+      case 5:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 40)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -1267,6 +1308,12 @@ uint8_t* RequestVoteArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(4, this->_internal_lastlogterm(), target);
   }
 
+  // int32 RegionId = 5;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(5, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -1303,6 +1350,11 @@ size_t RequestVoteArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_lastlogterm());
   }
 
+  // int32 RegionId = 5;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -1333,6 +1385,9 @@ void RequestVoteArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const 
   if (from._internal_lastlogterm() != 0) {
     _this->_internal_set_lastlogterm(from._internal_lastlogterm());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -1351,8 +1406,8 @@ void RequestVoteArgs::InternalSwap(RequestVoteArgs* other) {
   using std::swap;
   _internal_metadata_.InternalSwap(&other->_internal_metadata_);
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(RequestVoteArgs, _impl_.lastlogterm_)
-      + sizeof(RequestVoteArgs::_impl_.lastlogterm_)
+      PROTOBUF_FIELD_OFFSET(RequestVoteArgs, _impl_.regionid_)
+      + sizeof(RequestVoteArgs::_impl_.regionid_)
       - PROTOBUF_FIELD_OFFSET(RequestVoteArgs, _impl_.term_)>(
           reinterpret_cast<char*>(&_impl_.term_),
           reinterpret_cast<char*>(&other->_impl_.term_));
@@ -1620,6 +1675,7 @@ InstallSnapshotRequest::InstallSnapshotRequest(const InstallSnapshotRequest& fro
     , decltype(_impl_.term_){}
     , decltype(_impl_.lastsnapshotincludeindex_){}
     , decltype(_impl_.lastsnapshotincludeterm_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -1632,8 +1688,8 @@ InstallSnapshotRequest::InstallSnapshotRequest(const InstallSnapshotRequest& fro
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.leaderid_, &from._impl_.leaderid_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.lastsnapshotincludeterm_) -
-    reinterpret_cast<char*>(&_impl_.leaderid_)) + sizeof(_impl_.lastsnapshotincludeterm_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.leaderid_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftRpcProctoc.InstallSnapshotRequest)
 }
 
@@ -1647,6 +1703,7 @@ inline void InstallSnapshotRequest::SharedCtor(
     , decltype(_impl_.term_){0}
     , decltype(_impl_.lastsnapshotincludeindex_){0}
     , decltype(_impl_.lastsnapshotincludeterm_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.data_.InitDefault();
@@ -1681,8 +1738,8 @@ void InstallSnapshotRequest::Clear() {
 
   _impl_.data_.ClearToEmpty();
   ::memset(&_impl_.leaderid_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.lastsnapshotincludeterm_) -
-      reinterpret_cast<char*>(&_impl_.leaderid_)) + sizeof(_impl_.lastsnapshotincludeterm_));
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.leaderid_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -1729,6 +1786,14 @@ const char* InstallSnapshotRequest::_InternalParse(const char* ptr, ::_pbi::Pars
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 42)) {
           auto str = _internal_mutable_data();
           ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 6;
+      case 6:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 48)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -1792,6 +1857,12 @@ uint8_t* InstallSnapshotRequest::_InternalSerialize(
         5, this->_internal_data(), target);
   }
 
+  // int32 RegionId = 6;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(6, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -1835,6 +1906,11 @@ size_t InstallSnapshotRequest::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_lastsnapshotincludeterm());
   }
 
+  // int32 RegionId = 6;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -1868,6 +1944,9 @@ void InstallSnapshotRequest::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg,
   if (from._internal_lastsnapshotincludeterm() != 0) {
     _this->_internal_set_lastsnapshotincludeterm(from._internal_lastsnapshotincludeterm());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -1892,8 +1971,8 @@ void InstallSnapshotRequest::InternalSwap(InstallSnapshotRequest* other) {
       &other->_impl_.data_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(InstallSnapshotRequest, _impl_.lastsnapshotincludeterm_)
-      + sizeof(InstallSnapshotRequest::_impl_.lastsnapshotincludeterm_)
+      PROTOBUF_FIELD_OFFSET(InstallSnapshotRequest, _impl_.regionid_)
+      + sizeof(InstallSnapshotRequest::_impl_.regionid_)
       - PROTOBUF_FIELD_OFFSET(InstallSnapshotRequest, _impl_.leaderid_)>(
           reinterpret_cast<char*>(&_impl_.leaderid_),
           reinterpret_cast<char*>(&other->_impl_.leaderid_));

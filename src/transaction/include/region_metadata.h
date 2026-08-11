@@ -8,7 +8,7 @@
 
 // 一个 Region 是连续的半开 Key 区间 [startKey, endKey)。空 endKey 表示正无穷。
 // 每个 Region 对应一个独立 Raft group；同一物理节点可出现在多个 Region 的 peers 中。
-struct RegionPeer {
+struct RegionPeerLocation {
   int nodeId = -1;
   std::string host;
   short port = 0;
@@ -18,7 +18,7 @@ struct RegionMetadata {
   int regionId = -1;
   std::string startKey;
   std::string endKey;
-  std::vector<RegionPeer> peers;
+  std::vector<RegionPeerLocation> peers;
 
   bool Contains(const std::string& key) const;
 };

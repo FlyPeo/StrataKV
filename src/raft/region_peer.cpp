@@ -1,12 +1,9 @@
-#include "kv_server.h"
+#include "region_peer.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
-#include <rpc_provider.h>
 #include <stdexcept>
-
-#include "mprpc_config.h"
 
 namespace {
 
@@ -37,7 +34,7 @@ std::string EscapeJson(const std::string& value) {
 
 }  // namespace
 
-void KvServer::DprintfKVDB() {
+void RegionPeer::DprintfKVDB() {
   if (!Debug) {
     return;
   }
@@ -45,7 +42,7 @@ void KvServer::DprintfKVDB() {
   m_kvEngine->DebugPrint();
 }
 
-void KvServer::ExecuteAppendOpOnKVDB(Op op) {
+void RegionPeer::ExecuteAppendOpOnKVDB(Op op) {
   // if op.IfDuplicate {   //get请求是可重复执行的，因此可以不用判复
   //	return
   // }
@@ -61,7 +58,7 @@ void KvServer::ExecuteAppendOpOnKVDB(Op op) {
   DprintfKVDB();
 }
 
-void KvServer::ExecuteGetOpOnKVDB(Op op, std::string *value, bool *exist) {
+void RegionPeer::ExecuteGetOpOnKVDB(Op op, std::string *value, bool *exist) {
   {
     std::lock_guard<std::mutex> lg(m_mtx);
     *value = "";
@@ -82,7 +79,7 @@ void KvServer::ExecuteGetOpOnKVDB(Op op, std::string *value, bool *exist) {
   DprintfKVDB();
 }
 
-void KvServer::ExecutePutOpOnKVDB(Op op) {
+void RegionPeer::ExecutePutOpOnKVDB(Op op) {
   {
     std::lock_guard<std::mutex> lg(m_mtx);
     m_kvEngine->Put(op.Key, op.Value);
@@ -95,7 +92,7 @@ void KvServer::ExecutePutOpOnKVDB(Op op) {
 }
 
 // 处理来自clerk的Get RPC
-void KvServer::Get(const raftKVRpcProctoc::GetArgs *args, raftKVRpcProctoc::GetReply *reply) {
+void RegionPeer::Get(const raftKVRpcProctoc::GetArgs *args, raftKVRpcProctoc::GetReply *reply) {
   Op op;
   op.Operation = "Get";
   op.Key = args->key();
@@ -174,13 +171,13 @@ void KvServer::Get(const raftKVRpcProctoc::GetArgs *args, raftKVRpcProctoc::GetR
   ReleaseWaitApplyQueue(reqKey, chForRaftIndex);
 }
 
-void KvServer::GetCommandFromRaft(ApplyMsg message) {
+void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
   Op op;
   op.parseFromString(message.Command);
   std::string reqKey = op.ClientId + "_" + std::to_string(op.RequestId);
 
   DPrintf(
-      "[KvServer::GetCommandFromRaft-kvserver{%d}] , Got Command --> ReqKey:{%s} , ClientId {%s}, RequestId {%d}, "
+      "[RegionPeer::GetCommandFromRaft-kvserver{%d}] , Got Command --> ReqKey:{%s} , ClientId {%s}, RequestId {%d}, "
       "Opreation {%s}, Key :{%s}, Value :{%s}",
       m_me, reqKey.c_str(), op.ClientId.c_str(), op.RequestId, op.Operation.c_str(), op.Key.c_str(),
       op.Value.c_str());
@@ -299,7 +296,7 @@ void KvServer::GetCommandFromRaft(ApplyMsg message) {
   SendMessageToWaitChan(op, reqKey);
 }
 
-bool KvServer::ifRequestDuplicate(std::string ClientId, int RequestId) {
+bool RegionPeer::ifRequestDuplicate(std::string ClientId, int RequestId) {
   std::lock_guard<std::mutex> lg(m_mtx);
   if (m_lastRequestId.find(ClientId) == m_lastRequestId.end()) {
     return false;
@@ -311,7 +308,7 @@ bool KvServer::ifRequestDuplicate(std::string ClientId, int RequestId) {
 // get和put//append執行的具體細節是不一樣的
 // PutAppend在收到raft消息之後執行，具體函數裏面只判斷冪等性（是否重複）
 // get函數收到raft消息之後在，因爲get無論是否重複都可以再執行
-void KvServer::PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRpcProctoc::PutAppendReply *reply) {
+void RegionPeer::PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRpcProctoc::PutAppendReply *reply) {
   Op op;
   op.Operation = args->op();
   op.Key = args->key();
@@ -329,7 +326,7 @@ void KvServer::PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRpcP
   if (!isleader) {
     ReleaseWaitApplyQueue(reqKey, chForRaftIndex);
     DPrintf(
-        "[func -KvServer::PutAppend -kvserver{%d}]From Client %s (Request %d) To Server %d, key %s, raftIndex %d , but "
+        "[func -RegionPeer::PutAppend -kvserver{%d}]From Client %s (Request %d) To Server %d, key %s, raftIndex %d , but "
         "not leader",
       m_me, args->clientid().c_str(), args->requestid(), m_me, op.Key.c_str(), raftIndex);
 
@@ -337,7 +334,7 @@ void KvServer::PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRpcP
     return;
   }
   DPrintf(
-      "[func -KvServer::PutAppend -kvserver{%d}]From Client %s (Request %d) To Server %d, key %s, raftIndex %d , is "
+      "[func -RegionPeer::PutAppend -kvserver{%d}]From Client %s (Request %d) To Server %d, key %s, raftIndex %d , is "
       "leader ",
       m_me, args->clientid().c_str(), args->requestid(), m_me, op.Key.c_str(), raftIndex);
   // timeout
@@ -345,7 +342,7 @@ void KvServer::PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRpcP
 
   if (!chForRaftIndex->timeOutPop(CONSENSUS_TIMEOUT, &raftCommitOp)) {
     DPrintf(
-        "[func -KvServer::PutAppend -kvserver{%d}]TIMEOUT PUTAPPEND !!!! Server %d , get Command <-- Index:%d , "
+        "[func -RegionPeer::PutAppend -kvserver{%d}]TIMEOUT PUTAPPEND !!!! Server %d , get Command <-- Index:%d , "
       "ClientId %s, RequestId %d, Opreation %s Key :%s, Value :%s",
       m_me, m_me, raftIndex, op.ClientId.c_str(), op.RequestId, op.Operation.c_str(), op.Key.c_str(),
       op.Value.c_str());
@@ -357,7 +354,7 @@ void KvServer::PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRpcP
     }
   } else {
     DPrintf(
-        "[func -KvServer::PutAppend -kvserver{%d}]WaitChanGetRaftApplyMessage<--Server %d , get Command <-- Index:%d , "
+        "[func -RegionPeer::PutAppend -kvserver{%d}]WaitChanGetRaftApplyMessage<--Server %d , get Command <-- Index:%d , "
         "ClientId %s, RequestId %d, Opreation %s, Key :%s, Value :%s",
       m_me, m_me, raftIndex, op.ClientId.c_str(), op.RequestId, op.Operation.c_str(), op.Key.c_str(),
       op.Value.c_str());
@@ -372,12 +369,12 @@ void KvServer::PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRpcP
   ReleaseWaitApplyQueue(reqKey, chForRaftIndex);
 }
 
-void KvServer::ReadRaftApplyCommandLoop() {
+void RegionPeer::ReadRaftApplyCommandLoop() {
   while (true) {
     //如果只操作applyChan不用拿锁，因为applyChan自己带锁
     auto message = applyChan->Pop();  //阻塞弹出
     DPrintf(
-        "---------------tmp-------------[func-KvServer::ReadRaftApplyCommandLoop()-kvserver{%d}] 收到了下raft的消息",
+        "---------------tmp-------------[func-RegionPeer::ReadRaftApplyCommandLoop()-kvserver{%d}] 收到了下raft的消息",
         m_me);
     // listen to every command applied by its raft ,delivery to relative RPC Handler
 
@@ -394,7 +391,7 @@ void KvServer::ReadRaftApplyCommandLoop() {
 //  关于快照raft层与persist的交互：保存kvserver传来的snapshot；生成leaderInstallSnapshot RPC的时候也需要读取snapshot；
 //  因此snapshot的具体格式是由kvserver层来定的，raft只负责传递这个东西
 //  snapShot里面包含kvserver需要维护的persist_lastRequestId 以及kvDB真正保存的数据persist_kvdb
-void KvServer::ReadSnapShotToInstall(std::string snapshot) {
+void RegionPeer::ReadSnapShotToInstall(std::string snapshot) {
   if (snapshot.empty()) {
     // bootstrap without any state?
     return;
@@ -415,7 +412,7 @@ void KvServer::ReadSnapShotToInstall(std::string snapshot) {
   //    }
 }
 
-bool KvServer::SendMessageToWaitChan(const Op &op, const std::string& reqKey) {
+bool RegionPeer::SendMessageToWaitChan(const Op &op, const std::string& reqKey) {
   WaitApplyQueue queue;
   {
     std::lock_guard<std::mutex> lg(m_mtx);
@@ -438,7 +435,7 @@ bool KvServer::SendMessageToWaitChan(const Op &op, const std::string& reqKey) {
   return true;
 }
 
-KvServer::WaitApplyQueue KvServer::AcquireWaitApplyQueue(const std::string& reqKey) {
+RegionPeer::WaitApplyQueue RegionPeer::AcquireWaitApplyQueue(const std::string& reqKey) {
   std::lock_guard<std::mutex> lock(m_mtx);
   auto& queue = waitApplyCh[reqKey];
   if (!queue) {
@@ -447,7 +444,7 @@ KvServer::WaitApplyQueue KvServer::AcquireWaitApplyQueue(const std::string& reqK
   return queue;
 }
 
-void KvServer::ReleaseWaitApplyQueue(const std::string& reqKey, const WaitApplyQueue& queue) {
+void RegionPeer::ReleaseWaitApplyQueue(const std::string& reqKey, const WaitApplyQueue& queue) {
   std::lock_guard<std::mutex> lock(m_mtx);
   const auto it = waitApplyCh.find(reqKey);
   // A timed-out request can be retried with the same request ID. Do not erase
@@ -457,7 +454,7 @@ void KvServer::ReleaseWaitApplyQueue(const std::string& reqKey, const WaitApplyQ
   }
 }
 
-void KvServer::IfNeedToSendSnapShotCommand(int raftIndex, int proportion) {
+void RegionPeer::IfNeedToSendSnapShotCommand(int raftIndex, int proportion) {
   if (m_maxRaftState == -1) {
     return;
   }
@@ -470,7 +467,7 @@ void KvServer::IfNeedToSendSnapShotCommand(int raftIndex, int proportion) {
   }
 }
 
-void KvServer::GetSnapShotFromRaft(ApplyMsg message) {
+void RegionPeer::GetSnapShotFromRaft(ApplyMsg message) {
   std::lock_guard<std::mutex> lg(m_mtx);
 
   if (m_raftNode->CondInstallSnapshot(message.SnapshotTerm, message.SnapshotIndex, message.Snapshot)) {
@@ -479,25 +476,25 @@ void KvServer::GetSnapShotFromRaft(ApplyMsg message) {
   }
 }
 
-std::string KvServer::MakeSnapShot() {
+std::string RegionPeer::MakeSnapShot() {
   std::lock_guard<std::mutex> lg(m_mtx);
   std::string snapshotData = getSnapshotData();
   return snapshotData;
 }
 
-void KvServer::PutAppend(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::PutAppendArgs *request,
+void RegionPeer::PutAppend(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::PutAppendArgs *request,
                          ::raftKVRpcProctoc::PutAppendReply *response, ::google::protobuf::Closure *done) {
-  KvServer::PutAppend(request, response);
+  RegionPeer::PutAppend(request, response);
   done->Run();
 }
 
-void KvServer::Get(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::GetArgs *request,
+void RegionPeer::Get(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::GetArgs *request,
                    ::raftKVRpcProctoc::GetReply *response, ::google::protobuf::Closure *done) {
-  KvServer::Get(request, response);
+  RegionPeer::Get(request, response);
   done->Run();
 }
 
-void KvServer::List(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::ListArgs *request,
+void RegionPeer::List(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::ListArgs *request,
                     ::raftKVRpcProctoc::ListReply *response, ::google::protobuf::Closure *done) {
   int term = -1;
   bool isLeader = false;
@@ -527,103 +524,20 @@ void KvServer::List(google::protobuf::RpcController *controller, const ::raftKVR
   done->Run();
 }
 
-KvServer::KvServer(int me, int maxraftstate, std::string nodeInforFileName, short port) {
-  std::shared_ptr<Persister> persister = std::make_shared<Persister>(me);
-
-  m_me = me;
-  m_maxRaftState = maxraftstate;
-  const std::string dbPath = "run_data/rocksdb_node_" + std::to_string(m_me);
-  m_kvEngine = KVEngineFactory::Create(dbPath);
-  std::shared_ptr<IKVEngine> engineShared(m_kvEngine.get(), [](IKVEngine*){});
-  m_mvccStorage = std::make_shared<MvccStorage>(engineShared);
-
-  applyChan = std::make_shared<LockQueue<ApplyMsg> >();
-
-  m_raftNode = std::make_shared<Raft>();
-  ////////////////clerk层面 kvserver开启rpc接受功能
-  //    同时raft与raft节点之间也要开启rpc功能，因此有两个注册
-  std::thread t([this, port]() -> void {
-    // provider是一个rpc网络服务对象。把UserService对象发布到rpc节点上
-    RpcProvider provider;
-    provider.NotifyService(this);
-    provider.NotifyService(
-        this->m_raftNode.get());  // todo：这里获取了原始指针，后面检查一下有没有泄露的问题 或者 shareptr释放的问题
-    // 启动一个rpc服务发布节点   Run以后，进程进入阻塞状态，等待远程的rpc调用请求
-    provider.Run(m_me, port);
-  });
-  t.detach();
-
-  ////开启rpc远程调用能力，需要注意必须要保证所有节点都开启rpc接受功能之后才能开启rpc远程调用能力
-  ////这里使用睡眠来保证
-  //////////////////
-  const int replicasPerShard = 3;
-  int shardId = m_me / replicasPerShard;
-  int localMe = m_me % replicasPerShard;
-
-  std::cout << "raftServer node:" << m_me << " start to sleep to wait all other raftnode start!!!!" << std::endl;
-  sleep(6);
-  std::cout << "raftServer node:" << m_me << " wake up!!!! start to connect other raftnode in shard " << shardId << std::endl;
-
-  MprpcConfig config;
-  config.LoadConfigFile(nodeInforFileName.c_str());
-  std::vector<std::pair<std::string, short> > ipPortVt;
-  for (int j = 0; j < replicasPerShard; ++j) {
-    int nodeIndex = shardId * replicasPerShard + j;
-    std::string node = "node" + std::to_string(nodeIndex);
-    std::string nodeIp = config.Load(node + "ip");
-    std::string nodePortStr = config.Load(node + "port");
-    if (nodeIp.empty()) {
-      break;
-    }
-    ipPortVt.emplace_back(nodeIp, atoi(nodePortStr.c_str()));
-  }
-
-  std::vector<std::shared_ptr<RaftRpcUtil> > servers;
-  //进行连接
-  for (int j = 0; j < ipPortVt.size(); ++j) {
-    if (j == localMe) {
-      servers.push_back(nullptr);
-      continue;
-    }
-    std::string otherNodeIp = ipPortVt[j].first;
-    short otherNodePort = ipPortVt[j].second;
-    auto *rpc = new RaftRpcUtil(otherNodeIp, otherNodePort);
-    servers.push_back(std::shared_ptr<RaftRpcUtil>(rpc));
-
-    std::cout << "node" << m_me << " 连接node" << (shardId * replicasPerShard + j) << "success!" << std::endl;
-  }
-  sleep(replicasPerShard - localMe);  //等待所有节点相互连接成功，再启动raft
-  m_raftNode->init(servers, localMe, persister, applyChan);
-  // kv的server直接与raft通信，但kv不直接与raft通信，所以需要把ApplyMsg的chan传递下去用于通信，两者的persist也是共用的
-
-  //////////////////////////////////
-
-  waitApplyCh;
-  m_lastRequestId;
-  m_lastSnapShotRaftLogIndex = 0;  // todo:感覺這個函數沒什麼用，不如直接調用raft節點中的snapshot值？？？
-  auto snapshot = persister->ReadSnapshot();
-  if (!snapshot.empty()) {
-    ReadSnapShotToInstall(snapshot);
-  }
-  std::thread statusWriter(&KvServer::WriteRaftStatusLoop, this);
-  statusWriter.detach();
-  std::thread t2(&KvServer::ReadRaftApplyCommandLoop, this);  //马上向其他节点宣告自己就是leader
-  t2.join();  //由於ReadRaftApplyCommandLoop一直不會結束，达到一直卡在这的目的
-}
-
-KvServer::KvServer(int physicalNodeId, int regionId, int localPeerId, int maxraftstate,
-                   std::vector<std::pair<std::string, short>> peerAddresses, short port) {
-  if (localPeerId < 0 || localPeerId >= static_cast<int>(peerAddresses.size())) {
+RegionPeer::RegionPeer(int physicalNodeId, int regionId, int localPeerId, int maxraftstate,
+                       std::vector<std::pair<std::string, short>> peerAddresses)
+    : m_me(localPeerId),
+      m_physicalNodeId(physicalNodeId),
+      m_regionId(regionId),
+      m_maxRaftState(maxraftstate),
+      m_peerAddresses(std::move(peerAddresses)) {
+  if (localPeerId < 0 || localPeerId >= static_cast<int>(m_peerAddresses.size())) {
     throw std::invalid_argument("local peer index is outside the Region peer list");
   }
 
-  m_me = localPeerId;
-  m_physicalNodeId = physicalNodeId;
-  m_regionId = regionId;
-  m_maxRaftState = maxraftstate;
   const std::string identity = "region" + std::to_string(regionId) + "_node" + std::to_string(physicalNodeId) +
                                "_peer" + std::to_string(localPeerId);
-  std::shared_ptr<Persister> persister = std::make_shared<Persister>(identity);
+  m_persister = std::make_shared<Persister>(identity);
 
   const std::string dbPath = "run_data/rocksdb_" + identity;
   m_kvEngine = KVEngineFactory::Create(dbPath);
@@ -631,43 +545,33 @@ KvServer::KvServer(int physicalNodeId, int regionId, int localPeerId, int maxraf
   m_mvccStorage = std::make_shared<MvccStorage>(engineShared);
   applyChan = std::make_shared<LockQueue<ApplyMsg>>();
   m_raftNode = std::make_shared<Raft>();
+  m_lastSnapShotRaftLogIndex = 0;
+}
 
-  std::thread rpcThread([this, port]() {
-    RpcProvider provider;
-    provider.NotifyService(this);
-    provider.NotifyService(this->m_raftNode.get());
-    provider.Run(m_physicalNodeId, port);
-  });
-  rpcThread.detach();
-
-  std::cout << "region " << m_regionId << " peer on node " << m_physicalNodeId
-            << " waiting for cluster peers" << std::endl;
-  sleep(6);
-
+void RegionPeer::Start() {
   std::vector<std::shared_ptr<RaftRpcUtil>> servers;
-  servers.reserve(peerAddresses.size());
-  for (size_t peerIndex = 0; peerIndex < peerAddresses.size(); ++peerIndex) {
-    if (static_cast<int>(peerIndex) == localPeerId) {
+  servers.reserve(m_peerAddresses.size());
+  for (size_t peerIndex = 0; peerIndex < m_peerAddresses.size(); ++peerIndex) {
+    if (static_cast<int>(peerIndex) == m_me) {
       servers.push_back(nullptr);
       continue;
     }
-    servers.push_back(std::make_shared<RaftRpcUtil>(peerAddresses[peerIndex].first, peerAddresses[peerIndex].second));
+    servers.push_back(std::make_shared<RaftRpcUtil>(m_peerAddresses[peerIndex].first,
+                                                   m_peerAddresses[peerIndex].second, m_regionId));
   }
-  sleep(std::max(0, static_cast<int>(peerAddresses.size()) - localPeerId));
-  m_raftNode->init(std::move(servers), localPeerId, persister, applyChan);
+  m_raftNode->init(std::move(servers), m_me, m_persister, applyChan);
 
-  m_lastSnapShotRaftLogIndex = 0;
-  const auto snapshot = persister->ReadSnapshot();
+  const auto snapshot = m_persister->ReadSnapshot();
   if (!snapshot.empty()) {
     ReadSnapShotToInstall(snapshot);
   }
-  std::thread statusWriter(&KvServer::WriteRaftStatusLoop, this);
+  std::thread statusWriter(&RegionPeer::WriteRaftStatusLoop, this);
   statusWriter.detach();
-  std::thread applyThread(&KvServer::ReadRaftApplyCommandLoop, this);
-  applyThread.join();
+  std::thread applyThread(&RegionPeer::ReadRaftApplyCommandLoop, this);
+  applyThread.detach();
 }
 
-void KvServer::WriteRaftStatusLoop() {
+void RegionPeer::WriteRaftStatusLoop() {
   while (true) {
     const Raft::NodeStatus status = m_raftNode->GetStatus();
     const MvccStats mvccStats = m_mvccStorage->Stats();
@@ -714,7 +618,7 @@ void KvServer::WriteRaftStatusLoop() {
   }
 }
 
-void KvServer::TxnGet(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetArgs *request,
+void RegionPeer::TxnGet(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetArgs *request,
                       ::raftKVRpcProctoc::TxnGetReply *response, ::google::protobuf::Closure *done) {
   Op op;
   op.Operation = "TxnGet";
@@ -754,7 +658,7 @@ void KvServer::TxnGet(google::protobuf::RpcController *controller, const ::raftK
   done->Run();
 }
 
-void KvServer::TxnPrewrite(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnPrewriteArgs *request,
+void RegionPeer::TxnPrewrite(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnPrewriteArgs *request,
                            ::raftKVRpcProctoc::TxnPrewriteReply *response, ::google::protobuf::Closure *done) {
   Op op;
   op.Operation = "TxnPrewrite";
@@ -804,7 +708,7 @@ void KvServer::TxnPrewrite(google::protobuf::RpcController *controller, const ::
   done->Run();
 }
 
-void KvServer::TxnCommit(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnCommitArgs *request,
+void RegionPeer::TxnCommit(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnCommitArgs *request,
                          ::raftKVRpcProctoc::TxnCommitReply *response, ::google::protobuf::Closure *done) {
   Op op;
   op.Operation = "TxnCommit";
@@ -847,7 +751,7 @@ void KvServer::TxnCommit(google::protobuf::RpcController *controller, const ::ra
   done->Run();
 }
 
-void KvServer::TxnRollback(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnRollbackArgs *request,
+void RegionPeer::TxnRollback(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnRollbackArgs *request,
                            ::raftKVRpcProctoc::TxnRollbackReply *response, ::google::protobuf::Closure *done) {
   Op op;
   op.Operation = "TxnRollback";
@@ -889,7 +793,7 @@ void KvServer::TxnRollback(google::protobuf::RpcController *controller, const ::
   done->Run();
 }
 
-void KvServer::TxnGetLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetLockArgs *request,
+void RegionPeer::TxnGetLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetLockArgs *request,
                           ::raftKVRpcProctoc::TxnGetLockReply *response, ::google::protobuf::Closure *done) {
   int term = -1;
   bool isLeader = false;
@@ -917,7 +821,7 @@ void KvServer::TxnGetLock(google::protobuf::RpcController *controller, const ::r
   done->Run();
 }
 
-void KvServer::TxnAcquirePessimisticLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs *request,
+void RegionPeer::TxnAcquirePessimisticLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs *request,
                                          ::raftKVRpcProctoc::TxnAcquirePessimisticLockReply *response, ::google::protobuf::Closure *done) {
   Op op;
   op.Operation = "TxnAcquirePessimisticLock";
@@ -965,7 +869,7 @@ void KvServer::TxnAcquirePessimisticLock(google::protobuf::RpcController *contro
   done->Run();
 }
 
-void KvServer::TxnFindCommitTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnFindCommitTsArgs *request,
+void RegionPeer::TxnFindCommitTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnFindCommitTsArgs *request,
                                ::raftKVRpcProctoc::TxnFindCommitTsReply *response, ::google::protobuf::Closure *done) {
   int term = -1;
   bool isLeader = false;
@@ -987,7 +891,7 @@ void KvServer::TxnFindCommitTs(google::protobuf::RpcController *controller, cons
   done->Run();
 }
 
-void KvServer::TxnExpiredLocks(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnExpiredLocksArgs *request,
+void RegionPeer::TxnExpiredLocks(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnExpiredLocksArgs *request,
                                ::raftKVRpcProctoc::TxnExpiredLocksReply *response, ::google::protobuf::Closure *done) {
   int term = -1;
   bool isLeader = false;
@@ -1015,7 +919,7 @@ void KvServer::TxnExpiredLocks(google::protobuf::RpcController *controller, cons
   done->Run();
 }
 
-void KvServer::TxnGarbageCollect(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGarbageCollectArgs *request,
+void RegionPeer::TxnGarbageCollect(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGarbageCollectArgs *request,
                                  ::raftKVRpcProctoc::TxnGarbageCollectReply *response, ::google::protobuf::Closure *done) {
   Op op;
   op.Operation = "TxnGarbageCollect";
@@ -1057,7 +961,7 @@ void KvServer::TxnGarbageCollect(google::protobuf::RpcController *controller, co
   done->Run();
 }
 
-void KvServer::TxnMaxObservedTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnMaxObservedTsArgs *request,
+void RegionPeer::TxnMaxObservedTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnMaxObservedTsArgs *request,
                                 ::raftKVRpcProctoc::TxnMaxObservedTsReply *response, ::google::protobuf::Closure *done) {
   int term = -1;
   bool isLeader = false;

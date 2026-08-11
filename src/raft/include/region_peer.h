@@ -2,8 +2,8 @@
 // Created by swx on 23-6-1.
 //
 
-#ifndef STRATAKV_RAFT_KV_SERVER_H
-#define STRATAKV_RAFT_KV_SERVER_H
+#ifndef STRATAKV_RAFT_REGION_PEER_H
+#define STRATAKV_RAFT_REGION_PEER_H
 
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
@@ -23,14 +23,19 @@
 #include "raft.h"
 #include "mvcc_storage.h"
 
-class KvServer : raftKVRpcProctoc::kvServerRpc {
+// A lightweight replicated state-machine peer for one Region. Networking is
+// owned by the physical-node NodeServer; this object owns only Region-local
+// Raft, MVCC, persistence and apply state.
+class RegionPeer {
  private:
   std::mutex m_mtx;
   int m_me;
   int m_physicalNodeId = -1;
   int m_regionId = -1;
   std::shared_ptr<Raft> m_raftNode;
+  std::shared_ptr<Persister> m_persister;
   std::shared_ptr<LockQueue<ApplyMsg> > applyChan;  // kvServer和raft节点的通信管道
+  std::vector<std::pair<std::string, short>> m_peerAddresses;
   int m_maxRaftState;                               // snapshot if log grows this big
 
   // Your definitions here.
@@ -48,15 +53,16 @@ class KvServer : raftKVRpcProctoc::kvServerRpc {
   int m_lastSnapShotRaftLogIndex;
 
  public:
-  KvServer() = delete;
+  RegionPeer() = delete;
 
-  KvServer(int me, int maxraftstate, std::string nodeInforFileName, short port);
-  // 启动一个 Region peer。一个物理节点进程可为它承载的每个 Region 创建一个 KvServer 实例。
-  // 每个 peer 使用不同 RPC 端口、RocksDB 目录和 Raft 持久化文件。
-  KvServer(int physicalNodeId, int regionId, int localPeerId, int maxraftstate,
-           std::vector<std::pair<std::string, short>> peerAddresses, short port);
+  RegionPeer(int physicalNodeId, int regionId, int localPeerId, int maxraftstate,
+             std::vector<std::pair<std::string, short>> peerAddresses);
 
-  void StartKVServer();
+  // Start Region-local Raft and apply workers after the NodeServer listener is
+  // accepting RPCs. The call is non-blocking after initialization completes.
+  void Start();
+  int RegionId() const { return m_regionId; }
+  Raft* RaftNode() const { return m_raftNode.get(); }
 
   void DprintfKVDB();
 
@@ -102,43 +108,43 @@ class KvServer : raftKVRpcProctoc::kvServerRpc {
 
  public:  // for rpc
   void PutAppend(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::PutAppendArgs *request,
-                 ::raftKVRpcProctoc::PutAppendReply *response, ::google::protobuf::Closure *done) override;
+                 ::raftKVRpcProctoc::PutAppendReply *response, ::google::protobuf::Closure *done);
 
   void Get(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::GetArgs *request,
-           ::raftKVRpcProctoc::GetReply *response, ::google::protobuf::Closure *done) override;
+           ::raftKVRpcProctoc::GetReply *response, ::google::protobuf::Closure *done);
 
   void List(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::ListArgs *request,
-            ::raftKVRpcProctoc::ListReply *response, ::google::protobuf::Closure *done) override;
+            ::raftKVRpcProctoc::ListReply *response, ::google::protobuf::Closure *done);
 
   void TxnGet(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetArgs *request,
-              ::raftKVRpcProctoc::TxnGetReply *response, ::google::protobuf::Closure *done) override;
+              ::raftKVRpcProctoc::TxnGetReply *response, ::google::protobuf::Closure *done);
 
   void TxnPrewrite(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnPrewriteArgs *request,
-                   ::raftKVRpcProctoc::TxnPrewriteReply *response, ::google::protobuf::Closure *done) override;
+                   ::raftKVRpcProctoc::TxnPrewriteReply *response, ::google::protobuf::Closure *done);
 
   void TxnCommit(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnCommitArgs *request,
-                 ::raftKVRpcProctoc::TxnCommitReply *response, ::google::protobuf::Closure *done) override;
+                 ::raftKVRpcProctoc::TxnCommitReply *response, ::google::protobuf::Closure *done);
 
   void TxnRollback(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnRollbackArgs *request,
-                   ::raftKVRpcProctoc::TxnRollbackReply *response, ::google::protobuf::Closure *done) override;
+                   ::raftKVRpcProctoc::TxnRollbackReply *response, ::google::protobuf::Closure *done);
 
   void TxnGetLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetLockArgs *request,
-                  ::raftKVRpcProctoc::TxnGetLockReply *response, ::google::protobuf::Closure *done) override;
+                  ::raftKVRpcProctoc::TxnGetLockReply *response, ::google::protobuf::Closure *done);
 
   void TxnAcquirePessimisticLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs *request,
-                                 ::raftKVRpcProctoc::TxnAcquirePessimisticLockReply *response, ::google::protobuf::Closure *done) override;
+                                 ::raftKVRpcProctoc::TxnAcquirePessimisticLockReply *response, ::google::protobuf::Closure *done);
 
   void TxnFindCommitTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnFindCommitTsArgs *request,
-                       ::raftKVRpcProctoc::TxnFindCommitTsReply *response, ::google::protobuf::Closure *done) override;
+                       ::raftKVRpcProctoc::TxnFindCommitTsReply *response, ::google::protobuf::Closure *done);
 
   void TxnExpiredLocks(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnExpiredLocksArgs *request,
-                       ::raftKVRpcProctoc::TxnExpiredLocksReply *response, ::google::protobuf::Closure *done) override;
+                       ::raftKVRpcProctoc::TxnExpiredLocksReply *response, ::google::protobuf::Closure *done);
 
   void TxnGarbageCollect(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGarbageCollectArgs *request,
-                         ::raftKVRpcProctoc::TxnGarbageCollectReply *response, ::google::protobuf::Closure *done) override;
+                         ::raftKVRpcProctoc::TxnGarbageCollectReply *response, ::google::protobuf::Closure *done);
 
   void TxnMaxObservedTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnMaxObservedTsArgs *request,
-                        ::raftKVRpcProctoc::TxnMaxObservedTsReply *response, ::google::protobuf::Closure *done) override;
+                        ::raftKVRpcProctoc::TxnMaxObservedTsReply *response, ::google::protobuf::Closure *done);
 
   /////////////////serialiazation start ///////////////////////////////
   // notice ： func serialize
@@ -179,4 +185,4 @@ class KvServer : raftKVRpcProctoc::kvServerRpc {
   /////////////////serialiazation end ///////////////////////////////
 };
 
-#endif  // STRATAKV_RAFT_KV_SERVER_H
+#endif  // STRATAKV_RAFT_REGION_PEER_H

@@ -109,7 +109,7 @@ std::vector<RegionMetadata> RegionCatalog::RegionsOnNode(int nodeId) const {
   std::vector<RegionMetadata> result;
   for (const auto& region : regions_) {
     if (std::any_of(region.peers.begin(), region.peers.end(),
-                    [nodeId](const RegionPeer& peer) { return peer.nodeId == nodeId; })) {
+                    [nodeId](const RegionPeerLocation& peer) { return peer.nodeId == nodeId; })) {
       result.push_back(region);
     }
   }

@@ -412,9 +412,13 @@ deploy/runtime/<project>/
 | 服务 | 默认地址 |
 | --- | --- |
 | Gateway | `127.0.0.1:8080` |
-| Region 100 peers | `127.0.0.1:26200-26202` |
-| Region 101 peers | `127.0.0.1:26300-26302` |
-| Region 102 peers | `127.0.0.1:26400-26402` |
+| node-0 shared RPC | `127.0.0.1:26200` |
+| node-1 shared RPC | `127.0.0.1:26201` |
+| node-2 shared RPC | `127.0.0.1:26202` |
+
+三个 Region 在同一物理节点上共享一个 `NodeServer`、监听端口和 Muduo
+`RpcProvider`；KV 与 Raft 请求通过协议中的 `RegionId` 分发到对应的轻量
+`RegionPeer`。Region Peer 仍分别维护 Raft、MVCC、快照和 RocksDB 数据目录。
 
 ## 7. 测试与基准
 

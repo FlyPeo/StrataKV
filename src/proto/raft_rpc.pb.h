@@ -383,6 +383,7 @@ class AppendEntriesArgs final :
     kPrevLogIndexFieldNumber = 3,
     kPrevLogTermFieldNumber = 4,
     kLeaderCommitFieldNumber = 6,
+    kRegionIdFieldNumber = 7,
   };
   // repeated .raftRpcProctoc.LogEntry Entries = 5;
   int entries_size() const;
@@ -447,6 +448,15 @@ class AppendEntriesArgs final :
   void _internal_set_leadercommit(int32_t value);
   public:
 
+  // int32 RegionId = 7;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftRpcProctoc.AppendEntriesArgs)
  private:
   class _Internal;
@@ -461,6 +471,7 @@ class AppendEntriesArgs final :
     int32_t prevlogindex_;
     int32_t prevlogterm_;
     int32_t leadercommit_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -774,6 +785,7 @@ class RequestVoteArgs final :
     kCandidateIdFieldNumber = 2,
     kLastLogIndexFieldNumber = 3,
     kLastLogTermFieldNumber = 4,
+    kRegionIdFieldNumber = 5,
   };
   // int32 Term = 1;
   void clear_term();
@@ -811,6 +823,15 @@ class RequestVoteArgs final :
   void _internal_set_lastlogterm(int32_t value);
   public:
 
+  // int32 RegionId = 5;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftRpcProctoc.RequestVoteArgs)
  private:
   class _Internal;
@@ -823,6 +844,7 @@ class RequestVoteArgs final :
     int32_t candidateid_;
     int32_t lastlogindex_;
     int32_t lastlogterm_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1126,6 +1148,7 @@ class InstallSnapshotRequest final :
     kTermFieldNumber = 2,
     kLastSnapShotIncludeIndexFieldNumber = 3,
     kLastSnapShotIncludeTermFieldNumber = 4,
+    kRegionIdFieldNumber = 6,
   };
   // bytes Data = 5;
   void clear_data();
@@ -1177,6 +1200,15 @@ class InstallSnapshotRequest final :
   void _internal_set_lastsnapshotincludeterm(int32_t value);
   public:
 
+  // int32 RegionId = 6;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftRpcProctoc.InstallSnapshotRequest)
  private:
   class _Internal;
@@ -1190,6 +1222,7 @@ class InstallSnapshotRequest final :
     int32_t term_;
     int32_t lastsnapshotincludeindex_;
     int32_t lastsnapshotincludeterm_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1440,7 +1473,7 @@ inline const std::string& LogEntry::command() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void LogEntry::set_command(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.command_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftRpcProctoc.LogEntry.Command)
 }
@@ -1453,11 +1486,11 @@ inline const std::string& LogEntry::_internal_command() const {
   return _impl_.command_.Get();
 }
 inline void LogEntry::_internal_set_command(const std::string& value) {
-  
+
   _impl_.command_.Set(value, GetArenaForAllocation());
 }
 inline std::string* LogEntry::_internal_mutable_command() {
-  
+
   return _impl_.command_.Mutable(GetArenaForAllocation());
 }
 inline std::string* LogEntry::release_command() {
@@ -1466,9 +1499,9 @@ inline std::string* LogEntry::release_command() {
 }
 inline void LogEntry::set_allocated_command(std::string* command) {
   if (command != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.command_.SetAllocated(command, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -1491,7 +1524,7 @@ inline int32_t LogEntry::logterm() const {
   return _internal_logterm();
 }
 inline void LogEntry::_internal_set_logterm(int32_t value) {
-  
+
   _impl_.logterm_ = value;
 }
 inline void LogEntry::set_logterm(int32_t value) {
@@ -1511,7 +1544,7 @@ inline int32_t LogEntry::logindex() const {
   return _internal_logindex();
 }
 inline void LogEntry::_internal_set_logindex(int32_t value) {
-  
+
   _impl_.logindex_ = value;
 }
 inline void LogEntry::set_logindex(int32_t value) {
@@ -1535,7 +1568,7 @@ inline int32_t AppendEntriesArgs::term() const {
   return _internal_term();
 }
 inline void AppendEntriesArgs::_internal_set_term(int32_t value) {
-  
+
   _impl_.term_ = value;
 }
 inline void AppendEntriesArgs::set_term(int32_t value) {
@@ -1555,7 +1588,7 @@ inline int32_t AppendEntriesArgs::leaderid() const {
   return _internal_leaderid();
 }
 inline void AppendEntriesArgs::_internal_set_leaderid(int32_t value) {
-  
+
   _impl_.leaderid_ = value;
 }
 inline void AppendEntriesArgs::set_leaderid(int32_t value) {
@@ -1575,7 +1608,7 @@ inline int32_t AppendEntriesArgs::prevlogindex() const {
   return _internal_prevlogindex();
 }
 inline void AppendEntriesArgs::_internal_set_prevlogindex(int32_t value) {
-  
+
   _impl_.prevlogindex_ = value;
 }
 inline void AppendEntriesArgs::set_prevlogindex(int32_t value) {
@@ -1595,7 +1628,7 @@ inline int32_t AppendEntriesArgs::prevlogterm() const {
   return _internal_prevlogterm();
 }
 inline void AppendEntriesArgs::_internal_set_prevlogterm(int32_t value) {
-  
+
   _impl_.prevlogterm_ = value;
 }
 inline void AppendEntriesArgs::set_prevlogterm(int32_t value) {
@@ -1655,12 +1688,32 @@ inline int32_t AppendEntriesArgs::leadercommit() const {
   return _internal_leadercommit();
 }
 inline void AppendEntriesArgs::_internal_set_leadercommit(int32_t value) {
-  
+
   _impl_.leadercommit_ = value;
 }
 inline void AppendEntriesArgs::set_leadercommit(int32_t value) {
   _internal_set_leadercommit(value);
   // @@protoc_insertion_point(field_set:raftRpcProctoc.AppendEntriesArgs.LeaderCommit)
+}
+
+// int32 RegionId = 7;
+inline void AppendEntriesArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t AppendEntriesArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t AppendEntriesArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftRpcProctoc.AppendEntriesArgs.RegionId)
+  return _internal_regionid();
+}
+inline void AppendEntriesArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void AppendEntriesArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftRpcProctoc.AppendEntriesArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -1679,7 +1732,7 @@ inline int32_t AppendEntriesReply::term() const {
   return _internal_term();
 }
 inline void AppendEntriesReply::_internal_set_term(int32_t value) {
-  
+
   _impl_.term_ = value;
 }
 inline void AppendEntriesReply::set_term(int32_t value) {
@@ -1699,7 +1752,7 @@ inline bool AppendEntriesReply::success() const {
   return _internal_success();
 }
 inline void AppendEntriesReply::_internal_set_success(bool value) {
-  
+
   _impl_.success_ = value;
 }
 inline void AppendEntriesReply::set_success(bool value) {
@@ -1719,7 +1772,7 @@ inline int32_t AppendEntriesReply::updatenextindex() const {
   return _internal_updatenextindex();
 }
 inline void AppendEntriesReply::_internal_set_updatenextindex(int32_t value) {
-  
+
   _impl_.updatenextindex_ = value;
 }
 inline void AppendEntriesReply::set_updatenextindex(int32_t value) {
@@ -1739,7 +1792,7 @@ inline int32_t AppendEntriesReply::appstate() const {
   return _internal_appstate();
 }
 inline void AppendEntriesReply::_internal_set_appstate(int32_t value) {
-  
+
   _impl_.appstate_ = value;
 }
 inline void AppendEntriesReply::set_appstate(int32_t value) {
@@ -1763,7 +1816,7 @@ inline int32_t RequestVoteArgs::term() const {
   return _internal_term();
 }
 inline void RequestVoteArgs::_internal_set_term(int32_t value) {
-  
+
   _impl_.term_ = value;
 }
 inline void RequestVoteArgs::set_term(int32_t value) {
@@ -1783,7 +1836,7 @@ inline int32_t RequestVoteArgs::candidateid() const {
   return _internal_candidateid();
 }
 inline void RequestVoteArgs::_internal_set_candidateid(int32_t value) {
-  
+
   _impl_.candidateid_ = value;
 }
 inline void RequestVoteArgs::set_candidateid(int32_t value) {
@@ -1803,7 +1856,7 @@ inline int32_t RequestVoteArgs::lastlogindex() const {
   return _internal_lastlogindex();
 }
 inline void RequestVoteArgs::_internal_set_lastlogindex(int32_t value) {
-  
+
   _impl_.lastlogindex_ = value;
 }
 inline void RequestVoteArgs::set_lastlogindex(int32_t value) {
@@ -1823,12 +1876,32 @@ inline int32_t RequestVoteArgs::lastlogterm() const {
   return _internal_lastlogterm();
 }
 inline void RequestVoteArgs::_internal_set_lastlogterm(int32_t value) {
-  
+
   _impl_.lastlogterm_ = value;
 }
 inline void RequestVoteArgs::set_lastlogterm(int32_t value) {
   _internal_set_lastlogterm(value);
   // @@protoc_insertion_point(field_set:raftRpcProctoc.RequestVoteArgs.LastLogTerm)
+}
+
+// int32 RegionId = 5;
+inline void RequestVoteArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t RequestVoteArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t RequestVoteArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftRpcProctoc.RequestVoteArgs.RegionId)
+  return _internal_regionid();
+}
+inline void RequestVoteArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void RequestVoteArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftRpcProctoc.RequestVoteArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -1847,7 +1920,7 @@ inline int32_t RequestVoteReply::term() const {
   return _internal_term();
 }
 inline void RequestVoteReply::_internal_set_term(int32_t value) {
-  
+
   _impl_.term_ = value;
 }
 inline void RequestVoteReply::set_term(int32_t value) {
@@ -1867,7 +1940,7 @@ inline bool RequestVoteReply::votegranted() const {
   return _internal_votegranted();
 }
 inline void RequestVoteReply::_internal_set_votegranted(bool value) {
-  
+
   _impl_.votegranted_ = value;
 }
 inline void RequestVoteReply::set_votegranted(bool value) {
@@ -1887,7 +1960,7 @@ inline int32_t RequestVoteReply::votestate() const {
   return _internal_votestate();
 }
 inline void RequestVoteReply::_internal_set_votestate(int32_t value) {
-  
+
   _impl_.votestate_ = value;
 }
 inline void RequestVoteReply::set_votestate(int32_t value) {
@@ -1911,7 +1984,7 @@ inline int32_t InstallSnapshotRequest::leaderid() const {
   return _internal_leaderid();
 }
 inline void InstallSnapshotRequest::_internal_set_leaderid(int32_t value) {
-  
+
   _impl_.leaderid_ = value;
 }
 inline void InstallSnapshotRequest::set_leaderid(int32_t value) {
@@ -1931,7 +2004,7 @@ inline int32_t InstallSnapshotRequest::term() const {
   return _internal_term();
 }
 inline void InstallSnapshotRequest::_internal_set_term(int32_t value) {
-  
+
   _impl_.term_ = value;
 }
 inline void InstallSnapshotRequest::set_term(int32_t value) {
@@ -1951,7 +2024,7 @@ inline int32_t InstallSnapshotRequest::lastsnapshotincludeindex() const {
   return _internal_lastsnapshotincludeindex();
 }
 inline void InstallSnapshotRequest::_internal_set_lastsnapshotincludeindex(int32_t value) {
-  
+
   _impl_.lastsnapshotincludeindex_ = value;
 }
 inline void InstallSnapshotRequest::set_lastsnapshotincludeindex(int32_t value) {
@@ -1971,7 +2044,7 @@ inline int32_t InstallSnapshotRequest::lastsnapshotincludeterm() const {
   return _internal_lastsnapshotincludeterm();
 }
 inline void InstallSnapshotRequest::_internal_set_lastsnapshotincludeterm(int32_t value) {
-  
+
   _impl_.lastsnapshotincludeterm_ = value;
 }
 inline void InstallSnapshotRequest::set_lastsnapshotincludeterm(int32_t value) {
@@ -1990,7 +2063,7 @@ inline const std::string& InstallSnapshotRequest::data() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void InstallSnapshotRequest::set_data(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.data_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftRpcProctoc.InstallSnapshotRequest.Data)
 }
@@ -2003,11 +2076,11 @@ inline const std::string& InstallSnapshotRequest::_internal_data() const {
   return _impl_.data_.Get();
 }
 inline void InstallSnapshotRequest::_internal_set_data(const std::string& value) {
-  
+
   _impl_.data_.Set(value, GetArenaForAllocation());
 }
 inline std::string* InstallSnapshotRequest::_internal_mutable_data() {
-  
+
   return _impl_.data_.Mutable(GetArenaForAllocation());
 }
 inline std::string* InstallSnapshotRequest::release_data() {
@@ -2016,9 +2089,9 @@ inline std::string* InstallSnapshotRequest::release_data() {
 }
 inline void InstallSnapshotRequest::set_allocated_data(std::string* data) {
   if (data != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.data_.SetAllocated(data, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -2027,6 +2100,26 @@ inline void InstallSnapshotRequest::set_allocated_data(std::string* data) {
   }
 #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
   // @@protoc_insertion_point(field_set_allocated:raftRpcProctoc.InstallSnapshotRequest.Data)
+}
+
+// int32 RegionId = 6;
+inline void InstallSnapshotRequest::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t InstallSnapshotRequest::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t InstallSnapshotRequest::regionid() const {
+  // @@protoc_insertion_point(field_get:raftRpcProctoc.InstallSnapshotRequest.RegionId)
+  return _internal_regionid();
+}
+inline void InstallSnapshotRequest::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void InstallSnapshotRequest::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftRpcProctoc.InstallSnapshotRequest.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -2045,7 +2138,7 @@ inline int32_t InstallSnapshotResponse::term() const {
   return _internal_term();
 }
 inline void InstallSnapshotResponse::_internal_set_term(int32_t value) {
-  
+
   _impl_.term_ = value;
 }
 inline void InstallSnapshotResponse::set_term(int32_t value) {

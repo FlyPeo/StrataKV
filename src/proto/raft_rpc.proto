@@ -22,6 +22,7 @@ message AppendEntriesArgs  {
 	int32 PrevLogTerm  =4;
 	repeated LogEntry Entries  = 5;
 	int32 LeaderCommit  = 6;
+	int32 RegionId = 7;
 }
 
 // AppendEntriesReply 论文中没有提及返回要设置哪些状态
@@ -37,6 +38,7 @@ message RequestVoteArgs  {
 	int32 CandidateId  =2;
 	int32 LastLogIndex =3;
 	int32 LastLogTerm  =4;
+	int32 RegionId = 5;
 }
 
 // RequestVoteReply
@@ -56,6 +58,7 @@ message InstallSnapshotRequest  {
 	int32 LastSnapShotIncludeIndex =3;
 	int32 LastSnapShotIncludeTerm  =4;
 	bytes Data                     =5;//快照信息，当然是用bytes来传递
+	int32 RegionId                 =6;
 }
 
 // InstallSnapshotResponse 只用返回Term，因为对于快照只要Term是符合的就是无条件接受的

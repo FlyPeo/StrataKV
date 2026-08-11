@@ -23,7 +23,6 @@
 #include <google/protobuf/io/coded_stream.h>
 #include <google/protobuf/arena.h>
 #include <google/protobuf/arenastring.h>
-#include <google/protobuf/generated_message_bases.h>
 #include <google/protobuf/generated_message_util.h>
 #include <google/protobuf/metadata_lite.h>
 #include <google/protobuf/generated_message_reflection.h>
@@ -286,6 +285,7 @@ class GetArgs final :
     kKeyFieldNumber = 1,
     kClientIdFieldNumber = 2,
     kRequestIdFieldNumber = 3,
+    kRegionIdFieldNumber = 4,
   };
   // bytes Key = 1;
   void clear_key();
@@ -324,6 +324,15 @@ class GetArgs final :
   void _internal_set_requestid(int32_t value);
   public:
 
+  // int32 RegionId = 4;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.GetArgs)
  private:
   class _Internal;
@@ -335,6 +344,7 @@ class GetArgs final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr key_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr clientid_;
     int32_t requestid_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -635,6 +645,7 @@ class ListArgs final :
     kPrefixFieldNumber = 1,
     kLimitFieldNumber = 2,
     kAllowFollowerReadFieldNumber = 3,
+    kRegionIdFieldNumber = 4,
   };
   // bytes Prefix = 1;
   void clear_prefix();
@@ -668,6 +679,15 @@ class ListArgs final :
   void _internal_set_allowfollowerread(bool value);
   public:
 
+  // int32 RegionId = 4;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.ListArgs)
  private:
   class _Internal;
@@ -679,6 +699,7 @@ class ListArgs final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr prefix_;
     uint32_t limit_;
     bool allowfollowerread_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1154,6 +1175,7 @@ class PutAppendArgs final :
     kOpFieldNumber = 3,
     kClientIdFieldNumber = 4,
     kRequestIdFieldNumber = 5,
+    kRegionIdFieldNumber = 6,
   };
   // bytes Key = 1;
   void clear_key();
@@ -1220,6 +1242,15 @@ class PutAppendArgs final :
   void _internal_set_requestid(int32_t value);
   public:
 
+  // int32 RegionId = 6;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.PutAppendArgs)
  private:
   class _Internal;
@@ -1233,6 +1264,7 @@ class PutAppendArgs final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr op_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr clientid_;
     int32_t requestid_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1518,6 +1550,7 @@ class TxnGetArgs final :
     kClientIdFieldNumber = 3,
     kReadTsFieldNumber = 2,
     kRequestIdFieldNumber = 4,
+    kRegionIdFieldNumber = 5,
   };
   // bytes Key = 1;
   void clear_key();
@@ -1565,6 +1598,15 @@ class TxnGetArgs final :
   void _internal_set_requestid(int32_t value);
   public:
 
+  // int32 RegionId = 5;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.TxnGetArgs)
  private:
   class _Internal;
@@ -1577,6 +1619,7 @@ class TxnGetArgs final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr clientid_;
     uint64_t readts_;
     int32_t requestid_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1882,6 +1925,7 @@ class TxnPrewriteArgs final :
     kTtlMsFieldNumber = 5,
     kIsDeleteFieldNumber = 6,
     kRequestIdFieldNumber = 8,
+    kRegionIdFieldNumber = 9,
   };
   // bytes Key = 1;
   void clear_key();
@@ -1975,6 +2019,15 @@ class TxnPrewriteArgs final :
   void _internal_set_requestid(int32_t value);
   public:
 
+  // int32 RegionId = 9;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.TxnPrewriteArgs)
  private:
   class _Internal;
@@ -1991,6 +2044,7 @@ class TxnPrewriteArgs final :
     uint64_t ttlms_;
     bool isdelete_;
     int32_t requestid_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -2277,6 +2331,7 @@ class TxnCommitArgs final :
     kStartTsFieldNumber = 2,
     kCommitTsFieldNumber = 3,
     kRequestIdFieldNumber = 5,
+    kRegionIdFieldNumber = 6,
   };
   // bytes Key = 1;
   void clear_key();
@@ -2333,6 +2388,15 @@ class TxnCommitArgs final :
   void _internal_set_requestid(int32_t value);
   public:
 
+  // int32 RegionId = 6;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.TxnCommitArgs)
  private:
   class _Internal;
@@ -2346,6 +2410,7 @@ class TxnCommitArgs final :
     uint64_t startts_;
     uint64_t committs_;
     int32_t requestid_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -2631,6 +2696,7 @@ class TxnRollbackArgs final :
     kClientIdFieldNumber = 3,
     kStartTsFieldNumber = 2,
     kRequestIdFieldNumber = 4,
+    kRegionIdFieldNumber = 5,
   };
   // bytes Key = 1;
   void clear_key();
@@ -2678,6 +2744,15 @@ class TxnRollbackArgs final :
   void _internal_set_requestid(int32_t value);
   public:
 
+  // int32 RegionId = 5;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.TxnRollbackArgs)
  private:
   class _Internal;
@@ -2690,6 +2765,7 @@ class TxnRollbackArgs final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr clientid_;
     uint64_t startts_;
     int32_t requestid_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -2972,6 +3048,7 @@ class TxnGetLockArgs final :
 
   enum : int {
     kKeyFieldNumber = 1,
+    kRegionIdFieldNumber = 2,
   };
   // bytes Key = 1;
   void clear_key();
@@ -2987,6 +3064,15 @@ class TxnGetLockArgs final :
   std::string* _internal_mutable_key();
   public:
 
+  // int32 RegionId = 2;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.TxnGetLockArgs)
  private:
   class _Internal;
@@ -2996,6 +3082,7 @@ class TxnGetLockArgs final :
   typedef void DestructorSkippable_;
   struct Impl_ {
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr key_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -3381,6 +3468,7 @@ class TxnAcquirePessimisticLockArgs final :
     kStartTsFieldNumber = 3,
     kTtlMsFieldNumber = 4,
     kRequestIdFieldNumber = 6,
+    kRegionIdFieldNumber = 7,
   };
   // bytes Key = 1;
   void clear_key();
@@ -3451,6 +3539,15 @@ class TxnAcquirePessimisticLockArgs final :
   void _internal_set_requestid(int32_t value);
   public:
 
+  // int32 RegionId = 7;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.TxnAcquirePessimisticLockArgs)
  private:
   class _Internal;
@@ -3465,6 +3562,7 @@ class TxnAcquirePessimisticLockArgs final :
     uint64_t startts_;
     uint64_t ttlms_;
     int32_t requestid_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -3748,6 +3846,7 @@ class TxnFindCommitTsArgs final :
   enum : int {
     kKeyFieldNumber = 1,
     kStartTsFieldNumber = 2,
+    kRegionIdFieldNumber = 3,
   };
   // bytes Key = 1;
   void clear_key();
@@ -3772,6 +3871,15 @@ class TxnFindCommitTsArgs final :
   void _internal_set_startts(uint64_t value);
   public:
 
+  // int32 RegionId = 3;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.TxnFindCommitTsArgs)
  private:
   class _Internal;
@@ -3782,6 +3890,7 @@ class TxnFindCommitTsArgs final :
   struct Impl_ {
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr key_;
     uint64_t startts_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -4086,6 +4195,7 @@ class TxnExpiredLocksArgs final :
 
   enum : int {
     kNowMsFieldNumber = 1,
+    kRegionIdFieldNumber = 2,
   };
   // uint64 NowMs = 1;
   void clear_nowms();
@@ -4094,6 +4204,15 @@ class TxnExpiredLocksArgs final :
   private:
   uint64_t _internal_nowms() const;
   void _internal_set_nowms(uint64_t value);
+  public:
+
+  // int32 RegionId = 2;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
   public:
 
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.TxnExpiredLocksArgs)
@@ -4105,6 +4224,7 @@ class TxnExpiredLocksArgs final :
   typedef void DestructorSkippable_;
   struct Impl_ {
     uint64_t nowms_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -4435,6 +4555,7 @@ class TxnGarbageCollectArgs final :
     kClientIdFieldNumber = 2,
     kSafePointTsFieldNumber = 1,
     kRequestIdFieldNumber = 3,
+    kRegionIdFieldNumber = 4,
   };
   // bytes ClientId = 2;
   void clear_clientid();
@@ -4468,6 +4589,15 @@ class TxnGarbageCollectArgs final :
   void _internal_set_requestid(int32_t value);
   public:
 
+  // int32 RegionId = 4;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.TxnGarbageCollectArgs)
  private:
   class _Internal;
@@ -4479,6 +4609,7 @@ class TxnGarbageCollectArgs final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr clientid_;
     uint64_t safepointts_;
     int32_t requestid_;
+    int32_t regionid_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -4651,9 +4782,10 @@ class TxnGarbageCollectReply final :
 // -------------------------------------------------------------------
 
 class TxnMaxObservedTsArgs final :
-    public ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase /* @@protoc_insertion_point(class_definition:raftKVRpcProctoc.TxnMaxObservedTsArgs) */ {
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:raftKVRpcProctoc.TxnMaxObservedTsArgs) */ {
  public:
   inline TxnMaxObservedTsArgs() : TxnMaxObservedTsArgs(nullptr) {}
+  ~TxnMaxObservedTsArgs() override;
   explicit PROTOBUF_CONSTEXPR TxnMaxObservedTsArgs(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
 
   TxnMaxObservedTsArgs(const TxnMaxObservedTsArgs& from);
@@ -4726,15 +4858,29 @@ class TxnMaxObservedTsArgs final :
   TxnMaxObservedTsArgs* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
     return CreateMaybeMessage<TxnMaxObservedTsArgs>(arena);
   }
-  using ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::CopyFrom;
-  inline void CopyFrom(const TxnMaxObservedTsArgs& from) {
-    ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::CopyImpl(*this, from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
+  void CopyFrom(const TxnMaxObservedTsArgs& from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
+  void MergeFrom( const TxnMaxObservedTsArgs& from) {
+    TxnMaxObservedTsArgs::MergeImpl(*this, from);
   }
-  using ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::MergeFrom;
-  void MergeFrom(const TxnMaxObservedTsArgs& from) {
-    ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::MergeImpl(*this, from);
-  }
+  private:
+  static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg);
   public:
+  PROTOBUF_ATTRIBUTE_REINITIALIZES void Clear() final;
+  bool IsInitialized() const final;
+
+  size_t ByteSizeLong() const final;
+  const char* _InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) final;
+  uint8_t* _InternalSerialize(
+      uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const final { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::PROTOBUF_NAMESPACE_ID::Arena* arena, bool is_message_owned);
+  void SharedDtor();
+  void SetCachedSize(int size) const final;
+  void InternalSwap(TxnMaxObservedTsArgs* other);
 
   private:
   friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
@@ -4755,6 +4901,18 @@ class TxnMaxObservedTsArgs final :
 
   // accessors -------------------------------------------------------
 
+  enum : int {
+    kRegionIdFieldNumber = 1,
+  };
+  // int32 RegionId = 1;
+  void clear_regionid();
+  int32_t regionid() const;
+  void set_regionid(int32_t value);
+  private:
+  int32_t _internal_regionid() const;
+  void _internal_set_regionid(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:raftKVRpcProctoc.TxnMaxObservedTsArgs)
  private:
   class _Internal;
@@ -4763,7 +4921,10 @@ class TxnMaxObservedTsArgs final :
   typedef void InternalArenaConstructable_;
   typedef void DestructorSkippable_;
   struct Impl_ {
+    int32_t regionid_;
+    mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
+  union { Impl_ _impl_; };
   friend struct ::TableStruct_kv_5fserver_5frpc_2eproto;
 };
 // -------------------------------------------------------------------
@@ -5107,7 +5268,7 @@ inline const std::string& GetArgs::key() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void GetArgs::set_key(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.key_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.GetArgs.Key)
 }
@@ -5120,11 +5281,11 @@ inline const std::string& GetArgs::_internal_key() const {
   return _impl_.key_.Get();
 }
 inline void GetArgs::_internal_set_key(const std::string& value) {
-  
+
   _impl_.key_.Set(value, GetArenaForAllocation());
 }
 inline std::string* GetArgs::_internal_mutable_key() {
-  
+
   return _impl_.key_.Mutable(GetArenaForAllocation());
 }
 inline std::string* GetArgs::release_key() {
@@ -5133,9 +5294,9 @@ inline std::string* GetArgs::release_key() {
 }
 inline void GetArgs::set_allocated_key(std::string* key) {
   if (key != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.key_.SetAllocated(key, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5157,7 +5318,7 @@ inline const std::string& GetArgs::clientid() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void GetArgs::set_clientid(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.clientid_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.GetArgs.ClientId)
 }
@@ -5170,11 +5331,11 @@ inline const std::string& GetArgs::_internal_clientid() const {
   return _impl_.clientid_.Get();
 }
 inline void GetArgs::_internal_set_clientid(const std::string& value) {
-  
+
   _impl_.clientid_.Set(value, GetArenaForAllocation());
 }
 inline std::string* GetArgs::_internal_mutable_clientid() {
-  
+
   return _impl_.clientid_.Mutable(GetArenaForAllocation());
 }
 inline std::string* GetArgs::release_clientid() {
@@ -5183,9 +5344,9 @@ inline std::string* GetArgs::release_clientid() {
 }
 inline void GetArgs::set_allocated_clientid(std::string* clientid) {
   if (clientid != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.clientid_.SetAllocated(clientid, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5208,12 +5369,32 @@ inline int32_t GetArgs::requestid() const {
   return _internal_requestid();
 }
 inline void GetArgs::_internal_set_requestid(int32_t value) {
-  
+
   _impl_.requestid_ = value;
 }
 inline void GetArgs::set_requestid(int32_t value) {
   _internal_set_requestid(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.GetArgs.RequestId)
+}
+
+// int32 RegionId = 4;
+inline void GetArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t GetArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t GetArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.GetArgs.RegionId)
+  return _internal_regionid();
+}
+inline void GetArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void GetArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.GetArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -5231,7 +5412,7 @@ inline const std::string& GetReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void GetReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.GetReply.Err)
 }
@@ -5244,11 +5425,11 @@ inline const std::string& GetReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void GetReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* GetReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* GetReply::release_err() {
@@ -5257,9 +5438,9 @@ inline std::string* GetReply::release_err() {
 }
 inline void GetReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5281,7 +5462,7 @@ inline const std::string& GetReply::value() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void GetReply::set_value(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.value_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.GetReply.Value)
 }
@@ -5294,11 +5475,11 @@ inline const std::string& GetReply::_internal_value() const {
   return _impl_.value_.Get();
 }
 inline void GetReply::_internal_set_value(const std::string& value) {
-  
+
   _impl_.value_.Set(value, GetArenaForAllocation());
 }
 inline std::string* GetReply::_internal_mutable_value() {
-  
+
   return _impl_.value_.Mutable(GetArenaForAllocation());
 }
 inline std::string* GetReply::release_value() {
@@ -5307,9 +5488,9 @@ inline std::string* GetReply::release_value() {
 }
 inline void GetReply::set_allocated_value(std::string* value) {
   if (value != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.value_.SetAllocated(value, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5335,7 +5516,7 @@ inline const std::string& ListArgs::prefix() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void ListArgs::set_prefix(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.prefix_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.ListArgs.Prefix)
 }
@@ -5348,11 +5529,11 @@ inline const std::string& ListArgs::_internal_prefix() const {
   return _impl_.prefix_.Get();
 }
 inline void ListArgs::_internal_set_prefix(const std::string& value) {
-  
+
   _impl_.prefix_.Set(value, GetArenaForAllocation());
 }
 inline std::string* ListArgs::_internal_mutable_prefix() {
-  
+
   return _impl_.prefix_.Mutable(GetArenaForAllocation());
 }
 inline std::string* ListArgs::release_prefix() {
@@ -5361,9 +5542,9 @@ inline std::string* ListArgs::release_prefix() {
 }
 inline void ListArgs::set_allocated_prefix(std::string* prefix) {
   if (prefix != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.prefix_.SetAllocated(prefix, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5386,7 +5567,7 @@ inline uint32_t ListArgs::limit() const {
   return _internal_limit();
 }
 inline void ListArgs::_internal_set_limit(uint32_t value) {
-  
+
   _impl_.limit_ = value;
 }
 inline void ListArgs::set_limit(uint32_t value) {
@@ -5406,12 +5587,32 @@ inline bool ListArgs::allowfollowerread() const {
   return _internal_allowfollowerread();
 }
 inline void ListArgs::_internal_set_allowfollowerread(bool value) {
-  
+
   _impl_.allowfollowerread_ = value;
 }
 inline void ListArgs::set_allowfollowerread(bool value) {
   _internal_set_allowfollowerread(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.ListArgs.AllowFollowerRead)
+}
+
+// int32 RegionId = 4;
+inline void ListArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t ListArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t ListArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.ListArgs.RegionId)
+  return _internal_regionid();
+}
+inline void ListArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void ListArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.ListArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -5429,7 +5630,7 @@ inline const std::string& KeyValue::key() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void KeyValue::set_key(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.key_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.KeyValue.Key)
 }
@@ -5442,11 +5643,11 @@ inline const std::string& KeyValue::_internal_key() const {
   return _impl_.key_.Get();
 }
 inline void KeyValue::_internal_set_key(const std::string& value) {
-  
+
   _impl_.key_.Set(value, GetArenaForAllocation());
 }
 inline std::string* KeyValue::_internal_mutable_key() {
-  
+
   return _impl_.key_.Mutable(GetArenaForAllocation());
 }
 inline std::string* KeyValue::release_key() {
@@ -5455,9 +5656,9 @@ inline std::string* KeyValue::release_key() {
 }
 inline void KeyValue::set_allocated_key(std::string* key) {
   if (key != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.key_.SetAllocated(key, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5479,7 +5680,7 @@ inline const std::string& KeyValue::value() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void KeyValue::set_value(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.value_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.KeyValue.Value)
 }
@@ -5492,11 +5693,11 @@ inline const std::string& KeyValue::_internal_value() const {
   return _impl_.value_.Get();
 }
 inline void KeyValue::_internal_set_value(const std::string& value) {
-  
+
   _impl_.value_.Set(value, GetArenaForAllocation());
 }
 inline std::string* KeyValue::_internal_mutable_value() {
-  
+
   return _impl_.value_.Mutable(GetArenaForAllocation());
 }
 inline std::string* KeyValue::release_value() {
@@ -5505,9 +5706,9 @@ inline std::string* KeyValue::release_value() {
 }
 inline void KeyValue::set_allocated_value(std::string* value) {
   if (value != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.value_.SetAllocated(value, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5533,7 +5734,7 @@ inline const std::string& ListReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void ListReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.ListReply.Err)
 }
@@ -5546,11 +5747,11 @@ inline const std::string& ListReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void ListReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* ListReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* ListReply::release_err() {
@@ -5559,9 +5760,9 @@ inline std::string* ListReply::release_err() {
 }
 inline void ListReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5627,7 +5828,7 @@ inline const std::string& PutAppendArgs::key() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void PutAppendArgs::set_key(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.key_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.PutAppendArgs.Key)
 }
@@ -5640,11 +5841,11 @@ inline const std::string& PutAppendArgs::_internal_key() const {
   return _impl_.key_.Get();
 }
 inline void PutAppendArgs::_internal_set_key(const std::string& value) {
-  
+
   _impl_.key_.Set(value, GetArenaForAllocation());
 }
 inline std::string* PutAppendArgs::_internal_mutable_key() {
-  
+
   return _impl_.key_.Mutable(GetArenaForAllocation());
 }
 inline std::string* PutAppendArgs::release_key() {
@@ -5653,9 +5854,9 @@ inline std::string* PutAppendArgs::release_key() {
 }
 inline void PutAppendArgs::set_allocated_key(std::string* key) {
   if (key != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.key_.SetAllocated(key, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5677,7 +5878,7 @@ inline const std::string& PutAppendArgs::value() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void PutAppendArgs::set_value(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.value_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.PutAppendArgs.Value)
 }
@@ -5690,11 +5891,11 @@ inline const std::string& PutAppendArgs::_internal_value() const {
   return _impl_.value_.Get();
 }
 inline void PutAppendArgs::_internal_set_value(const std::string& value) {
-  
+
   _impl_.value_.Set(value, GetArenaForAllocation());
 }
 inline std::string* PutAppendArgs::_internal_mutable_value() {
-  
+
   return _impl_.value_.Mutable(GetArenaForAllocation());
 }
 inline std::string* PutAppendArgs::release_value() {
@@ -5703,9 +5904,9 @@ inline std::string* PutAppendArgs::release_value() {
 }
 inline void PutAppendArgs::set_allocated_value(std::string* value) {
   if (value != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.value_.SetAllocated(value, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5727,7 +5928,7 @@ inline const std::string& PutAppendArgs::op() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void PutAppendArgs::set_op(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.op_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.PutAppendArgs.Op)
 }
@@ -5740,11 +5941,11 @@ inline const std::string& PutAppendArgs::_internal_op() const {
   return _impl_.op_.Get();
 }
 inline void PutAppendArgs::_internal_set_op(const std::string& value) {
-  
+
   _impl_.op_.Set(value, GetArenaForAllocation());
 }
 inline std::string* PutAppendArgs::_internal_mutable_op() {
-  
+
   return _impl_.op_.Mutable(GetArenaForAllocation());
 }
 inline std::string* PutAppendArgs::release_op() {
@@ -5753,9 +5954,9 @@ inline std::string* PutAppendArgs::release_op() {
 }
 inline void PutAppendArgs::set_allocated_op(std::string* op) {
   if (op != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.op_.SetAllocated(op, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5777,7 +5978,7 @@ inline const std::string& PutAppendArgs::clientid() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void PutAppendArgs::set_clientid(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.clientid_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.PutAppendArgs.ClientId)
 }
@@ -5790,11 +5991,11 @@ inline const std::string& PutAppendArgs::_internal_clientid() const {
   return _impl_.clientid_.Get();
 }
 inline void PutAppendArgs::_internal_set_clientid(const std::string& value) {
-  
+
   _impl_.clientid_.Set(value, GetArenaForAllocation());
 }
 inline std::string* PutAppendArgs::_internal_mutable_clientid() {
-  
+
   return _impl_.clientid_.Mutable(GetArenaForAllocation());
 }
 inline std::string* PutAppendArgs::release_clientid() {
@@ -5803,9 +6004,9 @@ inline std::string* PutAppendArgs::release_clientid() {
 }
 inline void PutAppendArgs::set_allocated_clientid(std::string* clientid) {
   if (clientid != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.clientid_.SetAllocated(clientid, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5828,12 +6029,32 @@ inline int32_t PutAppendArgs::requestid() const {
   return _internal_requestid();
 }
 inline void PutAppendArgs::_internal_set_requestid(int32_t value) {
-  
+
   _impl_.requestid_ = value;
 }
 inline void PutAppendArgs::set_requestid(int32_t value) {
   _internal_set_requestid(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.PutAppendArgs.RequestId)
+}
+
+// int32 RegionId = 6;
+inline void PutAppendArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t PutAppendArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t PutAppendArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.PutAppendArgs.RegionId)
+  return _internal_regionid();
+}
+inline void PutAppendArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void PutAppendArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.PutAppendArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -5851,7 +6072,7 @@ inline const std::string& PutAppendReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void PutAppendReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.PutAppendReply.Err)
 }
@@ -5864,11 +6085,11 @@ inline const std::string& PutAppendReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void PutAppendReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* PutAppendReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* PutAppendReply::release_err() {
@@ -5877,9 +6098,9 @@ inline std::string* PutAppendReply::release_err() {
 }
 inline void PutAppendReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5905,7 +6126,7 @@ inline const std::string& TxnGetArgs::key() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnGetArgs::set_key(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.key_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetArgs.Key)
 }
@@ -5918,11 +6139,11 @@ inline const std::string& TxnGetArgs::_internal_key() const {
   return _impl_.key_.Get();
 }
 inline void TxnGetArgs::_internal_set_key(const std::string& value) {
-  
+
   _impl_.key_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnGetArgs::_internal_mutable_key() {
-  
+
   return _impl_.key_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnGetArgs::release_key() {
@@ -5931,9 +6152,9 @@ inline std::string* TxnGetArgs::release_key() {
 }
 inline void TxnGetArgs::set_allocated_key(std::string* key) {
   if (key != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.key_.SetAllocated(key, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -5956,7 +6177,7 @@ inline uint64_t TxnGetArgs::readts() const {
   return _internal_readts();
 }
 inline void TxnGetArgs::_internal_set_readts(uint64_t value) {
-  
+
   _impl_.readts_ = value;
 }
 inline void TxnGetArgs::set_readts(uint64_t value) {
@@ -5975,7 +6196,7 @@ inline const std::string& TxnGetArgs::clientid() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnGetArgs::set_clientid(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.clientid_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetArgs.ClientId)
 }
@@ -5988,11 +6209,11 @@ inline const std::string& TxnGetArgs::_internal_clientid() const {
   return _impl_.clientid_.Get();
 }
 inline void TxnGetArgs::_internal_set_clientid(const std::string& value) {
-  
+
   _impl_.clientid_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnGetArgs::_internal_mutable_clientid() {
-  
+
   return _impl_.clientid_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnGetArgs::release_clientid() {
@@ -6001,9 +6222,9 @@ inline std::string* TxnGetArgs::release_clientid() {
 }
 inline void TxnGetArgs::set_allocated_clientid(std::string* clientid) {
   if (clientid != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.clientid_.SetAllocated(clientid, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6026,12 +6247,32 @@ inline int32_t TxnGetArgs::requestid() const {
   return _internal_requestid();
 }
 inline void TxnGetArgs::_internal_set_requestid(int32_t value) {
-  
+
   _impl_.requestid_ = value;
 }
 inline void TxnGetArgs::set_requestid(int32_t value) {
   _internal_set_requestid(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetArgs.RequestId)
+}
+
+// int32 RegionId = 5;
+inline void TxnGetArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t TxnGetArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t TxnGetArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.TxnGetArgs.RegionId)
+  return _internal_regionid();
+}
+inline void TxnGetArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void TxnGetArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -6049,7 +6290,7 @@ inline const std::string& TxnGetReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnGetReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetReply.Err)
 }
@@ -6062,11 +6303,11 @@ inline const std::string& TxnGetReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void TxnGetReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnGetReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnGetReply::release_err() {
@@ -6075,9 +6316,9 @@ inline std::string* TxnGetReply::release_err() {
 }
 inline void TxnGetReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6099,7 +6340,7 @@ inline const std::string& TxnGetReply::value() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnGetReply::set_value(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.value_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetReply.Value)
 }
@@ -6112,11 +6353,11 @@ inline const std::string& TxnGetReply::_internal_value() const {
   return _impl_.value_.Get();
 }
 inline void TxnGetReply::_internal_set_value(const std::string& value) {
-  
+
   _impl_.value_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnGetReply::_internal_mutable_value() {
-  
+
   return _impl_.value_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnGetReply::release_value() {
@@ -6125,9 +6366,9 @@ inline std::string* TxnGetReply::release_value() {
 }
 inline void TxnGetReply::set_allocated_value(std::string* value) {
   if (value != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.value_.SetAllocated(value, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6153,7 +6394,7 @@ inline const std::string& TxnPrewriteArgs::key() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnPrewriteArgs::set_key(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.key_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnPrewriteArgs.Key)
 }
@@ -6166,11 +6407,11 @@ inline const std::string& TxnPrewriteArgs::_internal_key() const {
   return _impl_.key_.Get();
 }
 inline void TxnPrewriteArgs::_internal_set_key(const std::string& value) {
-  
+
   _impl_.key_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnPrewriteArgs::_internal_mutable_key() {
-  
+
   return _impl_.key_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnPrewriteArgs::release_key() {
@@ -6179,9 +6420,9 @@ inline std::string* TxnPrewriteArgs::release_key() {
 }
 inline void TxnPrewriteArgs::set_allocated_key(std::string* key) {
   if (key != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.key_.SetAllocated(key, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6203,7 +6444,7 @@ inline const std::string& TxnPrewriteArgs::value() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnPrewriteArgs::set_value(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.value_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnPrewriteArgs.Value)
 }
@@ -6216,11 +6457,11 @@ inline const std::string& TxnPrewriteArgs::_internal_value() const {
   return _impl_.value_.Get();
 }
 inline void TxnPrewriteArgs::_internal_set_value(const std::string& value) {
-  
+
   _impl_.value_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnPrewriteArgs::_internal_mutable_value() {
-  
+
   return _impl_.value_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnPrewriteArgs::release_value() {
@@ -6229,9 +6470,9 @@ inline std::string* TxnPrewriteArgs::release_value() {
 }
 inline void TxnPrewriteArgs::set_allocated_value(std::string* value) {
   if (value != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.value_.SetAllocated(value, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6253,7 +6494,7 @@ inline const std::string& TxnPrewriteArgs::primarykey() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnPrewriteArgs::set_primarykey(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.primarykey_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnPrewriteArgs.PrimaryKey)
 }
@@ -6266,11 +6507,11 @@ inline const std::string& TxnPrewriteArgs::_internal_primarykey() const {
   return _impl_.primarykey_.Get();
 }
 inline void TxnPrewriteArgs::_internal_set_primarykey(const std::string& value) {
-  
+
   _impl_.primarykey_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnPrewriteArgs::_internal_mutable_primarykey() {
-  
+
   return _impl_.primarykey_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnPrewriteArgs::release_primarykey() {
@@ -6279,9 +6520,9 @@ inline std::string* TxnPrewriteArgs::release_primarykey() {
 }
 inline void TxnPrewriteArgs::set_allocated_primarykey(std::string* primarykey) {
   if (primarykey != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.primarykey_.SetAllocated(primarykey, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6304,7 +6545,7 @@ inline uint64_t TxnPrewriteArgs::startts() const {
   return _internal_startts();
 }
 inline void TxnPrewriteArgs::_internal_set_startts(uint64_t value) {
-  
+
   _impl_.startts_ = value;
 }
 inline void TxnPrewriteArgs::set_startts(uint64_t value) {
@@ -6324,7 +6565,7 @@ inline uint64_t TxnPrewriteArgs::ttlms() const {
   return _internal_ttlms();
 }
 inline void TxnPrewriteArgs::_internal_set_ttlms(uint64_t value) {
-  
+
   _impl_.ttlms_ = value;
 }
 inline void TxnPrewriteArgs::set_ttlms(uint64_t value) {
@@ -6344,7 +6585,7 @@ inline bool TxnPrewriteArgs::isdelete() const {
   return _internal_isdelete();
 }
 inline void TxnPrewriteArgs::_internal_set_isdelete(bool value) {
-  
+
   _impl_.isdelete_ = value;
 }
 inline void TxnPrewriteArgs::set_isdelete(bool value) {
@@ -6363,7 +6604,7 @@ inline const std::string& TxnPrewriteArgs::clientid() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnPrewriteArgs::set_clientid(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.clientid_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnPrewriteArgs.ClientId)
 }
@@ -6376,11 +6617,11 @@ inline const std::string& TxnPrewriteArgs::_internal_clientid() const {
   return _impl_.clientid_.Get();
 }
 inline void TxnPrewriteArgs::_internal_set_clientid(const std::string& value) {
-  
+
   _impl_.clientid_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnPrewriteArgs::_internal_mutable_clientid() {
-  
+
   return _impl_.clientid_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnPrewriteArgs::release_clientid() {
@@ -6389,9 +6630,9 @@ inline std::string* TxnPrewriteArgs::release_clientid() {
 }
 inline void TxnPrewriteArgs::set_allocated_clientid(std::string* clientid) {
   if (clientid != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.clientid_.SetAllocated(clientid, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6414,12 +6655,32 @@ inline int32_t TxnPrewriteArgs::requestid() const {
   return _internal_requestid();
 }
 inline void TxnPrewriteArgs::_internal_set_requestid(int32_t value) {
-  
+
   _impl_.requestid_ = value;
 }
 inline void TxnPrewriteArgs::set_requestid(int32_t value) {
   _internal_set_requestid(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnPrewriteArgs.RequestId)
+}
+
+// int32 RegionId = 9;
+inline void TxnPrewriteArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t TxnPrewriteArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t TxnPrewriteArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.TxnPrewriteArgs.RegionId)
+  return _internal_regionid();
+}
+inline void TxnPrewriteArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void TxnPrewriteArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnPrewriteArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -6437,7 +6698,7 @@ inline const std::string& TxnPrewriteReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnPrewriteReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnPrewriteReply.Err)
 }
@@ -6450,11 +6711,11 @@ inline const std::string& TxnPrewriteReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void TxnPrewriteReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnPrewriteReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnPrewriteReply::release_err() {
@@ -6463,9 +6724,9 @@ inline std::string* TxnPrewriteReply::release_err() {
 }
 inline void TxnPrewriteReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6491,7 +6752,7 @@ inline const std::string& TxnCommitArgs::key() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnCommitArgs::set_key(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.key_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnCommitArgs.Key)
 }
@@ -6504,11 +6765,11 @@ inline const std::string& TxnCommitArgs::_internal_key() const {
   return _impl_.key_.Get();
 }
 inline void TxnCommitArgs::_internal_set_key(const std::string& value) {
-  
+
   _impl_.key_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnCommitArgs::_internal_mutable_key() {
-  
+
   return _impl_.key_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnCommitArgs::release_key() {
@@ -6517,9 +6778,9 @@ inline std::string* TxnCommitArgs::release_key() {
 }
 inline void TxnCommitArgs::set_allocated_key(std::string* key) {
   if (key != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.key_.SetAllocated(key, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6542,7 +6803,7 @@ inline uint64_t TxnCommitArgs::startts() const {
   return _internal_startts();
 }
 inline void TxnCommitArgs::_internal_set_startts(uint64_t value) {
-  
+
   _impl_.startts_ = value;
 }
 inline void TxnCommitArgs::set_startts(uint64_t value) {
@@ -6562,7 +6823,7 @@ inline uint64_t TxnCommitArgs::committs() const {
   return _internal_committs();
 }
 inline void TxnCommitArgs::_internal_set_committs(uint64_t value) {
-  
+
   _impl_.committs_ = value;
 }
 inline void TxnCommitArgs::set_committs(uint64_t value) {
@@ -6581,7 +6842,7 @@ inline const std::string& TxnCommitArgs::clientid() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnCommitArgs::set_clientid(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.clientid_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnCommitArgs.ClientId)
 }
@@ -6594,11 +6855,11 @@ inline const std::string& TxnCommitArgs::_internal_clientid() const {
   return _impl_.clientid_.Get();
 }
 inline void TxnCommitArgs::_internal_set_clientid(const std::string& value) {
-  
+
   _impl_.clientid_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnCommitArgs::_internal_mutable_clientid() {
-  
+
   return _impl_.clientid_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnCommitArgs::release_clientid() {
@@ -6607,9 +6868,9 @@ inline std::string* TxnCommitArgs::release_clientid() {
 }
 inline void TxnCommitArgs::set_allocated_clientid(std::string* clientid) {
   if (clientid != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.clientid_.SetAllocated(clientid, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6632,12 +6893,32 @@ inline int32_t TxnCommitArgs::requestid() const {
   return _internal_requestid();
 }
 inline void TxnCommitArgs::_internal_set_requestid(int32_t value) {
-  
+
   _impl_.requestid_ = value;
 }
 inline void TxnCommitArgs::set_requestid(int32_t value) {
   _internal_set_requestid(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnCommitArgs.RequestId)
+}
+
+// int32 RegionId = 6;
+inline void TxnCommitArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t TxnCommitArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t TxnCommitArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.TxnCommitArgs.RegionId)
+  return _internal_regionid();
+}
+inline void TxnCommitArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void TxnCommitArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnCommitArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -6655,7 +6936,7 @@ inline const std::string& TxnCommitReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnCommitReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnCommitReply.Err)
 }
@@ -6668,11 +6949,11 @@ inline const std::string& TxnCommitReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void TxnCommitReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnCommitReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnCommitReply::release_err() {
@@ -6681,9 +6962,9 @@ inline std::string* TxnCommitReply::release_err() {
 }
 inline void TxnCommitReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6709,7 +6990,7 @@ inline const std::string& TxnRollbackArgs::key() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnRollbackArgs::set_key(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.key_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnRollbackArgs.Key)
 }
@@ -6722,11 +7003,11 @@ inline const std::string& TxnRollbackArgs::_internal_key() const {
   return _impl_.key_.Get();
 }
 inline void TxnRollbackArgs::_internal_set_key(const std::string& value) {
-  
+
   _impl_.key_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnRollbackArgs::_internal_mutable_key() {
-  
+
   return _impl_.key_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnRollbackArgs::release_key() {
@@ -6735,9 +7016,9 @@ inline std::string* TxnRollbackArgs::release_key() {
 }
 inline void TxnRollbackArgs::set_allocated_key(std::string* key) {
   if (key != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.key_.SetAllocated(key, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6760,7 +7041,7 @@ inline uint64_t TxnRollbackArgs::startts() const {
   return _internal_startts();
 }
 inline void TxnRollbackArgs::_internal_set_startts(uint64_t value) {
-  
+
   _impl_.startts_ = value;
 }
 inline void TxnRollbackArgs::set_startts(uint64_t value) {
@@ -6779,7 +7060,7 @@ inline const std::string& TxnRollbackArgs::clientid() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnRollbackArgs::set_clientid(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.clientid_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnRollbackArgs.ClientId)
 }
@@ -6792,11 +7073,11 @@ inline const std::string& TxnRollbackArgs::_internal_clientid() const {
   return _impl_.clientid_.Get();
 }
 inline void TxnRollbackArgs::_internal_set_clientid(const std::string& value) {
-  
+
   _impl_.clientid_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnRollbackArgs::_internal_mutable_clientid() {
-  
+
   return _impl_.clientid_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnRollbackArgs::release_clientid() {
@@ -6805,9 +7086,9 @@ inline std::string* TxnRollbackArgs::release_clientid() {
 }
 inline void TxnRollbackArgs::set_allocated_clientid(std::string* clientid) {
   if (clientid != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.clientid_.SetAllocated(clientid, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6830,12 +7111,32 @@ inline int32_t TxnRollbackArgs::requestid() const {
   return _internal_requestid();
 }
 inline void TxnRollbackArgs::_internal_set_requestid(int32_t value) {
-  
+
   _impl_.requestid_ = value;
 }
 inline void TxnRollbackArgs::set_requestid(int32_t value) {
   _internal_set_requestid(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnRollbackArgs.RequestId)
+}
+
+// int32 RegionId = 5;
+inline void TxnRollbackArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t TxnRollbackArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t TxnRollbackArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.TxnRollbackArgs.RegionId)
+  return _internal_regionid();
+}
+inline void TxnRollbackArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void TxnRollbackArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnRollbackArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -6853,7 +7154,7 @@ inline const std::string& TxnRollbackReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnRollbackReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnRollbackReply.Err)
 }
@@ -6866,11 +7167,11 @@ inline const std::string& TxnRollbackReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void TxnRollbackReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnRollbackReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnRollbackReply::release_err() {
@@ -6879,9 +7180,9 @@ inline std::string* TxnRollbackReply::release_err() {
 }
 inline void TxnRollbackReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6907,7 +7208,7 @@ inline const std::string& TxnGetLockArgs::key() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnGetLockArgs::set_key(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.key_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetLockArgs.Key)
 }
@@ -6920,11 +7221,11 @@ inline const std::string& TxnGetLockArgs::_internal_key() const {
   return _impl_.key_.Get();
 }
 inline void TxnGetLockArgs::_internal_set_key(const std::string& value) {
-  
+
   _impl_.key_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnGetLockArgs::_internal_mutable_key() {
-  
+
   return _impl_.key_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnGetLockArgs::release_key() {
@@ -6933,9 +7234,9 @@ inline std::string* TxnGetLockArgs::release_key() {
 }
 inline void TxnGetLockArgs::set_allocated_key(std::string* key) {
   if (key != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.key_.SetAllocated(key, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -6944,6 +7245,26 @@ inline void TxnGetLockArgs::set_allocated_key(std::string* key) {
   }
 #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
   // @@protoc_insertion_point(field_set_allocated:raftKVRpcProctoc.TxnGetLockArgs.Key)
+}
+
+// int32 RegionId = 2;
+inline void TxnGetLockArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t TxnGetLockArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t TxnGetLockArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.TxnGetLockArgs.RegionId)
+  return _internal_regionid();
+}
+inline void TxnGetLockArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void TxnGetLockArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetLockArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -6961,7 +7282,7 @@ inline const std::string& TxnGetLockReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnGetLockReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetLockReply.Err)
 }
@@ -6974,11 +7295,11 @@ inline const std::string& TxnGetLockReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void TxnGetLockReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnGetLockReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnGetLockReply::release_err() {
@@ -6987,9 +7308,9 @@ inline std::string* TxnGetLockReply::release_err() {
 }
 inline void TxnGetLockReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7012,7 +7333,7 @@ inline bool TxnGetLockReply::haslock() const {
   return _internal_haslock();
 }
 inline void TxnGetLockReply::_internal_set_haslock(bool value) {
-  
+
   _impl_.haslock_ = value;
 }
 inline void TxnGetLockReply::set_haslock(bool value) {
@@ -7031,7 +7352,7 @@ inline const std::string& TxnGetLockReply::primarykey() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnGetLockReply::set_primarykey(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.primarykey_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetLockReply.PrimaryKey)
 }
@@ -7044,11 +7365,11 @@ inline const std::string& TxnGetLockReply::_internal_primarykey() const {
   return _impl_.primarykey_.Get();
 }
 inline void TxnGetLockReply::_internal_set_primarykey(const std::string& value) {
-  
+
   _impl_.primarykey_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnGetLockReply::_internal_mutable_primarykey() {
-  
+
   return _impl_.primarykey_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnGetLockReply::release_primarykey() {
@@ -7057,9 +7378,9 @@ inline std::string* TxnGetLockReply::release_primarykey() {
 }
 inline void TxnGetLockReply::set_allocated_primarykey(std::string* primarykey) {
   if (primarykey != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.primarykey_.SetAllocated(primarykey, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7081,7 +7402,7 @@ inline const std::string& TxnGetLockReply::value() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnGetLockReply::set_value(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.value_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGetLockReply.Value)
 }
@@ -7094,11 +7415,11 @@ inline const std::string& TxnGetLockReply::_internal_value() const {
   return _impl_.value_.Get();
 }
 inline void TxnGetLockReply::_internal_set_value(const std::string& value) {
-  
+
   _impl_.value_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnGetLockReply::_internal_mutable_value() {
-  
+
   return _impl_.value_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnGetLockReply::release_value() {
@@ -7107,9 +7428,9 @@ inline std::string* TxnGetLockReply::release_value() {
 }
 inline void TxnGetLockReply::set_allocated_value(std::string* value) {
   if (value != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.value_.SetAllocated(value, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7132,7 +7453,7 @@ inline uint64_t TxnGetLockReply::startts() const {
   return _internal_startts();
 }
 inline void TxnGetLockReply::_internal_set_startts(uint64_t value) {
-  
+
   _impl_.startts_ = value;
 }
 inline void TxnGetLockReply::set_startts(uint64_t value) {
@@ -7152,7 +7473,7 @@ inline uint64_t TxnGetLockReply::ttlms() const {
   return _internal_ttlms();
 }
 inline void TxnGetLockReply::_internal_set_ttlms(uint64_t value) {
-  
+
   _impl_.ttlms_ = value;
 }
 inline void TxnGetLockReply::set_ttlms(uint64_t value) {
@@ -7172,7 +7493,7 @@ inline uint64_t TxnGetLockReply::createtimems() const {
   return _internal_createtimems();
 }
 inline void TxnGetLockReply::_internal_set_createtimems(uint64_t value) {
-  
+
   _impl_.createtimems_ = value;
 }
 inline void TxnGetLockReply::set_createtimems(uint64_t value) {
@@ -7192,7 +7513,7 @@ inline bool TxnGetLockReply::isdelete() const {
   return _internal_isdelete();
 }
 inline void TxnGetLockReply::_internal_set_isdelete(bool value) {
-  
+
   _impl_.isdelete_ = value;
 }
 inline void TxnGetLockReply::set_isdelete(bool value) {
@@ -7212,7 +7533,7 @@ inline bool TxnGetLockReply::ispessimistic() const {
   return _internal_ispessimistic();
 }
 inline void TxnGetLockReply::_internal_set_ispessimistic(bool value) {
-  
+
   _impl_.ispessimistic_ = value;
 }
 inline void TxnGetLockReply::set_ispessimistic(bool value) {
@@ -7235,7 +7556,7 @@ inline const std::string& TxnAcquirePessimisticLockArgs::key() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnAcquirePessimisticLockArgs::set_key(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.key_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnAcquirePessimisticLockArgs.Key)
 }
@@ -7248,11 +7569,11 @@ inline const std::string& TxnAcquirePessimisticLockArgs::_internal_key() const {
   return _impl_.key_.Get();
 }
 inline void TxnAcquirePessimisticLockArgs::_internal_set_key(const std::string& value) {
-  
+
   _impl_.key_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnAcquirePessimisticLockArgs::_internal_mutable_key() {
-  
+
   return _impl_.key_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnAcquirePessimisticLockArgs::release_key() {
@@ -7261,9 +7582,9 @@ inline std::string* TxnAcquirePessimisticLockArgs::release_key() {
 }
 inline void TxnAcquirePessimisticLockArgs::set_allocated_key(std::string* key) {
   if (key != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.key_.SetAllocated(key, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7285,7 +7606,7 @@ inline const std::string& TxnAcquirePessimisticLockArgs::primarykey() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnAcquirePessimisticLockArgs::set_primarykey(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.primarykey_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnAcquirePessimisticLockArgs.PrimaryKey)
 }
@@ -7298,11 +7619,11 @@ inline const std::string& TxnAcquirePessimisticLockArgs::_internal_primarykey() 
   return _impl_.primarykey_.Get();
 }
 inline void TxnAcquirePessimisticLockArgs::_internal_set_primarykey(const std::string& value) {
-  
+
   _impl_.primarykey_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnAcquirePessimisticLockArgs::_internal_mutable_primarykey() {
-  
+
   return _impl_.primarykey_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnAcquirePessimisticLockArgs::release_primarykey() {
@@ -7311,9 +7632,9 @@ inline std::string* TxnAcquirePessimisticLockArgs::release_primarykey() {
 }
 inline void TxnAcquirePessimisticLockArgs::set_allocated_primarykey(std::string* primarykey) {
   if (primarykey != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.primarykey_.SetAllocated(primarykey, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7336,7 +7657,7 @@ inline uint64_t TxnAcquirePessimisticLockArgs::startts() const {
   return _internal_startts();
 }
 inline void TxnAcquirePessimisticLockArgs::_internal_set_startts(uint64_t value) {
-  
+
   _impl_.startts_ = value;
 }
 inline void TxnAcquirePessimisticLockArgs::set_startts(uint64_t value) {
@@ -7356,7 +7677,7 @@ inline uint64_t TxnAcquirePessimisticLockArgs::ttlms() const {
   return _internal_ttlms();
 }
 inline void TxnAcquirePessimisticLockArgs::_internal_set_ttlms(uint64_t value) {
-  
+
   _impl_.ttlms_ = value;
 }
 inline void TxnAcquirePessimisticLockArgs::set_ttlms(uint64_t value) {
@@ -7375,7 +7696,7 @@ inline const std::string& TxnAcquirePessimisticLockArgs::clientid() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnAcquirePessimisticLockArgs::set_clientid(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.clientid_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnAcquirePessimisticLockArgs.ClientId)
 }
@@ -7388,11 +7709,11 @@ inline const std::string& TxnAcquirePessimisticLockArgs::_internal_clientid() co
   return _impl_.clientid_.Get();
 }
 inline void TxnAcquirePessimisticLockArgs::_internal_set_clientid(const std::string& value) {
-  
+
   _impl_.clientid_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnAcquirePessimisticLockArgs::_internal_mutable_clientid() {
-  
+
   return _impl_.clientid_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnAcquirePessimisticLockArgs::release_clientid() {
@@ -7401,9 +7722,9 @@ inline std::string* TxnAcquirePessimisticLockArgs::release_clientid() {
 }
 inline void TxnAcquirePessimisticLockArgs::set_allocated_clientid(std::string* clientid) {
   if (clientid != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.clientid_.SetAllocated(clientid, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7426,12 +7747,32 @@ inline int32_t TxnAcquirePessimisticLockArgs::requestid() const {
   return _internal_requestid();
 }
 inline void TxnAcquirePessimisticLockArgs::_internal_set_requestid(int32_t value) {
-  
+
   _impl_.requestid_ = value;
 }
 inline void TxnAcquirePessimisticLockArgs::set_requestid(int32_t value) {
   _internal_set_requestid(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnAcquirePessimisticLockArgs.RequestId)
+}
+
+// int32 RegionId = 7;
+inline void TxnAcquirePessimisticLockArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t TxnAcquirePessimisticLockArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t TxnAcquirePessimisticLockArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.TxnAcquirePessimisticLockArgs.RegionId)
+  return _internal_regionid();
+}
+inline void TxnAcquirePessimisticLockArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void TxnAcquirePessimisticLockArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnAcquirePessimisticLockArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -7449,7 +7790,7 @@ inline const std::string& TxnAcquirePessimisticLockReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnAcquirePessimisticLockReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnAcquirePessimisticLockReply.Err)
 }
@@ -7462,11 +7803,11 @@ inline const std::string& TxnAcquirePessimisticLockReply::_internal_err() const 
   return _impl_.err_.Get();
 }
 inline void TxnAcquirePessimisticLockReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnAcquirePessimisticLockReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnAcquirePessimisticLockReply::release_err() {
@@ -7475,9 +7816,9 @@ inline std::string* TxnAcquirePessimisticLockReply::release_err() {
 }
 inline void TxnAcquirePessimisticLockReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7503,7 +7844,7 @@ inline const std::string& TxnFindCommitTsArgs::key() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnFindCommitTsArgs::set_key(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.key_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnFindCommitTsArgs.Key)
 }
@@ -7516,11 +7857,11 @@ inline const std::string& TxnFindCommitTsArgs::_internal_key() const {
   return _impl_.key_.Get();
 }
 inline void TxnFindCommitTsArgs::_internal_set_key(const std::string& value) {
-  
+
   _impl_.key_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnFindCommitTsArgs::_internal_mutable_key() {
-  
+
   return _impl_.key_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnFindCommitTsArgs::release_key() {
@@ -7529,9 +7870,9 @@ inline std::string* TxnFindCommitTsArgs::release_key() {
 }
 inline void TxnFindCommitTsArgs::set_allocated_key(std::string* key) {
   if (key != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.key_.SetAllocated(key, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7554,12 +7895,32 @@ inline uint64_t TxnFindCommitTsArgs::startts() const {
   return _internal_startts();
 }
 inline void TxnFindCommitTsArgs::_internal_set_startts(uint64_t value) {
-  
+
   _impl_.startts_ = value;
 }
 inline void TxnFindCommitTsArgs::set_startts(uint64_t value) {
   _internal_set_startts(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnFindCommitTsArgs.StartTs)
+}
+
+// int32 RegionId = 3;
+inline void TxnFindCommitTsArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t TxnFindCommitTsArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t TxnFindCommitTsArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.TxnFindCommitTsArgs.RegionId)
+  return _internal_regionid();
+}
+inline void TxnFindCommitTsArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void TxnFindCommitTsArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnFindCommitTsArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -7577,7 +7938,7 @@ inline const std::string& TxnFindCommitTsReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnFindCommitTsReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnFindCommitTsReply.Err)
 }
@@ -7590,11 +7951,11 @@ inline const std::string& TxnFindCommitTsReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void TxnFindCommitTsReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnFindCommitTsReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnFindCommitTsReply::release_err() {
@@ -7603,9 +7964,9 @@ inline std::string* TxnFindCommitTsReply::release_err() {
 }
 inline void TxnFindCommitTsReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7628,7 +7989,7 @@ inline bool TxnFindCommitTsReply::found() const {
   return _internal_found();
 }
 inline void TxnFindCommitTsReply::_internal_set_found(bool value) {
-  
+
   _impl_.found_ = value;
 }
 inline void TxnFindCommitTsReply::set_found(bool value) {
@@ -7648,7 +8009,7 @@ inline uint64_t TxnFindCommitTsReply::committs() const {
   return _internal_committs();
 }
 inline void TxnFindCommitTsReply::_internal_set_committs(uint64_t value) {
-  
+
   _impl_.committs_ = value;
 }
 inline void TxnFindCommitTsReply::set_committs(uint64_t value) {
@@ -7672,12 +8033,32 @@ inline uint64_t TxnExpiredLocksArgs::nowms() const {
   return _internal_nowms();
 }
 inline void TxnExpiredLocksArgs::_internal_set_nowms(uint64_t value) {
-  
+
   _impl_.nowms_ = value;
 }
 inline void TxnExpiredLocksArgs::set_nowms(uint64_t value) {
   _internal_set_nowms(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnExpiredLocksArgs.NowMs)
+}
+
+// int32 RegionId = 2;
+inline void TxnExpiredLocksArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t TxnExpiredLocksArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t TxnExpiredLocksArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.TxnExpiredLocksArgs.RegionId)
+  return _internal_regionid();
+}
+inline void TxnExpiredLocksArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void TxnExpiredLocksArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnExpiredLocksArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -7695,7 +8076,7 @@ inline const std::string& TxnExpiredLocksReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnExpiredLocksReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnExpiredLocksReply.Err)
 }
@@ -7708,11 +8089,11 @@ inline const std::string& TxnExpiredLocksReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void TxnExpiredLocksReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnExpiredLocksReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnExpiredLocksReply::release_err() {
@@ -7721,9 +8102,9 @@ inline std::string* TxnExpiredLocksReply::release_err() {
 }
 inline void TxnExpiredLocksReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7865,7 +8246,7 @@ inline uint64_t TxnGarbageCollectArgs::safepointts() const {
   return _internal_safepointts();
 }
 inline void TxnGarbageCollectArgs::_internal_set_safepointts(uint64_t value) {
-  
+
   _impl_.safepointts_ = value;
 }
 inline void TxnGarbageCollectArgs::set_safepointts(uint64_t value) {
@@ -7884,7 +8265,7 @@ inline const std::string& TxnGarbageCollectArgs::clientid() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnGarbageCollectArgs::set_clientid(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.clientid_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGarbageCollectArgs.ClientId)
 }
@@ -7897,11 +8278,11 @@ inline const std::string& TxnGarbageCollectArgs::_internal_clientid() const {
   return _impl_.clientid_.Get();
 }
 inline void TxnGarbageCollectArgs::_internal_set_clientid(const std::string& value) {
-  
+
   _impl_.clientid_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnGarbageCollectArgs::_internal_mutable_clientid() {
-  
+
   return _impl_.clientid_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnGarbageCollectArgs::release_clientid() {
@@ -7910,9 +8291,9 @@ inline std::string* TxnGarbageCollectArgs::release_clientid() {
 }
 inline void TxnGarbageCollectArgs::set_allocated_clientid(std::string* clientid) {
   if (clientid != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.clientid_.SetAllocated(clientid, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -7935,12 +8316,32 @@ inline int32_t TxnGarbageCollectArgs::requestid() const {
   return _internal_requestid();
 }
 inline void TxnGarbageCollectArgs::_internal_set_requestid(int32_t value) {
-  
+
   _impl_.requestid_ = value;
 }
 inline void TxnGarbageCollectArgs::set_requestid(int32_t value) {
   _internal_set_requestid(value);
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGarbageCollectArgs.RequestId)
+}
+
+// int32 RegionId = 4;
+inline void TxnGarbageCollectArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t TxnGarbageCollectArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t TxnGarbageCollectArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.TxnGarbageCollectArgs.RegionId)
+  return _internal_regionid();
+}
+inline void TxnGarbageCollectArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void TxnGarbageCollectArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGarbageCollectArgs.RegionId)
 }
 
 // -------------------------------------------------------------------
@@ -7958,7 +8359,7 @@ inline const std::string& TxnGarbageCollectReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnGarbageCollectReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnGarbageCollectReply.Err)
 }
@@ -7971,11 +8372,11 @@ inline const std::string& TxnGarbageCollectReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void TxnGarbageCollectReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnGarbageCollectReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnGarbageCollectReply::release_err() {
@@ -7984,9 +8385,9 @@ inline std::string* TxnGarbageCollectReply::release_err() {
 }
 inline void TxnGarbageCollectReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -8009,7 +8410,7 @@ inline uint64_t TxnGarbageCollectReply::removedcount() const {
   return _internal_removedcount();
 }
 inline void TxnGarbageCollectReply::_internal_set_removedcount(uint64_t value) {
-  
+
   _impl_.removedcount_ = value;
 }
 inline void TxnGarbageCollectReply::set_removedcount(uint64_t value) {
@@ -8020,6 +8421,26 @@ inline void TxnGarbageCollectReply::set_removedcount(uint64_t value) {
 // -------------------------------------------------------------------
 
 // TxnMaxObservedTsArgs
+
+// int32 RegionId = 1;
+inline void TxnMaxObservedTsArgs::clear_regionid() {
+  _impl_.regionid_ = 0;
+}
+inline int32_t TxnMaxObservedTsArgs::_internal_regionid() const {
+  return _impl_.regionid_;
+}
+inline int32_t TxnMaxObservedTsArgs::regionid() const {
+  // @@protoc_insertion_point(field_get:raftKVRpcProctoc.TxnMaxObservedTsArgs.RegionId)
+  return _internal_regionid();
+}
+inline void TxnMaxObservedTsArgs::_internal_set_regionid(int32_t value) {
+
+  _impl_.regionid_ = value;
+}
+inline void TxnMaxObservedTsArgs::set_regionid(int32_t value) {
+  _internal_set_regionid(value);
+  // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnMaxObservedTsArgs.RegionId)
+}
 
 // -------------------------------------------------------------------
 
@@ -8036,7 +8457,7 @@ inline const std::string& TxnMaxObservedTsReply::err() const {
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
 void TxnMaxObservedTsReply::set_err(ArgT0&& arg0, ArgT... args) {
- 
+
  _impl_.err_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
   // @@protoc_insertion_point(field_set:raftKVRpcProctoc.TxnMaxObservedTsReply.Err)
 }
@@ -8049,11 +8470,11 @@ inline const std::string& TxnMaxObservedTsReply::_internal_err() const {
   return _impl_.err_.Get();
 }
 inline void TxnMaxObservedTsReply::_internal_set_err(const std::string& value) {
-  
+
   _impl_.err_.Set(value, GetArenaForAllocation());
 }
 inline std::string* TxnMaxObservedTsReply::_internal_mutable_err() {
-  
+
   return _impl_.err_.Mutable(GetArenaForAllocation());
 }
 inline std::string* TxnMaxObservedTsReply::release_err() {
@@ -8062,9 +8483,9 @@ inline std::string* TxnMaxObservedTsReply::release_err() {
 }
 inline void TxnMaxObservedTsReply::set_allocated_err(std::string* err) {
   if (err != nullptr) {
-    
+
   } else {
-    
+
   }
   _impl_.err_.SetAllocated(err, GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
@@ -8087,7 +8508,7 @@ inline uint64_t TxnMaxObservedTsReply::maxts() const {
   return _internal_maxts();
 }
 inline void TxnMaxObservedTsReply::_internal_set_maxts(uint64_t value) {
-  
+
   _impl_.maxts_ = value;
 }
 inline void TxnMaxObservedTsReply::set_maxts(uint64_t value) {

@@ -12,6 +12,7 @@ message GetArgs{
   bytes Key = 1 ;
   bytes ClientId = 2 ;
   int32 RequestId = 3;
+  int32 RegionId = 4;
 }
 
 
@@ -28,6 +29,7 @@ message ListArgs {
   // Operator-only inspection flag. This permits a read from a local follower
   // so an administrator can compare the physical replicas of one Region.
   bool AllowFollowerRead = 3;
+  int32 RegionId = 4;
 }
 
 message KeyValue {
@@ -52,6 +54,7 @@ message PutAppendArgs  {
   // otherwise RPC will break.
   bytes  ClientId = 4;
   int32  RequestId = 5;
+  int32 RegionId = 6;
 }
 
 message PutAppendReply  {
@@ -63,6 +66,7 @@ message TxnGetArgs {
   uint64 ReadTs = 2;
   bytes ClientId = 3;
   int32 RequestId = 4;
+  int32 RegionId = 5;
 }
 
 message TxnGetReply {
@@ -79,6 +83,7 @@ message TxnPrewriteArgs {
   bool IsDelete = 6;
   bytes ClientId = 7;
   int32 RequestId = 8;
+  int32 RegionId = 9;
 }
 
 message TxnPrewriteReply {
@@ -91,6 +96,7 @@ message TxnCommitArgs {
   uint64 CommitTs = 3;
   bytes ClientId = 4;
   int32 RequestId = 5;
+  int32 RegionId = 6;
 }
 
 message TxnCommitReply {
@@ -102,6 +108,7 @@ message TxnRollbackArgs {
   uint64 StartTs = 2;
   bytes ClientId = 3;
   int32 RequestId = 4;
+  int32 RegionId = 5;
 }
 
 message TxnRollbackReply {
@@ -110,6 +117,7 @@ message TxnRollbackReply {
 
 message TxnGetLockArgs {
   bytes Key = 1;
+  int32 RegionId = 2;
 }
 
 message TxnGetLockReply {
@@ -131,6 +139,7 @@ message TxnAcquirePessimisticLockArgs {
   uint64 TtlMs = 4;
   bytes ClientId = 5;
   int32 RequestId = 6;
+  int32 RegionId = 7;
 }
 
 message TxnAcquirePessimisticLockReply {
@@ -140,6 +149,7 @@ message TxnAcquirePessimisticLockReply {
 message TxnFindCommitTsArgs {
   bytes Key = 1;
   uint64 StartTs = 2;
+  int32 RegionId = 3;
 }
 
 message TxnFindCommitTsReply {
@@ -150,6 +160,7 @@ message TxnFindCommitTsReply {
 
 message TxnExpiredLocksArgs {
   uint64 NowMs = 1;
+  int32 RegionId = 2;
 }
 
 message TxnExpiredLocksReply {
@@ -162,6 +173,7 @@ message TxnGarbageCollectArgs {
   uint64 SafePointTs = 1;
   bytes ClientId = 2;
   int32 RequestId = 3;
+  int32 RegionId = 4;
 }
 
 message TxnGarbageCollectReply {
@@ -169,7 +181,9 @@ message TxnGarbageCollectReply {
   uint64 RemovedCount = 2;
 }
 
-message TxnMaxObservedTsArgs {}
+message TxnMaxObservedTsArgs {
+  int32 RegionId = 1;
+}
 
 message TxnMaxObservedTsReply {
   bytes Err = 1;

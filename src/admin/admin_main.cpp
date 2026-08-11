@@ -25,7 +25,8 @@ struct Endpoint {
 void PrintUsage(const char* program) {
   std::cerr << "Usage: " << program << " <put|get|list|local-list> <key-or-prefix> [value]\n"
             << "Set STRATAKV_ENDPOINTS to a comma-separated host:port peer list, or\n"
-            << "STRATAKV_REGION_CONFIG to a Region metadata file for key-range routing.\n";
+            << "STRATAKV_REGION_CONFIG to a Region metadata file for key-range routing.\n"
+            << "Raw shared NodeServer endpoints also require STRATAKV_REGION_ID.\n";
 }
 
 bool ParseEndpoint(const std::string& text, Endpoint* endpoint) {
@@ -95,6 +96,7 @@ int Put(const std::vector<Endpoint>& endpoints, const std::string& key, const st
     request.set_op("Put");
     request.set_clientid(clientId);
     request.set_requestid(1);
+    request.set_regionid(regionId);
     stub.PutAppend(&controller, &request, &reply, nullptr);
     if (!controller.Failed() && reply.err() == "OK") {
       std::cout << "OK endpoint=" << endpoint.host << ':' << endpoint.port;
@@ -108,7 +110,7 @@ int Put(const std::vector<Endpoint>& endpoints, const std::string& key, const st
   return EXIT_FAILURE;
 }
 
-int Get(const std::vector<Endpoint>& endpoints, const std::string& key) {
+int Get(const std::vector<Endpoint>& endpoints, const std::string& key, int regionId) {
   const std::string clientId = NewClientId();
   for (const Endpoint& endpoint : endpoints) {
     MprpcChannel channel(endpoint.host, endpoint.port, true);
@@ -119,6 +121,7 @@ int Get(const std::vector<Endpoint>& endpoints, const std::string& key) {
     request.set_key(key);
     request.set_clientid(clientId);
     request.set_requestid(1);
+    request.set_regionid(regionId);
     stub.Get(&controller, &request, &reply, nullptr);
     if (!controller.Failed() && reply.err() == "OK") {
       std::cout << reply.value() << '\n';
@@ -134,7 +137,7 @@ int Get(const std::vector<Endpoint>& endpoints, const std::string& key) {
   return EXIT_FAILURE;
 }
 
-int List(const std::vector<Endpoint>& endpoints, const std::string& prefix) {
+int List(const std::vector<Endpoint>& endpoints, const std::string& prefix, int regionId) {
   for (const Endpoint& endpoint : endpoints) {
     MprpcChannel channel(endpoint.host, endpoint.port, true);
     raftKVRpcProctoc::kvServerRpc_Stub stub(&channel);
@@ -143,6 +146,7 @@ int List(const std::vector<Endpoint>& endpoints, const std::string& prefix) {
     MprpcController controller;
     request.set_prefix(prefix);
     request.set_limit(100);
+    request.set_regionid(regionId);
     stub.List(&controller, &request, &reply, nullptr);
     if (!controller.Failed() && reply.err() == "OK") {
       for (const auto& entry : reply.entries()) {
@@ -169,9 +173,15 @@ int LocalList(const std::vector<Endpoint>& endpoints, const std::string& prefix)
   raftKVRpcProctoc::ListArgs request;
   raftKVRpcProctoc::ListReply reply;
   MprpcController controller;
+  const char* regionIdText = std::getenv("STRATAKV_REGION_ID");
+  if (regionIdText == nullptr) {
+    std::cerr << "local-list requires STRATAKV_REGION_ID with a shared NodeServer endpoint\n";
+    return EXIT_FAILURE;
+  }
   request.set_prefix(prefix);
   request.set_limit(1000);
   request.set_allowfollowerread(true);
+  request.set_regionid(std::stoi(regionIdText));
   stub.List(&controller, &request, &reply, nullptr);
   if (controller.Failed() || reply.err() != "OK") {
     std::cerr << "local endpoint=" << endpoint.host << ':' << endpoint.port << " reason="
@@ -193,7 +203,7 @@ std::optional<RegionCatalog> LoadRegionCatalog() {
 int ListAllRegions(const RegionCatalog& catalog, const std::string& prefix) {
   int result = EXIT_SUCCESS;
   for (const auto& region : catalog.Regions()) {
-    const int status = List(EndpointsForRegion(region), prefix);
+    const int status = List(EndpointsForRegion(region), prefix, region.regionId);
     if (status != EXIT_SUCCESS) result = status;
   }
   return result;
@@ -223,15 +233,21 @@ int main(int argc, char** argv) {
         const auto& region = catalog->FindByKey(argv[2]);
         return Put(EndpointsForRegion(region), argv[2], argv[3], region.regionId);
       }
-      return Put(endpoints, argv[2], argv[3], -1);
+        const char* regionId = std::getenv("STRATAKV_REGION_ID");
+        return Put(endpoints, argv[2], argv[3], regionId == nullptr ? -1 : std::stoi(regionId));
     }
     if (operation == "get" && argc == 3) {
-      if (catalog) return Get(EndpointsForRegion(catalog->FindByKey(argv[2])), argv[2]);
-      return Get(endpoints, argv[2]);
+      if (catalog) {
+        const auto& region = catalog->FindByKey(argv[2]);
+        return Get(EndpointsForRegion(region), argv[2], region.regionId);
+      }
+      const char* regionId = std::getenv("STRATAKV_REGION_ID");
+      return Get(endpoints, argv[2], regionId == nullptr ? -1 : std::stoi(regionId));
     }
     if (operation == "list" && (argc == 2 || argc == 3)) {
       if (catalog) return ListAllRegions(*catalog, argc == 3 ? argv[2] : "");
-      return List(endpoints, argc == 3 ? argv[2] : "");
+      const char* regionId = std::getenv("STRATAKV_REGION_ID");
+      return List(endpoints, argc == 3 ? argv[2] : "", regionId == nullptr ? -1 : std::stoi(regionId));
     }
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

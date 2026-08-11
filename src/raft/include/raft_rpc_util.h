@@ -15,6 +15,7 @@ class RaftRpcUtil {
  private:
   MprpcChannel* channel_;
   raftRpcProctoc::raftRpc_Stub *stub_;
+  int regionId_;
 
  public:
   //主动调用其他节点的三个方法,可以按照mit6824来调用，但是别的节点调用自己的好像就不行了，要继承protoc提供的service类才行
@@ -27,7 +28,7 @@ class RaftRpcUtil {
    * @param ip  远端ip
    * @param port  远端端口
    */
-  RaftRpcUtil(std::string ip, short port);
+  RaftRpcUtil(std::string ip, short port, int regionId);
   ~RaftRpcUtil();
 };
 

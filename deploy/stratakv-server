@@ -151,9 +151,9 @@ write_regions() {
   region=0
   while [ "$region" -lt 3 ]; do
     case "$region" in
-      0) region_id=100; start_key=; end_key=h; port_base=26200 ;;
-      1) region_id=101; start_key=h; end_key=p; port_base=26300 ;;
-      2) region_id=102; start_key=p; end_key=; port_base=26400 ;;
+      0) region_id=100; start_key=; end_key=h ;;
+      1) region_id=101; start_key=h; end_key=p ;;
+      2) region_id=102; start_key=p; end_key= ;;
     esac
     {
       echo
@@ -164,7 +164,8 @@ write_regions() {
     } >>"$regions_file"
     peer=0
     while [ "$peer" -lt 3 ]; do
-      port=$((port_base + peer))
+      # Every Region on one physical node shares the NodeServer listener.
+      port=$((26200 + peer))
       {
         echo "region.${region}.peer.${peer}.node_id=${peer}"
         echo "region.${region}.peer.${peer}.host=127.0.0.1"
@@ -403,7 +404,13 @@ restart_one() {
     if managed_pid "$selected_node" >/dev/null 2>&1; then
       files=$(find "${runtime_dir}/${selected_node}/run_data" -maxdepth 1 \
         -name 'raft_status_region_*.json' -type f 2>/dev/null | wc -l | tr -d ' ')
-      [ "$files" -eq 3 ] && { echo "Restarted ${selected_node} as a local process."; return 0; }
+      if [ "$files" -eq 3 ] &&
+         [ "$(leader_count 100)" -eq 1 ] &&
+         [ "$(leader_count 101)" -eq 1 ] &&
+         [ "$(leader_count 102)" -eq 1 ]; then
+        echo "Restarted ${selected_node} as a local process and restored all Region leaders."
+        return 0
+      fi
     else
       echo "${selected_node} exited during restart. See ${logs_dir}/${selected_node}.log." >&2
       return 1
@@ -429,10 +436,11 @@ local_data() {
   for name in node-0 node-1 node-2; do
     [ "$selected_node" = all ] || [ "$selected_node" = "$name" ] || continue
     node_id=${name#node-}
-    for base in 26200 26300 26400; do
-      port=$((base + node_id))
-      echo "=== ${name} / 127.0.0.1:${port} ==="
-      STRATAKV_ENDPOINTS="127.0.0.1:${port}" "$admin_bin" local-list "$inspect_prefix"
+    port=$((26200 + node_id))
+    for region_id in 100 101 102; do
+      echo "=== ${name} / Region ${region_id} / 127.0.0.1:${port} ==="
+      STRATAKV_ENDPOINTS="127.0.0.1:${port}" STRATAKV_REGION_ID="$region_id" \
+        "$admin_bin" local-list "$inspect_prefix"
     done
   done
 }

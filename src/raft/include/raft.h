@@ -139,7 +139,7 @@ class Raft : public raftRpcProctoc::raftRpc {
 
   // rf.applyChan <- msg //不拿锁执行  可以单独创建一个线程执行，但是为了同意使用std:thread
   // ，避免使用pthread_create，因此专门写一个函数来执行
-  void pushMsgToKvServer(ApplyMsg msg);
+  void pushMsgToRegionPeer(ApplyMsg msg);
   void readPersist(std::string data);
   std::string persistData();
 

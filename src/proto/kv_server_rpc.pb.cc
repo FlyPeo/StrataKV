@@ -26,6 +26,7 @@ PROTOBUF_CONSTEXPR GetArgs::GetArgs(
     /*decltype(_impl_.key_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.clientid_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.requestid_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct GetArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR GetArgsDefaultTypeInternal()
@@ -55,6 +56,7 @@ PROTOBUF_CONSTEXPR ListArgs::ListArgs(
     /*decltype(_impl_.prefix_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.limit_)*/0u
   , /*decltype(_impl_.allowfollowerread_)*/false
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct ListArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR ListArgsDefaultTypeInternal()
@@ -100,6 +102,7 @@ PROTOBUF_CONSTEXPR PutAppendArgs::PutAppendArgs(
   , /*decltype(_impl_.op_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.clientid_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.requestid_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct PutAppendArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR PutAppendArgsDefaultTypeInternal()
@@ -129,6 +132,7 @@ PROTOBUF_CONSTEXPR TxnGetArgs::TxnGetArgs(
   , /*decltype(_impl_.clientid_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.readts_)*/uint64_t{0u}
   , /*decltype(_impl_.requestid_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct TxnGetArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR TxnGetArgsDefaultTypeInternal()
@@ -163,6 +167,7 @@ PROTOBUF_CONSTEXPR TxnPrewriteArgs::TxnPrewriteArgs(
   , /*decltype(_impl_.ttlms_)*/uint64_t{0u}
   , /*decltype(_impl_.isdelete_)*/false
   , /*decltype(_impl_.requestid_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct TxnPrewriteArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR TxnPrewriteArgsDefaultTypeInternal()
@@ -193,6 +198,7 @@ PROTOBUF_CONSTEXPR TxnCommitArgs::TxnCommitArgs(
   , /*decltype(_impl_.startts_)*/uint64_t{0u}
   , /*decltype(_impl_.committs_)*/uint64_t{0u}
   , /*decltype(_impl_.requestid_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct TxnCommitArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR TxnCommitArgsDefaultTypeInternal()
@@ -222,6 +228,7 @@ PROTOBUF_CONSTEXPR TxnRollbackArgs::TxnRollbackArgs(
   , /*decltype(_impl_.clientid_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.startts_)*/uint64_t{0u}
   , /*decltype(_impl_.requestid_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct TxnRollbackArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR TxnRollbackArgsDefaultTypeInternal()
@@ -248,6 +255,7 @@ PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORIT
 PROTOBUF_CONSTEXPR TxnGetLockArgs::TxnGetLockArgs(
     ::_pbi::ConstantInitialized): _impl_{
     /*decltype(_impl_.key_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct TxnGetLockArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR TxnGetLockArgsDefaultTypeInternal()
@@ -287,6 +295,7 @@ PROTOBUF_CONSTEXPR TxnAcquirePessimisticLockArgs::TxnAcquirePessimisticLockArgs(
   , /*decltype(_impl_.startts_)*/uint64_t{0u}
   , /*decltype(_impl_.ttlms_)*/uint64_t{0u}
   , /*decltype(_impl_.requestid_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct TxnAcquirePessimisticLockArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR TxnAcquirePessimisticLockArgsDefaultTypeInternal()
@@ -314,6 +323,7 @@ PROTOBUF_CONSTEXPR TxnFindCommitTsArgs::TxnFindCommitTsArgs(
     ::_pbi::ConstantInitialized): _impl_{
     /*decltype(_impl_.key_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.startts_)*/uint64_t{0u}
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct TxnFindCommitTsArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR TxnFindCommitTsArgsDefaultTypeInternal()
@@ -342,6 +352,7 @@ PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORIT
 PROTOBUF_CONSTEXPR TxnExpiredLocksArgs::TxnExpiredLocksArgs(
     ::_pbi::ConstantInitialized): _impl_{
     /*decltype(_impl_.nowms_)*/uint64_t{0u}
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct TxnExpiredLocksArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR TxnExpiredLocksArgsDefaultTypeInternal()
@@ -372,6 +383,7 @@ PROTOBUF_CONSTEXPR TxnGarbageCollectArgs::TxnGarbageCollectArgs(
     /*decltype(_impl_.clientid_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.safepointts_)*/uint64_t{0u}
   , /*decltype(_impl_.requestid_)*/0
+  , /*decltype(_impl_.regionid_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct TxnGarbageCollectArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR TxnGarbageCollectArgsDefaultTypeInternal()
@@ -397,7 +409,9 @@ struct TxnGarbageCollectReplyDefaultTypeInternal {
 };
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 TxnGarbageCollectReplyDefaultTypeInternal _TxnGarbageCollectReply_default_instance_;
 PROTOBUF_CONSTEXPR TxnMaxObservedTsArgs::TxnMaxObservedTsArgs(
-    ::_pbi::ConstantInitialized) {}
+    ::_pbi::ConstantInitialized): _impl_{
+    /*decltype(_impl_.regionid_)*/0
+  , /*decltype(_impl_._cached_size_)*/{}} {}
 struct TxnMaxObservedTsArgsDefaultTypeInternal {
   PROTOBUF_CONSTEXPR TxnMaxObservedTsArgsDefaultTypeInternal()
       : _instance(::_pbi::ConstantInitialized{}) {}
@@ -436,6 +450,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::GetArgs, _impl_.key_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::GetArgs, _impl_.clientid_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::GetArgs, _impl_.requestid_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::GetArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::GetReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -453,6 +468,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::ListArgs, _impl_.prefix_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::ListArgs, _impl_.limit_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::ListArgs, _impl_.allowfollowerread_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::ListArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::KeyValue, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -480,6 +496,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::PutAppendArgs, _impl_.op_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::PutAppendArgs, _impl_.clientid_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::PutAppendArgs, _impl_.requestid_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::PutAppendArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::PutAppendReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -497,6 +514,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGetArgs, _impl_.readts_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGetArgs, _impl_.clientid_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGetArgs, _impl_.requestid_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGetArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGetReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -519,6 +537,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnPrewriteArgs, _impl_.isdelete_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnPrewriteArgs, _impl_.clientid_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnPrewriteArgs, _impl_.requestid_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnPrewriteArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnPrewriteReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -537,6 +556,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnCommitArgs, _impl_.committs_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnCommitArgs, _impl_.clientid_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnCommitArgs, _impl_.requestid_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnCommitArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnCommitReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -554,6 +574,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnRollbackArgs, _impl_.startts_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnRollbackArgs, _impl_.clientid_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnRollbackArgs, _impl_.requestid_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnRollbackArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnRollbackReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -568,6 +589,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   ~0u,  // no _weak_field_map_
   ~0u,  // no _inlined_string_donated_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGetLockArgs, _impl_.key_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGetLockArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGetLockReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -595,6 +617,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs, _impl_.ttlms_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs, _impl_.clientid_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs, _impl_.requestid_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnAcquirePessimisticLockReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -610,6 +633,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   ~0u,  // no _inlined_string_donated_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnFindCommitTsArgs, _impl_.key_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnFindCommitTsArgs, _impl_.startts_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnFindCommitTsArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnFindCommitTsReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -626,6 +650,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   ~0u,  // no _weak_field_map_
   ~0u,  // no _inlined_string_donated_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnExpiredLocksArgs, _impl_.nowms_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnExpiredLocksArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnExpiredLocksReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -644,6 +669,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGarbageCollectArgs, _impl_.safepointts_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGarbageCollectArgs, _impl_.clientid_),
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGarbageCollectArgs, _impl_.requestid_),
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGarbageCollectArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnGarbageCollectReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -658,6 +684,7 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
   ~0u,  // no _oneof_case_
   ~0u,  // no _weak_field_map_
   ~0u,  // no _inlined_string_donated_
+  PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnMaxObservedTsArgs, _impl_.regionid_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::raftKVRpcProctoc::TxnMaxObservedTsReply, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -669,32 +696,32 @@ const uint32_t TableStruct_kv_5fserver_5frpc_2eproto::offsets[] PROTOBUF_SECTION
 };
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::raftKVRpcProctoc::GetArgs)},
-  { 9, -1, -1, sizeof(::raftKVRpcProctoc::GetReply)},
-  { 17, -1, -1, sizeof(::raftKVRpcProctoc::ListArgs)},
-  { 26, -1, -1, sizeof(::raftKVRpcProctoc::KeyValue)},
-  { 34, -1, -1, sizeof(::raftKVRpcProctoc::ListReply)},
-  { 42, -1, -1, sizeof(::raftKVRpcProctoc::PutAppendArgs)},
-  { 53, -1, -1, sizeof(::raftKVRpcProctoc::PutAppendReply)},
-  { 60, -1, -1, sizeof(::raftKVRpcProctoc::TxnGetArgs)},
-  { 70, -1, -1, sizeof(::raftKVRpcProctoc::TxnGetReply)},
-  { 78, -1, -1, sizeof(::raftKVRpcProctoc::TxnPrewriteArgs)},
-  { 92, -1, -1, sizeof(::raftKVRpcProctoc::TxnPrewriteReply)},
-  { 99, -1, -1, sizeof(::raftKVRpcProctoc::TxnCommitArgs)},
-  { 110, -1, -1, sizeof(::raftKVRpcProctoc::TxnCommitReply)},
-  { 117, -1, -1, sizeof(::raftKVRpcProctoc::TxnRollbackArgs)},
-  { 127, -1, -1, sizeof(::raftKVRpcProctoc::TxnRollbackReply)},
-  { 134, -1, -1, sizeof(::raftKVRpcProctoc::TxnGetLockArgs)},
-  { 141, -1, -1, sizeof(::raftKVRpcProctoc::TxnGetLockReply)},
-  { 156, -1, -1, sizeof(::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs)},
-  { 168, -1, -1, sizeof(::raftKVRpcProctoc::TxnAcquirePessimisticLockReply)},
-  { 175, -1, -1, sizeof(::raftKVRpcProctoc::TxnFindCommitTsArgs)},
-  { 183, -1, -1, sizeof(::raftKVRpcProctoc::TxnFindCommitTsReply)},
-  { 192, -1, -1, sizeof(::raftKVRpcProctoc::TxnExpiredLocksArgs)},
-  { 199, -1, -1, sizeof(::raftKVRpcProctoc::TxnExpiredLocksReply)},
-  { 208, -1, -1, sizeof(::raftKVRpcProctoc::TxnGarbageCollectArgs)},
-  { 217, -1, -1, sizeof(::raftKVRpcProctoc::TxnGarbageCollectReply)},
-  { 225, -1, -1, sizeof(::raftKVRpcProctoc::TxnMaxObservedTsArgs)},
-  { 231, -1, -1, sizeof(::raftKVRpcProctoc::TxnMaxObservedTsReply)},
+  { 10, -1, -1, sizeof(::raftKVRpcProctoc::GetReply)},
+  { 18, -1, -1, sizeof(::raftKVRpcProctoc::ListArgs)},
+  { 28, -1, -1, sizeof(::raftKVRpcProctoc::KeyValue)},
+  { 36, -1, -1, sizeof(::raftKVRpcProctoc::ListReply)},
+  { 44, -1, -1, sizeof(::raftKVRpcProctoc::PutAppendArgs)},
+  { 56, -1, -1, sizeof(::raftKVRpcProctoc::PutAppendReply)},
+  { 63, -1, -1, sizeof(::raftKVRpcProctoc::TxnGetArgs)},
+  { 74, -1, -1, sizeof(::raftKVRpcProctoc::TxnGetReply)},
+  { 82, -1, -1, sizeof(::raftKVRpcProctoc::TxnPrewriteArgs)},
+  { 97, -1, -1, sizeof(::raftKVRpcProctoc::TxnPrewriteReply)},
+  { 104, -1, -1, sizeof(::raftKVRpcProctoc::TxnCommitArgs)},
+  { 116, -1, -1, sizeof(::raftKVRpcProctoc::TxnCommitReply)},
+  { 123, -1, -1, sizeof(::raftKVRpcProctoc::TxnRollbackArgs)},
+  { 134, -1, -1, sizeof(::raftKVRpcProctoc::TxnRollbackReply)},
+  { 141, -1, -1, sizeof(::raftKVRpcProctoc::TxnGetLockArgs)},
+  { 149, -1, -1, sizeof(::raftKVRpcProctoc::TxnGetLockReply)},
+  { 164, -1, -1, sizeof(::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs)},
+  { 177, -1, -1, sizeof(::raftKVRpcProctoc::TxnAcquirePessimisticLockReply)},
+  { 184, -1, -1, sizeof(::raftKVRpcProctoc::TxnFindCommitTsArgs)},
+  { 193, -1, -1, sizeof(::raftKVRpcProctoc::TxnFindCommitTsReply)},
+  { 202, -1, -1, sizeof(::raftKVRpcProctoc::TxnExpiredLocksArgs)},
+  { 210, -1, -1, sizeof(::raftKVRpcProctoc::TxnExpiredLocksReply)},
+  { 219, -1, -1, sizeof(::raftKVRpcProctoc::TxnGarbageCollectArgs)},
+  { 229, -1, -1, sizeof(::raftKVRpcProctoc::TxnGarbageCollectReply)},
+  { 237, -1, -1, sizeof(::raftKVRpcProctoc::TxnMaxObservedTsArgs)},
+  { 244, -1, -1, sizeof(::raftKVRpcProctoc::TxnMaxObservedTsReply)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -729,86 +756,92 @@ static const ::_pb::Message* const file_default_instances[] = {
 
 const char descriptor_table_protodef_kv_5fserver_5frpc_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
   "\n\023kv_server_rpc.proto\022\020raftKVRpcProctoc\""
-  ";\n\007GetArgs\022\013\n\003Key\030\001 \001(\014\022\020\n\010ClientId\030\002 \001("
-  "\014\022\021\n\tRequestId\030\003 \001(\005\"&\n\010GetReply\022\013\n\003Err\030"
-  "\001 \001(\014\022\r\n\005Value\030\002 \001(\014\"D\n\010ListArgs\022\016\n\006Pref"
-  "ix\030\001 \001(\014\022\r\n\005Limit\030\002 \001(\r\022\031\n\021AllowFollower"
-  "Read\030\003 \001(\010\"&\n\010KeyValue\022\013\n\003Key\030\001 \001(\014\022\r\n\005V"
-  "alue\030\002 \001(\014\"E\n\tListReply\022\013\n\003Err\030\001 \001(\014\022+\n\007"
-  "Entries\030\002 \003(\0132\032.raftKVRpcProctoc.KeyValu"
-  "e\"\\\n\rPutAppendArgs\022\013\n\003Key\030\001 \001(\014\022\r\n\005Value"
-  "\030\002 \001(\014\022\n\n\002Op\030\003 \001(\014\022\020\n\010ClientId\030\004 \001(\014\022\021\n\t"
-  "RequestId\030\005 \001(\005\"\035\n\016PutAppendReply\022\013\n\003Err"
-  "\030\001 \001(\014\"N\n\nTxnGetArgs\022\013\n\003Key\030\001 \001(\014\022\016\n\006Rea"
-  "dTs\030\002 \001(\004\022\020\n\010ClientId\030\003 \001(\014\022\021\n\tRequestId"
-  "\030\004 \001(\005\")\n\013TxnGetReply\022\013\n\003Err\030\001 \001(\014\022\r\n\005Va"
-  "lue\030\002 \001(\014\"\230\001\n\017TxnPrewriteArgs\022\013\n\003Key\030\001 \001"
-  "(\014\022\r\n\005Value\030\002 \001(\014\022\022\n\nPrimaryKey\030\003 \001(\014\022\017\n"
-  "\007StartTs\030\004 \001(\004\022\r\n\005TtlMs\030\005 \001(\004\022\020\n\010IsDelet"
-  "e\030\006 \001(\010\022\020\n\010ClientId\030\007 \001(\014\022\021\n\tRequestId\030\010"
-  " \001(\005\"\037\n\020TxnPrewriteReply\022\013\n\003Err\030\001 \001(\014\"d\n"
-  "\rTxnCommitArgs\022\013\n\003Key\030\001 \001(\014\022\017\n\007StartTs\030\002"
-  " \001(\004\022\020\n\010CommitTs\030\003 \001(\004\022\020\n\010ClientId\030\004 \001(\014"
-  "\022\021\n\tRequestId\030\005 \001(\005\"\035\n\016TxnCommitReply\022\013\n"
-  "\003Err\030\001 \001(\014\"T\n\017TxnRollbackArgs\022\013\n\003Key\030\001 \001"
-  "(\014\022\017\n\007StartTs\030\002 \001(\004\022\020\n\010ClientId\030\003 \001(\014\022\021\n"
-  "\tRequestId\030\004 \001(\005\"\037\n\020TxnRollbackReply\022\013\n\003"
-  "Err\030\001 \001(\014\"\035\n\016TxnGetLockArgs\022\013\n\003Key\030\001 \001(\014"
-  "\"\261\001\n\017TxnGetLockReply\022\013\n\003Err\030\001 \001(\014\022\017\n\007Has"
-  "Lock\030\002 \001(\010\022\022\n\nPrimaryKey\030\003 \001(\014\022\r\n\005Value\030"
-  "\004 \001(\014\022\017\n\007StartTs\030\005 \001(\004\022\r\n\005TtlMs\030\006 \001(\004\022\024\n"
-  "\014CreateTimeMs\030\007 \001(\004\022\020\n\010IsDelete\030\010 \001(\010\022\025\n"
-  "\rIsPessimistic\030\t \001(\010\"\205\001\n\035TxnAcquirePessi"
-  "misticLockArgs\022\013\n\003Key\030\001 \001(\014\022\022\n\nPrimaryKe"
-  "y\030\002 \001(\014\022\017\n\007StartTs\030\003 \001(\004\022\r\n\005TtlMs\030\004 \001(\004\022"
-  "\020\n\010ClientId\030\005 \001(\014\022\021\n\tRequestId\030\006 \001(\005\"-\n\036"
-  "TxnAcquirePessimisticLockReply\022\013\n\003Err\030\001 "
-  "\001(\014\"3\n\023TxnFindCommitTsArgs\022\013\n\003Key\030\001 \001(\014\022"
-  "\017\n\007StartTs\030\002 \001(\004\"D\n\024TxnFindCommitTsReply"
-  "\022\013\n\003Err\030\001 \001(\014\022\r\n\005Found\030\002 \001(\010\022\020\n\010CommitTs"
-  "\030\003 \001(\004\"$\n\023TxnExpiredLocksArgs\022\r\n\005NowMs\030\001"
-  " \001(\004\"c\n\024TxnExpiredLocksReply\022\013\n\003Err\030\001 \001("
-  "\014\022\014\n\004Keys\030\002 \003(\014\0220\n\005Locks\030\003 \003(\0132!.raftKVR"
-  "pcProctoc.TxnGetLockReply\"Q\n\025TxnGarbageC"
-  "ollectArgs\022\023\n\013SafePointTs\030\001 \001(\004\022\020\n\010Clien"
-  "tId\030\002 \001(\014\022\021\n\tRequestId\030\003 \001(\005\";\n\026TxnGarba"
-  "geCollectReply\022\013\n\003Err\030\001 \001(\014\022\024\n\014RemovedCo"
-  "unt\030\002 \001(\004\"\026\n\024TxnMaxObservedTsArgs\"3\n\025Txn"
-  "MaxObservedTsReply\022\013\n\003Err\030\001 \001(\014\022\r\n\005MaxTs"
-  "\030\002 \001(\0042\203\t\n\013kvServerRpc\022N\n\tPutAppend\022\037.ra"
-  "ftKVRpcProctoc.PutAppendArgs\032 .raftKVRpc"
-  "Proctoc.PutAppendReply\022<\n\003Get\022\031.raftKVRp"
-  "cProctoc.GetArgs\032\032.raftKVRpcProctoc.GetR"
-  "eply\022\?\n\004List\022\032.raftKVRpcProctoc.ListArgs"
-  "\032\033.raftKVRpcProctoc.ListReply\022E\n\006TxnGet\022"
-  "\034.raftKVRpcProctoc.TxnGetArgs\032\035.raftKVRp"
-  "cProctoc.TxnGetReply\022T\n\013TxnPrewrite\022!.ra"
-  "ftKVRpcProctoc.TxnPrewriteArgs\032\".raftKVR"
-  "pcProctoc.TxnPrewriteReply\022N\n\tTxnCommit\022"
-  "\037.raftKVRpcProctoc.TxnCommitArgs\032 .raftK"
-  "VRpcProctoc.TxnCommitReply\022T\n\013TxnRollbac"
-  "k\022!.raftKVRpcProctoc.TxnRollbackArgs\032\".r"
-  "aftKVRpcProctoc.TxnRollbackReply\022Q\n\nTxnG"
-  "etLock\022 .raftKVRpcProctoc.TxnGetLockArgs"
-  "\032!.raftKVRpcProctoc.TxnGetLockReply\022~\n\031T"
-  "xnAcquirePessimisticLock\022/.raftKVRpcProc"
-  "toc.TxnAcquirePessimisticLockArgs\0320.raft"
-  "KVRpcProctoc.TxnAcquirePessimisticLockRe"
-  "ply\022`\n\017TxnFindCommitTs\022%.raftKVRpcProcto"
-  "c.TxnFindCommitTsArgs\032&.raftKVRpcProctoc"
-  ".TxnFindCommitTsReply\022`\n\017TxnExpiredLocks"
-  "\022%.raftKVRpcProctoc.TxnExpiredLocksArgs\032"
-  "&.raftKVRpcProctoc.TxnExpiredLocksReply\022"
-  "f\n\021TxnGarbageCollect\022\'.raftKVRpcProctoc."
-  "TxnGarbageCollectArgs\032(.raftKVRpcProctoc"
-  ".TxnGarbageCollectReply\022c\n\020TxnMaxObserve"
-  "dTs\022&.raftKVRpcProctoc.TxnMaxObservedTsA"
-  "rgs\032\'.raftKVRpcProctoc.TxnMaxObservedTsR"
-  "eplyB\003\200\001\001b\006proto3"
+  "M\n\007GetArgs\022\013\n\003Key\030\001 \001(\014\022\020\n\010ClientId\030\002 \001("
+  "\014\022\021\n\tRequestId\030\003 \001(\005\022\020\n\010RegionId\030\004 \001(\005\"&"
+  "\n\010GetReply\022\013\n\003Err\030\001 \001(\014\022\r\n\005Value\030\002 \001(\014\"V"
+  "\n\010ListArgs\022\016\n\006Prefix\030\001 \001(\014\022\r\n\005Limit\030\002 \001("
+  "\r\022\031\n\021AllowFollowerRead\030\003 \001(\010\022\020\n\010RegionId"
+  "\030\004 \001(\005\"&\n\010KeyValue\022\013\n\003Key\030\001 \001(\014\022\r\n\005Value"
+  "\030\002 \001(\014\"E\n\tListReply\022\013\n\003Err\030\001 \001(\014\022+\n\007Entr"
+  "ies\030\002 \003(\0132\032.raftKVRpcProctoc.KeyValue\"n\n"
+  "\rPutAppendArgs\022\013\n\003Key\030\001 \001(\014\022\r\n\005Value\030\002 \001"
+  "(\014\022\n\n\002Op\030\003 \001(\014\022\020\n\010ClientId\030\004 \001(\014\022\021\n\tRequ"
+  "estId\030\005 \001(\005\022\020\n\010RegionId\030\006 \001(\005\"\035\n\016PutAppe"
+  "ndReply\022\013\n\003Err\030\001 \001(\014\"`\n\nTxnGetArgs\022\013\n\003Ke"
+  "y\030\001 \001(\014\022\016\n\006ReadTs\030\002 \001(\004\022\020\n\010ClientId\030\003 \001("
+  "\014\022\021\n\tRequestId\030\004 \001(\005\022\020\n\010RegionId\030\005 \001(\005\")"
+  "\n\013TxnGetReply\022\013\n\003Err\030\001 \001(\014\022\r\n\005Value\030\002 \001("
+  "\014\"\252\001\n\017TxnPrewriteArgs\022\013\n\003Key\030\001 \001(\014\022\r\n\005Va"
+  "lue\030\002 \001(\014\022\022\n\nPrimaryKey\030\003 \001(\014\022\017\n\007StartTs"
+  "\030\004 \001(\004\022\r\n\005TtlMs\030\005 \001(\004\022\020\n\010IsDelete\030\006 \001(\010\022"
+  "\020\n\010ClientId\030\007 \001(\014\022\021\n\tRequestId\030\010 \001(\005\022\020\n\010"
+  "RegionId\030\t \001(\005\"\037\n\020TxnPrewriteReply\022\013\n\003Er"
+  "r\030\001 \001(\014\"v\n\rTxnCommitArgs\022\013\n\003Key\030\001 \001(\014\022\017\n"
+  "\007StartTs\030\002 \001(\004\022\020\n\010CommitTs\030\003 \001(\004\022\020\n\010Clie"
+  "ntId\030\004 \001(\014\022\021\n\tRequestId\030\005 \001(\005\022\020\n\010RegionI"
+  "d\030\006 \001(\005\"\035\n\016TxnCommitReply\022\013\n\003Err\030\001 \001(\014\"f"
+  "\n\017TxnRollbackArgs\022\013\n\003Key\030\001 \001(\014\022\017\n\007StartT"
+  "s\030\002 \001(\004\022\020\n\010ClientId\030\003 \001(\014\022\021\n\tRequestId\030\004"
+  " \001(\005\022\020\n\010RegionId\030\005 \001(\005\"\037\n\020TxnRollbackRep"
+  "ly\022\013\n\003Err\030\001 \001(\014\"/\n\016TxnGetLockArgs\022\013\n\003Key"
+  "\030\001 \001(\014\022\020\n\010RegionId\030\002 \001(\005\"\261\001\n\017TxnGetLockR"
+  "eply\022\013\n\003Err\030\001 \001(\014\022\017\n\007HasLock\030\002 \001(\010\022\022\n\nPr"
+  "imaryKey\030\003 \001(\014\022\r\n\005Value\030\004 \001(\014\022\017\n\007StartTs"
+  "\030\005 \001(\004\022\r\n\005TtlMs\030\006 \001(\004\022\024\n\014CreateTimeMs\030\007 "
+  "\001(\004\022\020\n\010IsDelete\030\010 \001(\010\022\025\n\rIsPessimistic\030\t"
+  " \001(\010\"\227\001\n\035TxnAcquirePessimisticLockArgs\022\013"
+  "\n\003Key\030\001 \001(\014\022\022\n\nPrimaryKey\030\002 \001(\014\022\017\n\007Start"
+  "Ts\030\003 \001(\004\022\r\n\005TtlMs\030\004 \001(\004\022\020\n\010ClientId\030\005 \001("
+  "\014\022\021\n\tRequestId\030\006 \001(\005\022\020\n\010RegionId\030\007 \001(\005\"-"
+  "\n\036TxnAcquirePessimisticLockReply\022\013\n\003Err\030"
+  "\001 \001(\014\"E\n\023TxnFindCommitTsArgs\022\013\n\003Key\030\001 \001("
+  "\014\022\017\n\007StartTs\030\002 \001(\004\022\020\n\010RegionId\030\003 \001(\005\"D\n\024"
+  "TxnFindCommitTsReply\022\013\n\003Err\030\001 \001(\014\022\r\n\005Fou"
+  "nd\030\002 \001(\010\022\020\n\010CommitTs\030\003 \001(\004\"6\n\023TxnExpired"
+  "LocksArgs\022\r\n\005NowMs\030\001 \001(\004\022\020\n\010RegionId\030\002 \001"
+  "(\005\"c\n\024TxnExpiredLocksReply\022\013\n\003Err\030\001 \001(\014\022"
+  "\014\n\004Keys\030\002 \003(\014\0220\n\005Locks\030\003 \003(\0132!.raftKVRpc"
+  "Proctoc.TxnGetLockReply\"c\n\025TxnGarbageCol"
+  "lectArgs\022\023\n\013SafePointTs\030\001 \001(\004\022\020\n\010ClientI"
+  "d\030\002 \001(\014\022\021\n\tRequestId\030\003 \001(\005\022\020\n\010RegionId\030\004"
+  " \001(\005\";\n\026TxnGarbageCollectReply\022\013\n\003Err\030\001 "
+  "\001(\014\022\024\n\014RemovedCount\030\002 \001(\004\"(\n\024TxnMaxObser"
+  "vedTsArgs\022\020\n\010RegionId\030\001 \001(\005\"3\n\025TxnMaxObs"
+  "ervedTsReply\022\013\n\003Err\030\001 \001(\014\022\r\n\005MaxTs\030\002 \001(\004"
+  "2\203\t\n\013kvServerRpc\022N\n\tPutAppend\022\037.raftKVRp"
+  "cProctoc.PutAppendArgs\032 .raftKVRpcProcto"
+  "c.PutAppendReply\022<\n\003Get\022\031.raftKVRpcProct"
+  "oc.GetArgs\032\032.raftKVRpcProctoc.GetReply\022\?"
+  "\n\004List\022\032.raftKVRpcProctoc.ListArgs\032\033.raf"
+  "tKVRpcProctoc.ListReply\022E\n\006TxnGet\022\034.raft"
+  "KVRpcProctoc.TxnGetArgs\032\035.raftKVRpcProct"
+  "oc.TxnGetReply\022T\n\013TxnPrewrite\022!.raftKVRp"
+  "cProctoc.TxnPrewriteArgs\032\".raftKVRpcProc"
+  "toc.TxnPrewriteReply\022N\n\tTxnCommit\022\037.raft"
+  "KVRpcProctoc.TxnCommitArgs\032 .raftKVRpcPr"
+  "octoc.TxnCommitReply\022T\n\013TxnRollback\022!.ra"
+  "ftKVRpcProctoc.TxnRollbackArgs\032\".raftKVR"
+  "pcProctoc.TxnRollbackReply\022Q\n\nTxnGetLock"
+  "\022 .raftKVRpcProctoc.TxnGetLockArgs\032!.raf"
+  "tKVRpcProctoc.TxnGetLockReply\022~\n\031TxnAcqu"
+  "irePessimisticLock\022/.raftKVRpcProctoc.Tx"
+  "nAcquirePessimisticLockArgs\0320.raftKVRpcP"
+  "roctoc.TxnAcquirePessimisticLockReply\022`\n"
+  "\017TxnFindCommitTs\022%.raftKVRpcProctoc.TxnF"
+  "indCommitTsArgs\032&.raftKVRpcProctoc.TxnFi"
+  "ndCommitTsReply\022`\n\017TxnExpiredLocks\022%.raf"
+  "tKVRpcProctoc.TxnExpiredLocksArgs\032&.raft"
+  "KVRpcProctoc.TxnExpiredLocksReply\022f\n\021Txn"
+  "GarbageCollect\022\'.raftKVRpcProctoc.TxnGar"
+  "bageCollectArgs\032(.raftKVRpcProctoc.TxnGa"
+  "rbageCollectReply\022c\n\020TxnMaxObservedTs\022&."
+  "raftKVRpcProctoc.TxnMaxObservedTsArgs\032\'."
+  "raftKVRpcProctoc.TxnMaxObservedTsReplyB\003"
+  "\200\001\001b\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_kv_5fserver_5frpc_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_kv_5fserver_5frpc_2eproto = {
-    false, false, 3057, descriptor_table_protodef_kv_5fserver_5frpc_2eproto,
+    false, false, 3291, descriptor_table_protodef_kv_5fserver_5frpc_2eproto,
     "kv_server_rpc.proto",
     &descriptor_table_kv_5fserver_5frpc_2eproto_once, nullptr, 0, 27,
     schemas, file_default_instances, TableStruct_kv_5fserver_5frpc_2eproto::offsets,
@@ -842,6 +875,7 @@ GetArgs::GetArgs(const GetArgs& from)
       decltype(_impl_.key_){}
     , decltype(_impl_.clientid_){}
     , decltype(_impl_.requestid_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -861,7 +895,9 @@ GetArgs::GetArgs(const GetArgs& from)
     _this->_impl_.clientid_.Set(from._internal_clientid(), 
       _this->GetArenaForAllocation());
   }
-  _this->_impl_.requestid_ = from._impl_.requestid_;
+  ::memcpy(&_impl_.requestid_, &from._impl_.requestid_,
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.requestid_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.GetArgs)
 }
 
@@ -873,6 +909,7 @@ inline void GetArgs::SharedCtor(
       decltype(_impl_.key_){}
     , decltype(_impl_.clientid_){}
     , decltype(_impl_.requestid_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.key_.InitDefault();
@@ -912,7 +949,9 @@ void GetArgs::Clear() {
 
   _impl_.key_.ClearToEmpty();
   _impl_.clientid_.ClearToEmpty();
-  _impl_.requestid_ = 0;
+  ::memset(&_impl_.requestid_, 0, static_cast<size_t>(
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.requestid_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -944,6 +983,14 @@ const char* GetArgs::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx) 
       case 3:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 24)) {
           _impl_.requestid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 4;
+      case 4:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 32)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -995,6 +1042,12 @@ uint8_t* GetArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(3, this->_internal_requestid(), target);
   }
 
+  // int32 RegionId = 4;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(4, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -1030,6 +1083,11 @@ size_t GetArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_requestid());
   }
 
+  // int32 RegionId = 4;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -1056,6 +1114,9 @@ void GetArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOB
   }
   if (from._internal_requestid() != 0) {
     _this->_internal_set_requestid(from._internal_requestid());
+  }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
   }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
@@ -1084,7 +1145,12 @@ void GetArgs::InternalSwap(GetArgs* other) {
       &_impl_.clientid_, lhs_arena,
       &other->_impl_.clientid_, rhs_arena
   );
-  swap(_impl_.requestid_, other->_impl_.requestid_);
+  ::PROTOBUF_NAMESPACE_ID::internal::memswap<
+      PROTOBUF_FIELD_OFFSET(GetArgs, _impl_.regionid_)
+      + sizeof(GetArgs::_impl_.regionid_)
+      - PROTOBUF_FIELD_OFFSET(GetArgs, _impl_.requestid_)>(
+          reinterpret_cast<char*>(&_impl_.requestid_),
+          reinterpret_cast<char*>(&other->_impl_.requestid_));
 }
 
 ::PROTOBUF_NAMESPACE_ID::Metadata GetArgs::GetMetadata() const {
@@ -1355,6 +1421,7 @@ ListArgs::ListArgs(const ListArgs& from)
       decltype(_impl_.prefix_){}
     , decltype(_impl_.limit_){}
     , decltype(_impl_.allowfollowerread_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -1367,8 +1434,8 @@ ListArgs::ListArgs(const ListArgs& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.limit_, &from._impl_.limit_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.allowfollowerread_) -
-    reinterpret_cast<char*>(&_impl_.limit_)) + sizeof(_impl_.allowfollowerread_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.limit_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.ListArgs)
 }
 
@@ -1380,6 +1447,7 @@ inline void ListArgs::SharedCtor(
       decltype(_impl_.prefix_){}
     , decltype(_impl_.limit_){0u}
     , decltype(_impl_.allowfollowerread_){false}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.prefix_.InitDefault();
@@ -1414,8 +1482,8 @@ void ListArgs::Clear() {
 
   _impl_.prefix_.ClearToEmpty();
   ::memset(&_impl_.limit_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.allowfollowerread_) -
-      reinterpret_cast<char*>(&_impl_.limit_)) + sizeof(_impl_.allowfollowerread_));
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.limit_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -1446,6 +1514,14 @@ const char* ListArgs::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx)
       case 3:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 24)) {
           _impl_.allowfollowerread_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 4;
+      case 4:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 32)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -1497,6 +1573,12 @@ uint8_t* ListArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteBoolToArray(3, this->_internal_allowfollowerread(), target);
   }
 
+  // int32 RegionId = 4;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(4, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -1530,6 +1612,11 @@ size_t ListArgs::ByteSizeLong() const {
     total_size += 1 + 1;
   }
 
+  // int32 RegionId = 4;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -1557,6 +1644,9 @@ void ListArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTO
   if (from._internal_allowfollowerread() != 0) {
     _this->_internal_set_allowfollowerread(from._internal_allowfollowerread());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -1581,8 +1671,8 @@ void ListArgs::InternalSwap(ListArgs* other) {
       &other->_impl_.prefix_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(ListArgs, _impl_.allowfollowerread_)
-      + sizeof(ListArgs::_impl_.allowfollowerread_)
+      PROTOBUF_FIELD_OFFSET(ListArgs, _impl_.regionid_)
+      + sizeof(ListArgs::_impl_.regionid_)
       - PROTOBUF_FIELD_OFFSET(ListArgs, _impl_.limit_)>(
           reinterpret_cast<char*>(&_impl_.limit_),
           reinterpret_cast<char*>(&other->_impl_.limit_));
@@ -2090,6 +2180,7 @@ PutAppendArgs::PutAppendArgs(const PutAppendArgs& from)
     , decltype(_impl_.op_){}
     , decltype(_impl_.clientid_){}
     , decltype(_impl_.requestid_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -2125,7 +2216,9 @@ PutAppendArgs::PutAppendArgs(const PutAppendArgs& from)
     _this->_impl_.clientid_.Set(from._internal_clientid(), 
       _this->GetArenaForAllocation());
   }
-  _this->_impl_.requestid_ = from._impl_.requestid_;
+  ::memcpy(&_impl_.requestid_, &from._impl_.requestid_,
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.requestid_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.PutAppendArgs)
 }
 
@@ -2139,6 +2232,7 @@ inline void PutAppendArgs::SharedCtor(
     , decltype(_impl_.op_){}
     , decltype(_impl_.clientid_){}
     , decltype(_impl_.requestid_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.key_.InitDefault();
@@ -2190,7 +2284,9 @@ void PutAppendArgs::Clear() {
   _impl_.value_.ClearToEmpty();
   _impl_.op_.ClearToEmpty();
   _impl_.clientid_.ClearToEmpty();
-  _impl_.requestid_ = 0;
+  ::memset(&_impl_.requestid_, 0, static_cast<size_t>(
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.requestid_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -2240,6 +2336,14 @@ const char* PutAppendArgs::_InternalParse(const char* ptr, ::_pbi::ParseContext*
       case 5:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 40)) {
           _impl_.requestid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 6;
+      case 6:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 48)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -2303,6 +2407,12 @@ uint8_t* PutAppendArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(5, this->_internal_requestid(), target);
   }
 
+  // int32 RegionId = 6;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(6, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -2352,6 +2462,11 @@ size_t PutAppendArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_requestid());
   }
 
+  // int32 RegionId = 6;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -2384,6 +2499,9 @@ void PutAppendArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::
   }
   if (from._internal_requestid() != 0) {
     _this->_internal_set_requestid(from._internal_requestid());
+  }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
   }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
@@ -2420,7 +2538,12 @@ void PutAppendArgs::InternalSwap(PutAppendArgs* other) {
       &_impl_.clientid_, lhs_arena,
       &other->_impl_.clientid_, rhs_arena
   );
-  swap(_impl_.requestid_, other->_impl_.requestid_);
+  ::PROTOBUF_NAMESPACE_ID::internal::memswap<
+      PROTOBUF_FIELD_OFFSET(PutAppendArgs, _impl_.regionid_)
+      + sizeof(PutAppendArgs::_impl_.regionid_)
+      - PROTOBUF_FIELD_OFFSET(PutAppendArgs, _impl_.requestid_)>(
+          reinterpret_cast<char*>(&_impl_.requestid_),
+          reinterpret_cast<char*>(&other->_impl_.requestid_));
 }
 
 ::PROTOBUF_NAMESPACE_ID::Metadata PutAppendArgs::GetMetadata() const {
@@ -2647,6 +2770,7 @@ TxnGetArgs::TxnGetArgs(const TxnGetArgs& from)
     , decltype(_impl_.clientid_){}
     , decltype(_impl_.readts_){}
     , decltype(_impl_.requestid_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -2667,8 +2791,8 @@ TxnGetArgs::TxnGetArgs(const TxnGetArgs& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.readts_, &from._impl_.readts_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.requestid_) -
-    reinterpret_cast<char*>(&_impl_.readts_)) + sizeof(_impl_.requestid_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.readts_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.TxnGetArgs)
 }
 
@@ -2681,6 +2805,7 @@ inline void TxnGetArgs::SharedCtor(
     , decltype(_impl_.clientid_){}
     , decltype(_impl_.readts_){uint64_t{0u}}
     , decltype(_impl_.requestid_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.key_.InitDefault();
@@ -2721,8 +2846,8 @@ void TxnGetArgs::Clear() {
   _impl_.key_.ClearToEmpty();
   _impl_.clientid_.ClearToEmpty();
   ::memset(&_impl_.readts_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.requestid_) -
-      reinterpret_cast<char*>(&_impl_.readts_)) + sizeof(_impl_.requestid_));
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.readts_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -2762,6 +2887,14 @@ const char* TxnGetArgs::_InternalParse(const char* ptr, ::_pbi::ParseContext* ct
       case 4:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 32)) {
           _impl_.requestid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 5;
+      case 5:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 40)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -2819,6 +2952,12 @@ uint8_t* TxnGetArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(4, this->_internal_requestid(), target);
   }
 
+  // int32 RegionId = 5;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(5, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -2859,6 +2998,11 @@ size_t TxnGetArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_requestid());
   }
 
+  // int32 RegionId = 5;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -2889,6 +3033,9 @@ void TxnGetArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PRO
   if (from._internal_requestid() != 0) {
     _this->_internal_set_requestid(from._internal_requestid());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -2917,8 +3064,8 @@ void TxnGetArgs::InternalSwap(TxnGetArgs* other) {
       &other->_impl_.clientid_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(TxnGetArgs, _impl_.requestid_)
-      + sizeof(TxnGetArgs::_impl_.requestid_)
+      PROTOBUF_FIELD_OFFSET(TxnGetArgs, _impl_.regionid_)
+      + sizeof(TxnGetArgs::_impl_.regionid_)
       - PROTOBUF_FIELD_OFFSET(TxnGetArgs, _impl_.readts_)>(
           reinterpret_cast<char*>(&_impl_.readts_),
           reinterpret_cast<char*>(&other->_impl_.readts_));
@@ -3197,6 +3344,7 @@ TxnPrewriteArgs::TxnPrewriteArgs(const TxnPrewriteArgs& from)
     , decltype(_impl_.ttlms_){}
     , decltype(_impl_.isdelete_){}
     , decltype(_impl_.requestid_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -3233,8 +3381,8 @@ TxnPrewriteArgs::TxnPrewriteArgs(const TxnPrewriteArgs& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.startts_, &from._impl_.startts_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.requestid_) -
-    reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.requestid_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.TxnPrewriteArgs)
 }
 
@@ -3251,6 +3399,7 @@ inline void TxnPrewriteArgs::SharedCtor(
     , decltype(_impl_.ttlms_){uint64_t{0u}}
     , decltype(_impl_.isdelete_){false}
     , decltype(_impl_.requestid_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.key_.InitDefault();
@@ -3303,8 +3452,8 @@ void TxnPrewriteArgs::Clear() {
   _impl_.primarykey_.ClearToEmpty();
   _impl_.clientid_.ClearToEmpty();
   ::memset(&_impl_.startts_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.requestid_) -
-      reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.requestid_));
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -3378,6 +3527,14 @@ const char* TxnPrewriteArgs::_InternalParse(const char* ptr, ::_pbi::ParseContex
       case 8:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 64)) {
           _impl_.requestid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 9;
+      case 9:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 72)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -3459,6 +3616,12 @@ uint8_t* TxnPrewriteArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(8, this->_internal_requestid(), target);
   }
 
+  // int32 RegionId = 9;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(9, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -3523,6 +3686,11 @@ size_t TxnPrewriteArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_requestid());
   }
 
+  // int32 RegionId = 9;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -3565,6 +3733,9 @@ void TxnPrewriteArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const 
   if (from._internal_requestid() != 0) {
     _this->_internal_set_requestid(from._internal_requestid());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -3601,8 +3772,8 @@ void TxnPrewriteArgs::InternalSwap(TxnPrewriteArgs* other) {
       &other->_impl_.clientid_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(TxnPrewriteArgs, _impl_.requestid_)
-      + sizeof(TxnPrewriteArgs::_impl_.requestid_)
+      PROTOBUF_FIELD_OFFSET(TxnPrewriteArgs, _impl_.regionid_)
+      + sizeof(TxnPrewriteArgs::_impl_.regionid_)
       - PROTOBUF_FIELD_OFFSET(TxnPrewriteArgs, _impl_.startts_)>(
           reinterpret_cast<char*>(&_impl_.startts_),
           reinterpret_cast<char*>(&other->_impl_.startts_));
@@ -3833,6 +4004,7 @@ TxnCommitArgs::TxnCommitArgs(const TxnCommitArgs& from)
     , decltype(_impl_.startts_){}
     , decltype(_impl_.committs_){}
     , decltype(_impl_.requestid_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -3853,8 +4025,8 @@ TxnCommitArgs::TxnCommitArgs(const TxnCommitArgs& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.startts_, &from._impl_.startts_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.requestid_) -
-    reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.requestid_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.TxnCommitArgs)
 }
 
@@ -3868,6 +4040,7 @@ inline void TxnCommitArgs::SharedCtor(
     , decltype(_impl_.startts_){uint64_t{0u}}
     , decltype(_impl_.committs_){uint64_t{0u}}
     , decltype(_impl_.requestid_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.key_.InitDefault();
@@ -3908,8 +4081,8 @@ void TxnCommitArgs::Clear() {
   _impl_.key_.ClearToEmpty();
   _impl_.clientid_.ClearToEmpty();
   ::memset(&_impl_.startts_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.requestid_) -
-      reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.requestid_));
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -3957,6 +4130,14 @@ const char* TxnCommitArgs::_InternalParse(const char* ptr, ::_pbi::ParseContext*
       case 5:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 40)) {
           _impl_.requestid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 6;
+      case 6:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 48)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -4020,6 +4201,12 @@ uint8_t* TxnCommitArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(5, this->_internal_requestid(), target);
   }
 
+  // int32 RegionId = 6;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(6, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -4065,6 +4252,11 @@ size_t TxnCommitArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_requestid());
   }
 
+  // int32 RegionId = 6;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -4098,6 +4290,9 @@ void TxnCommitArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::
   if (from._internal_requestid() != 0) {
     _this->_internal_set_requestid(from._internal_requestid());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -4126,8 +4321,8 @@ void TxnCommitArgs::InternalSwap(TxnCommitArgs* other) {
       &other->_impl_.clientid_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(TxnCommitArgs, _impl_.requestid_)
-      + sizeof(TxnCommitArgs::_impl_.requestid_)
+      PROTOBUF_FIELD_OFFSET(TxnCommitArgs, _impl_.regionid_)
+      + sizeof(TxnCommitArgs::_impl_.regionid_)
       - PROTOBUF_FIELD_OFFSET(TxnCommitArgs, _impl_.startts_)>(
           reinterpret_cast<char*>(&_impl_.startts_),
           reinterpret_cast<char*>(&other->_impl_.startts_));
@@ -4357,6 +4552,7 @@ TxnRollbackArgs::TxnRollbackArgs(const TxnRollbackArgs& from)
     , decltype(_impl_.clientid_){}
     , decltype(_impl_.startts_){}
     , decltype(_impl_.requestid_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -4377,8 +4573,8 @@ TxnRollbackArgs::TxnRollbackArgs(const TxnRollbackArgs& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.startts_, &from._impl_.startts_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.requestid_) -
-    reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.requestid_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.TxnRollbackArgs)
 }
 
@@ -4391,6 +4587,7 @@ inline void TxnRollbackArgs::SharedCtor(
     , decltype(_impl_.clientid_){}
     , decltype(_impl_.startts_){uint64_t{0u}}
     , decltype(_impl_.requestid_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.key_.InitDefault();
@@ -4431,8 +4628,8 @@ void TxnRollbackArgs::Clear() {
   _impl_.key_.ClearToEmpty();
   _impl_.clientid_.ClearToEmpty();
   ::memset(&_impl_.startts_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.requestid_) -
-      reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.requestid_));
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -4472,6 +4669,14 @@ const char* TxnRollbackArgs::_InternalParse(const char* ptr, ::_pbi::ParseContex
       case 4:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 32)) {
           _impl_.requestid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 5;
+      case 5:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 40)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -4529,6 +4734,12 @@ uint8_t* TxnRollbackArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(4, this->_internal_requestid(), target);
   }
 
+  // int32 RegionId = 5;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(5, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -4569,6 +4780,11 @@ size_t TxnRollbackArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_requestid());
   }
 
+  // int32 RegionId = 5;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -4599,6 +4815,9 @@ void TxnRollbackArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const 
   if (from._internal_requestid() != 0) {
     _this->_internal_set_requestid(from._internal_requestid());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -4627,8 +4846,8 @@ void TxnRollbackArgs::InternalSwap(TxnRollbackArgs* other) {
       &other->_impl_.clientid_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(TxnRollbackArgs, _impl_.requestid_)
-      + sizeof(TxnRollbackArgs::_impl_.requestid_)
+      PROTOBUF_FIELD_OFFSET(TxnRollbackArgs, _impl_.regionid_)
+      + sizeof(TxnRollbackArgs::_impl_.regionid_)
       - PROTOBUF_FIELD_OFFSET(TxnRollbackArgs, _impl_.startts_)>(
           reinterpret_cast<char*>(&_impl_.startts_),
           reinterpret_cast<char*>(&other->_impl_.startts_));
@@ -4855,6 +5074,7 @@ TxnGetLockArgs::TxnGetLockArgs(const TxnGetLockArgs& from)
   TxnGetLockArgs* const _this = this; (void)_this;
   new (&_impl_) Impl_{
       decltype(_impl_.key_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -4866,6 +5086,7 @@ TxnGetLockArgs::TxnGetLockArgs(const TxnGetLockArgs& from)
     _this->_impl_.key_.Set(from._internal_key(), 
       _this->GetArenaForAllocation());
   }
+  _this->_impl_.regionid_ = from._impl_.regionid_;
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.TxnGetLockArgs)
 }
 
@@ -4875,6 +5096,7 @@ inline void TxnGetLockArgs::SharedCtor(
   (void)is_message_owned;
   new (&_impl_) Impl_{
       decltype(_impl_.key_){}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.key_.InitDefault();
@@ -4908,6 +5130,7 @@ void TxnGetLockArgs::Clear() {
   (void) cached_has_bits;
 
   _impl_.key_.ClearToEmpty();
+  _impl_.regionid_ = 0;
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -4922,6 +5145,14 @@ const char* TxnGetLockArgs::_InternalParse(const char* ptr, ::_pbi::ParseContext
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 10)) {
           auto str = _internal_mutable_key();
           ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 2;
+      case 2:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 16)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -4961,6 +5192,12 @@ uint8_t* TxnGetLockArgs::_InternalSerialize(
         1, this->_internal_key(), target);
   }
 
+  // int32 RegionId = 2;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(2, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -4984,6 +5221,11 @@ size_t TxnGetLockArgs::ByteSizeLong() const {
         this->_internal_key());
   }
 
+  // int32 RegionId = 2;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -5004,6 +5246,9 @@ void TxnGetLockArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const :
 
   if (!from._internal_key().empty()) {
     _this->_internal_set_key(from._internal_key());
+  }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
   }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
@@ -5028,6 +5273,7 @@ void TxnGetLockArgs::InternalSwap(TxnGetLockArgs* other) {
       &_impl_.key_, lhs_arena,
       &other->_impl_.key_, rhs_arena
   );
+  swap(_impl_.regionid_, other->_impl_.regionid_);
 }
 
 ::PROTOBUF_NAMESPACE_ID::Metadata TxnGetLockArgs::GetMetadata() const {
@@ -5502,6 +5748,7 @@ TxnAcquirePessimisticLockArgs::TxnAcquirePessimisticLockArgs(const TxnAcquirePes
     , decltype(_impl_.startts_){}
     , decltype(_impl_.ttlms_){}
     , decltype(_impl_.requestid_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -5530,8 +5777,8 @@ TxnAcquirePessimisticLockArgs::TxnAcquirePessimisticLockArgs(const TxnAcquirePes
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.startts_, &from._impl_.startts_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.requestid_) -
-    reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.requestid_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.TxnAcquirePessimisticLockArgs)
 }
 
@@ -5546,6 +5793,7 @@ inline void TxnAcquirePessimisticLockArgs::SharedCtor(
     , decltype(_impl_.startts_){uint64_t{0u}}
     , decltype(_impl_.ttlms_){uint64_t{0u}}
     , decltype(_impl_.requestid_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.key_.InitDefault();
@@ -5592,8 +5840,8 @@ void TxnAcquirePessimisticLockArgs::Clear() {
   _impl_.primarykey_.ClearToEmpty();
   _impl_.clientid_.ClearToEmpty();
   ::memset(&_impl_.startts_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.requestid_) -
-      reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.requestid_));
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -5650,6 +5898,14 @@ const char* TxnAcquirePessimisticLockArgs::_InternalParse(const char* ptr, ::_pb
       case 6:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 48)) {
           _impl_.requestid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 7;
+      case 7:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 56)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -5719,6 +5975,12 @@ uint8_t* TxnAcquirePessimisticLockArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(6, this->_internal_requestid(), target);
   }
 
+  // int32 RegionId = 7;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(7, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -5771,6 +6033,11 @@ size_t TxnAcquirePessimisticLockArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_requestid());
   }
 
+  // int32 RegionId = 7;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -5807,6 +6074,9 @@ void TxnAcquirePessimisticLockArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& 
   if (from._internal_requestid() != 0) {
     _this->_internal_set_requestid(from._internal_requestid());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -5839,8 +6109,8 @@ void TxnAcquirePessimisticLockArgs::InternalSwap(TxnAcquirePessimisticLockArgs* 
       &other->_impl_.clientid_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(TxnAcquirePessimisticLockArgs, _impl_.requestid_)
-      + sizeof(TxnAcquirePessimisticLockArgs::_impl_.requestid_)
+      PROTOBUF_FIELD_OFFSET(TxnAcquirePessimisticLockArgs, _impl_.regionid_)
+      + sizeof(TxnAcquirePessimisticLockArgs::_impl_.regionid_)
       - PROTOBUF_FIELD_OFFSET(TxnAcquirePessimisticLockArgs, _impl_.startts_)>(
           reinterpret_cast<char*>(&_impl_.startts_),
           reinterpret_cast<char*>(&other->_impl_.startts_));
@@ -6068,6 +6338,7 @@ TxnFindCommitTsArgs::TxnFindCommitTsArgs(const TxnFindCommitTsArgs& from)
   new (&_impl_) Impl_{
       decltype(_impl_.key_){}
     , decltype(_impl_.startts_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -6079,7 +6350,9 @@ TxnFindCommitTsArgs::TxnFindCommitTsArgs(const TxnFindCommitTsArgs& from)
     _this->_impl_.key_.Set(from._internal_key(), 
       _this->GetArenaForAllocation());
   }
-  _this->_impl_.startts_ = from._impl_.startts_;
+  ::memcpy(&_impl_.startts_, &from._impl_.startts_,
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.TxnFindCommitTsArgs)
 }
 
@@ -6090,6 +6363,7 @@ inline void TxnFindCommitTsArgs::SharedCtor(
   new (&_impl_) Impl_{
       decltype(_impl_.key_){}
     , decltype(_impl_.startts_){uint64_t{0u}}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.key_.InitDefault();
@@ -6123,7 +6397,9 @@ void TxnFindCommitTsArgs::Clear() {
   (void) cached_has_bits;
 
   _impl_.key_.ClearToEmpty();
-  _impl_.startts_ = uint64_t{0u};
+  ::memset(&_impl_.startts_, 0, static_cast<size_t>(
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.startts_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -6146,6 +6422,14 @@ const char* TxnFindCommitTsArgs::_InternalParse(const char* ptr, ::_pbi::ParseCo
       case 2:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 16)) {
           _impl_.startts_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 3;
+      case 3:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 24)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -6191,6 +6475,12 @@ uint8_t* TxnFindCommitTsArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteUInt64ToArray(2, this->_internal_startts(), target);
   }
 
+  // int32 RegionId = 3;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(3, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -6219,6 +6509,11 @@ size_t TxnFindCommitTsArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_startts());
   }
 
+  // int32 RegionId = 3;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -6243,6 +6538,9 @@ void TxnFindCommitTsArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, co
   if (from._internal_startts() != 0) {
     _this->_internal_set_startts(from._internal_startts());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -6266,7 +6564,12 @@ void TxnFindCommitTsArgs::InternalSwap(TxnFindCommitTsArgs* other) {
       &_impl_.key_, lhs_arena,
       &other->_impl_.key_, rhs_arena
   );
-  swap(_impl_.startts_, other->_impl_.startts_);
+  ::PROTOBUF_NAMESPACE_ID::internal::memswap<
+      PROTOBUF_FIELD_OFFSET(TxnFindCommitTsArgs, _impl_.regionid_)
+      + sizeof(TxnFindCommitTsArgs::_impl_.regionid_)
+      - PROTOBUF_FIELD_OFFSET(TxnFindCommitTsArgs, _impl_.startts_)>(
+          reinterpret_cast<char*>(&_impl_.startts_),
+          reinterpret_cast<char*>(&other->_impl_.startts_));
 }
 
 ::PROTOBUF_NAMESPACE_ID::Metadata TxnFindCommitTsArgs::GetMetadata() const {
@@ -6550,10 +6853,13 @@ TxnExpiredLocksArgs::TxnExpiredLocksArgs(const TxnExpiredLocksArgs& from)
   TxnExpiredLocksArgs* const _this = this; (void)_this;
   new (&_impl_) Impl_{
       decltype(_impl_.nowms_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
-  _this->_impl_.nowms_ = from._impl_.nowms_;
+  ::memcpy(&_impl_.nowms_, &from._impl_.nowms_,
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.nowms_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.TxnExpiredLocksArgs)
 }
 
@@ -6563,6 +6869,7 @@ inline void TxnExpiredLocksArgs::SharedCtor(
   (void)is_message_owned;
   new (&_impl_) Impl_{
       decltype(_impl_.nowms_){uint64_t{0u}}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
 }
@@ -6590,7 +6897,9 @@ void TxnExpiredLocksArgs::Clear() {
   // Prevent compiler warnings about cached_has_bits being unused
   (void) cached_has_bits;
 
-  _impl_.nowms_ = uint64_t{0u};
+  ::memset(&_impl_.nowms_, 0, static_cast<size_t>(
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.nowms_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -6604,6 +6913,14 @@ const char* TxnExpiredLocksArgs::_InternalParse(const char* ptr, ::_pbi::ParseCo
       case 1:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 8)) {
           _impl_.nowms_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 2;
+      case 2:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 16)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -6643,6 +6960,12 @@ uint8_t* TxnExpiredLocksArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteUInt64ToArray(1, this->_internal_nowms(), target);
   }
 
+  // int32 RegionId = 2;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(2, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -6662,6 +6985,11 @@ size_t TxnExpiredLocksArgs::ByteSizeLong() const {
   // uint64 NowMs = 1;
   if (this->_internal_nowms() != 0) {
     total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_nowms());
+  }
+
+  // int32 RegionId = 2;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
   }
 
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
@@ -6685,6 +7013,9 @@ void TxnExpiredLocksArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, co
   if (from._internal_nowms() != 0) {
     _this->_internal_set_nowms(from._internal_nowms());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -6702,7 +7033,12 @@ bool TxnExpiredLocksArgs::IsInitialized() const {
 void TxnExpiredLocksArgs::InternalSwap(TxnExpiredLocksArgs* other) {
   using std::swap;
   _internal_metadata_.InternalSwap(&other->_internal_metadata_);
-  swap(_impl_.nowms_, other->_impl_.nowms_);
+  ::PROTOBUF_NAMESPACE_ID::internal::memswap<
+      PROTOBUF_FIELD_OFFSET(TxnExpiredLocksArgs, _impl_.regionid_)
+      + sizeof(TxnExpiredLocksArgs::_impl_.regionid_)
+      - PROTOBUF_FIELD_OFFSET(TxnExpiredLocksArgs, _impl_.nowms_)>(
+          reinterpret_cast<char*>(&_impl_.nowms_),
+          reinterpret_cast<char*>(&other->_impl_.nowms_));
 }
 
 ::PROTOBUF_NAMESPACE_ID::Metadata TxnExpiredLocksArgs::GetMetadata() const {
@@ -6996,6 +7332,7 @@ TxnGarbageCollectArgs::TxnGarbageCollectArgs(const TxnGarbageCollectArgs& from)
       decltype(_impl_.clientid_){}
     , decltype(_impl_.safepointts_){}
     , decltype(_impl_.requestid_){}
+    , decltype(_impl_.regionid_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -7008,8 +7345,8 @@ TxnGarbageCollectArgs::TxnGarbageCollectArgs(const TxnGarbageCollectArgs& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.safepointts_, &from._impl_.safepointts_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.requestid_) -
-    reinterpret_cast<char*>(&_impl_.safepointts_)) + sizeof(_impl_.requestid_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.regionid_) -
+    reinterpret_cast<char*>(&_impl_.safepointts_)) + sizeof(_impl_.regionid_));
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.TxnGarbageCollectArgs)
 }
 
@@ -7021,6 +7358,7 @@ inline void TxnGarbageCollectArgs::SharedCtor(
       decltype(_impl_.clientid_){}
     , decltype(_impl_.safepointts_){uint64_t{0u}}
     , decltype(_impl_.requestid_){0}
+    , decltype(_impl_.regionid_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.clientid_.InitDefault();
@@ -7055,8 +7393,8 @@ void TxnGarbageCollectArgs::Clear() {
 
   _impl_.clientid_.ClearToEmpty();
   ::memset(&_impl_.safepointts_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.requestid_) -
-      reinterpret_cast<char*>(&_impl_.safepointts_)) + sizeof(_impl_.requestid_));
+      reinterpret_cast<char*>(&_impl_.regionid_) -
+      reinterpret_cast<char*>(&_impl_.safepointts_)) + sizeof(_impl_.regionid_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -7087,6 +7425,14 @@ const char* TxnGarbageCollectArgs::_InternalParse(const char* ptr, ::_pbi::Parse
       case 3:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 24)) {
           _impl_.requestid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 RegionId = 4;
+      case 4:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 32)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -7138,6 +7484,12 @@ uint8_t* TxnGarbageCollectArgs::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(3, this->_internal_requestid(), target);
   }
 
+  // int32 RegionId = 4;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(4, this->_internal_regionid(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -7171,6 +7523,11 @@ size_t TxnGarbageCollectArgs::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_requestid());
   }
 
+  // int32 RegionId = 4;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -7198,6 +7555,9 @@ void TxnGarbageCollectArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, 
   if (from._internal_requestid() != 0) {
     _this->_internal_set_requestid(from._internal_requestid());
   }
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -7222,8 +7582,8 @@ void TxnGarbageCollectArgs::InternalSwap(TxnGarbageCollectArgs* other) {
       &other->_impl_.clientid_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(TxnGarbageCollectArgs, _impl_.requestid_)
-      + sizeof(TxnGarbageCollectArgs::_impl_.requestid_)
+      PROTOBUF_FIELD_OFFSET(TxnGarbageCollectArgs, _impl_.regionid_)
+      + sizeof(TxnGarbageCollectArgs::_impl_.regionid_)
       - PROTOBUF_FIELD_OFFSET(TxnGarbageCollectArgs, _impl_.safepointts_)>(
           reinterpret_cast<char*>(&_impl_.safepointts_),
           reinterpret_cast<char*>(&other->_impl_.safepointts_));
@@ -7468,31 +7828,169 @@ class TxnMaxObservedTsArgs::_Internal {
 
 TxnMaxObservedTsArgs::TxnMaxObservedTsArgs(::PROTOBUF_NAMESPACE_ID::Arena* arena,
                          bool is_message_owned)
-  : ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase(arena, is_message_owned) {
+  : ::PROTOBUF_NAMESPACE_ID::Message(arena, is_message_owned) {
+  SharedCtor(arena, is_message_owned);
   // @@protoc_insertion_point(arena_constructor:raftKVRpcProctoc.TxnMaxObservedTsArgs)
 }
 TxnMaxObservedTsArgs::TxnMaxObservedTsArgs(const TxnMaxObservedTsArgs& from)
-  : ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase() {
+  : ::PROTOBUF_NAMESPACE_ID::Message() {
   TxnMaxObservedTsArgs* const _this = this; (void)_this;
+  new (&_impl_) Impl_{
+      decltype(_impl_.regionid_){}
+    , /*decltype(_impl_._cached_size_)*/{}};
+
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+  _this->_impl_.regionid_ = from._impl_.regionid_;
   // @@protoc_insertion_point(copy_constructor:raftKVRpcProctoc.TxnMaxObservedTsArgs)
 }
 
+inline void TxnMaxObservedTsArgs::SharedCtor(
+    ::_pb::Arena* arena, bool is_message_owned) {
+  (void)arena;
+  (void)is_message_owned;
+  new (&_impl_) Impl_{
+      decltype(_impl_.regionid_){0}
+    , /*decltype(_impl_._cached_size_)*/{}
+  };
+}
 
+TxnMaxObservedTsArgs::~TxnMaxObservedTsArgs() {
+  // @@protoc_insertion_point(destructor:raftKVRpcProctoc.TxnMaxObservedTsArgs)
+  if (auto *arena = _internal_metadata_.DeleteReturnArena<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>()) {
+  (void)arena;
+    return;
+  }
+  SharedDtor();
+}
 
+inline void TxnMaxObservedTsArgs::SharedDtor() {
+  GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
+}
 
+void TxnMaxObservedTsArgs::SetCachedSize(int size) const {
+  _impl_._cached_size_.Set(size);
+}
+
+void TxnMaxObservedTsArgs::Clear() {
+// @@protoc_insertion_point(message_clear_start:raftKVRpcProctoc.TxnMaxObservedTsArgs)
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  _impl_.regionid_ = 0;
+  _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
+}
+
+const char* TxnMaxObservedTsArgs::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx) {
+#define CHK_(x) if (PROTOBUF_PREDICT_FALSE(!(x))) goto failure
+  while (!ctx->Done(&ptr)) {
+    uint32_t tag;
+    ptr = ::_pbi::ReadTag(ptr, &tag);
+    switch (tag >> 3) {
+      // int32 RegionId = 1;
+      case 1:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 8)) {
+          _impl_.regionid_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      default:
+        goto handle_unusual;
+    }  // switch
+  handle_unusual:
+    if ((tag == 0) || ((tag & 7) == 4)) {
+      CHK_(ptr);
+      ctx->SetLastTag(tag);
+      goto message_done;
+    }
+    ptr = UnknownFieldParse(
+        tag,
+        _internal_metadata_.mutable_unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(),
+        ptr, ctx);
+    CHK_(ptr != nullptr);
+  }  // while
+message_done:
+  return ptr;
+failure:
+  ptr = nullptr;
+  goto message_done;
+#undef CHK_
+}
+
+uint8_t* TxnMaxObservedTsArgs::_InternalSerialize(
+    uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const {
+  // @@protoc_insertion_point(serialize_to_array_start:raftKVRpcProctoc.TxnMaxObservedTsArgs)
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  // int32 RegionId = 1;
+  if (this->_internal_regionid() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(1, this->_internal_regionid(), target);
+  }
+
+  if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
+    target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
+        _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:raftKVRpcProctoc.TxnMaxObservedTsArgs)
+  return target;
+}
+
+size_t TxnMaxObservedTsArgs::ByteSizeLong() const {
+// @@protoc_insertion_point(message_byte_size_start:raftKVRpcProctoc.TxnMaxObservedTsArgs)
+  size_t total_size = 0;
+
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  // int32 RegionId = 1;
+  if (this->_internal_regionid() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_regionid());
+  }
+
+  return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
+}
 
 const ::PROTOBUF_NAMESPACE_ID::Message::ClassData TxnMaxObservedTsArgs::_class_data_ = {
-    ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::CopyImpl,
-    ::PROTOBUF_NAMESPACE_ID::internal::ZeroFieldsBase::MergeImpl,
+    ::PROTOBUF_NAMESPACE_ID::Message::CopyWithSourceCheck,
+    TxnMaxObservedTsArgs::MergeImpl
 };
 const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*TxnMaxObservedTsArgs::GetClassData() const { return &_class_data_; }
 
 
+void TxnMaxObservedTsArgs::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg) {
+  auto* const _this = static_cast<TxnMaxObservedTsArgs*>(&to_msg);
+  auto& from = static_cast<const TxnMaxObservedTsArgs&>(from_msg);
+  // @@protoc_insertion_point(class_specific_merge_from_start:raftKVRpcProctoc.TxnMaxObservedTsArgs)
+  GOOGLE_DCHECK_NE(&from, _this);
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
 
+  if (from._internal_regionid() != 0) {
+    _this->_internal_set_regionid(from._internal_regionid());
+  }
+  _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+}
 
+void TxnMaxObservedTsArgs::CopyFrom(const TxnMaxObservedTsArgs& from) {
+// @@protoc_insertion_point(class_specific_copy_from_start:raftKVRpcProctoc.TxnMaxObservedTsArgs)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
 
+bool TxnMaxObservedTsArgs::IsInitialized() const {
+  return true;
+}
 
+void TxnMaxObservedTsArgs::InternalSwap(TxnMaxObservedTsArgs* other) {
+  using std::swap;
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  swap(_impl_.regionid_, other->_impl_.regionid_);
+}
 
 ::PROTOBUF_NAMESPACE_ID::Metadata TxnMaxObservedTsArgs::GetMetadata() const {
   return ::_pbi::AssignDescriptors(

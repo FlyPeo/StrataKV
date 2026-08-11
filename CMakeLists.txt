@@ -80,7 +80,8 @@ target_link_libraries(stratakv_core
 )
 
 # 可部署的单节点进程。通过不同的 node-id、端口和集群配置启动三个实例，组成一个 Raft group。
-add_executable(stratakv-node src/server/node_main.cpp)
+add_executable(stratakv-node src/server/node_main.cpp src/server/node_server.cpp)
+target_include_directories(stratakv-node PRIVATE ${PROJECT_SOURCE_DIR}/src/server)
 target_link_libraries(stratakv-node PRIVATE stratakv_core)
 
 # 面向部署用户的最小 KV 客户端。自动在配置的 peer 中寻找当前 Leader。

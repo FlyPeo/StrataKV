@@ -54,7 +54,7 @@ class RaftMvccStorage : public MvccStorage {
   std::atomic<int> recentLeaderId_;
   std::string clientId_;
   std::atomic<int> requestId_;
-  // KvServer's duplicate table stores the greatest applied request ID per
+  // RegionPeer's duplicate table stores the greatest applied request ID per
   // client. Replicated transaction mutations from one client therefore must be
   // issued in order. Read-only maintenance RPCs do not take this lock.
   std::mutex mutationMutex_;

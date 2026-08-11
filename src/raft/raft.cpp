@@ -538,7 +538,7 @@ void Raft::InstallSnapshot(const raftRpcProctoc::InstallSnapshotRequest* args,
   msg.SnapshotTerm = args->lastsnapshotincludeterm();
   msg.SnapshotIndex = args->lastsnapshotincludeindex();
 
-  std::thread t(&Raft::pushMsgToKvServer, this, msg);  // 创建新线程并执行b函数，并传递参数
+  std::thread t(&Raft::pushMsgToRegionPeer, this, msg);  // 创建新线程并执行b函数，并传递参数
   t.detach();
   //看下这里能不能再优化
   //    DPrintf("[func-InstallSnapshot-rf{%v}] receive snapshot from {%v} ,LastSnapShotIncludeIndex ={%v} ", rf.me,
@@ -547,7 +547,7 @@ void Raft::InstallSnapshot(const raftRpcProctoc::InstallSnapshotRequest* args,
   m_persister->Save(persistData(), args->data());
 }
 
-void Raft::pushMsgToKvServer(ApplyMsg msg) { applyChan->Push(msg); }
+void Raft::pushMsgToRegionPeer(ApplyMsg msg) { applyChan->Push(msg); }
 
 void Raft::leaderHearBeatTicker() {
   while (true) {

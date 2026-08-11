@@ -100,9 +100,12 @@ bash deploy/stratakv-client batch --project my-db deploy/examples/bulk-demo.txn
 | 日志 | `deploy/runtime/my-db/logs/` |
 | 节点数据 | `deploy/runtime/my-db/node-N/run_data/` |
 | Gateway | `127.0.0.1:8080` |
-| Region 100 | `127.0.0.1:26200-26202` |
-| Region 101 | `127.0.0.1:26300-26302` |
-| Region 102 | `127.0.0.1:26400-26402` |
+| node-0 shared RPC | `127.0.0.1:26200` |
+| node-1 shared RPC | `127.0.0.1:26201` |
+| node-2 shared RPC | `127.0.0.1:26202` |
+
+每个物理节点只有一个 `NodeServer`/`RpcProvider`。三个 Region 的 KV 与
+Raft RPC 共享该节点端口，并通过 `RegionId` 路由到各自的 `RegionPeer`。
 
 查看日志：
 
