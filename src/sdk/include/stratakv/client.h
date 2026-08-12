@@ -26,6 +26,10 @@ struct Result {
   bool ok() const { return status == Status::kOk || status == Status::kAlreadyCommitted; }
 };
 
+struct ClientMetrics {
+  uint64_t rollbackRegionCount = 0;
+};
+
 const char* StatusName(Status status);
 
 class Transaction {
@@ -53,6 +57,7 @@ class Client {
   Result Delete(const std::shared_ptr<Transaction>& transaction, const std::string& key);
   Result Commit(const std::shared_ptr<Transaction>& transaction);
   Result Rollback(const std::shared_ptr<Transaction>& transaction);
+  ClientMetrics Metrics() const;
 
  private:
   struct Impl;

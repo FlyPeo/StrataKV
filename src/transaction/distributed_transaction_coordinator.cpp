@@ -7,6 +7,7 @@
 #include <iostream>
 #include <map>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include "bounded_thread_pool.h"
@@ -126,6 +127,7 @@ TxnStatus DistributedTransactionCoordinator::Commit(const Transaction& txn, cons
     for (const auto& key : txn.PessimisticLocks()) {
       router_->Route(key)->Rollback(key, txn.StartTs());
     }
+    RecordRollbackRegions(txn.PessimisticLocks());
     return TxnStatus::Ok;
   }
 
@@ -191,6 +193,9 @@ TxnStatus DistributedTransactionCoordinator::Commit(const Transaction& txn, cons
     for (const auto& key : txn.PessimisticLocks()) {
       router_->Route(key)->Rollback(key, txn.StartTs());
     }
+    std::vector<std::string> rollbackKeys = prewritten;
+    rollbackKeys.insert(rollbackKeys.end(), txn.PessimisticLocks().begin(), txn.PessimisticLocks().end());
+    RecordRollbackRegions(rollbackKeys);
     return firstError;
   }
 
@@ -205,6 +210,11 @@ TxnStatus DistributedTransactionCoordinator::Commit(const Transaction& txn, cons
         router_->Route(key)->Rollback(key, txn.StartTs());
       }
     }
+    std::vector<std::string> rollbackKeys = prewritten;
+    for (const auto& key : txn.PessimisticLocks()) {
+      if (!HasMutation(txn, key)) rollbackKeys.push_back(key);
+    }
+    RecordRollbackRegions(rollbackKeys);
     return primaryStatus;
   }
 
@@ -276,14 +286,28 @@ TxnStatus DistributedTransactionCoordinator::Commit(const Transaction& txn, cons
 
 // 主动回滚一个分布式事务，把它在各个 shard 上留下的记录都清理掉。
 void DistributedTransactionCoordinator::Rollback(const Transaction& txn) {
+  std::vector<std::string> rollbackKeys;
   for (const auto& mutation : txn.Mutations()) {
     router_->Route(mutation.first)->Rollback(mutation.first, txn.StartTs());
+    rollbackKeys.push_back(mutation.first);
   }
   for (const auto& key : txn.PessimisticLocks()) {
     if (txn.Mutations().find(key) == txn.Mutations().end()) {
       router_->Route(key)->Rollback(key, txn.StartTs());
+      rollbackKeys.push_back(key);
     }
   }
+  RecordRollbackRegions(rollbackKeys);
+}
+
+void DistributedTransactionCoordinator::RecordRollbackRegions(const std::vector<std::string>& keys) {
+  std::unordered_set<size_t> regions;
+  for (const auto& key : keys) regions.insert(router_->ShardId(key));
+  rollbackRegionCount_.fetch_add(regions.size(), std::memory_order_relaxed);
+}
+
+DistributedTxnMetrics DistributedTransactionCoordinator::Metrics() const {
+  return {rollbackRegionCount_.load(std::memory_order_relaxed)};
 }
 
 // 触发全局锁解析器扫描所有 shard 的过期锁，并推动它们进入提交或回滚。

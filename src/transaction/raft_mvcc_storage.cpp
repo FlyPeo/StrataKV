@@ -48,6 +48,13 @@ RaftMvccStorage::RaftMvccStorage(int shardId, const std::vector<std::pair<std::s
       requestId_(0),
       maintenanceClientId_(Uuid()),
       maintenanceRequestId_(0) {
+  constexpr size_t kMutationLaneCount = 16;
+  mutationLanes_.reserve(kMutationLaneCount);
+  for (size_t index = 0; index < kMutationLaneCount; ++index) {
+    auto lane = std::make_unique<MutationLane>();
+    lane->clientId = clientId_ + "-mutation-" + std::to_string(index);
+    mutationLanes_.push_back(std::move(lane));
+  }
   for (const auto& addr : addresses_) {
     auto channel = std::make_unique<MprpcChannel>(addr.first, addr.second, false);
     auto stub = std::make_unique<raftKVRpcProctoc::kvServerRpc_Stub>(channel.get());
@@ -57,6 +64,11 @@ RaftMvccStorage::RaftMvccStorage(int shardId, const std::vector<std::pair<std::s
 }
 
 RaftMvccStorage::~RaftMvccStorage() {}
+
+RaftMvccStorage::MutationLane& RaftMvccStorage::PickMutationLane() {
+  const size_t index = nextMutationLane_.fetch_add(1, std::memory_order_relaxed) % mutationLanes_.size();
+  return *mutationLanes_[index];
+}
 
 TxnStatus RaftMvccStorage::Get(const std::string& key, uint64_t readTs, std::string* value) {
   const int reqId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -97,8 +109,9 @@ TxnStatus RaftMvccStorage::Get(const std::string& key, uint64_t readTs, std::str
 
 TxnStatus RaftMvccStorage::Prewrite(const std::string& key, const std::string& value, const std::string& primaryKey,
                                    uint64_t startTs, uint64_t ttlMs) {
-  std::lock_guard<std::mutex> mutationLock(mutationMutex_);
-  const int reqId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
+  MutationLane& lane = PickMutationLane();
+  std::lock_guard<std::mutex> mutationLock(lane.mutex);
+  const int reqId = ++lane.requestId;
   int server = recentLeaderId_.load(std::memory_order_relaxed);
 
   int attempt = 0;
@@ -111,7 +124,7 @@ TxnStatus RaftMvccStorage::Prewrite(const std::string& key, const std::string& v
     args.set_startts(startTs);
     args.set_ttlms(ttlMs);
     args.set_isdelete(false);
-    args.set_clientid(clientId_);
+    args.set_clientid(lane.clientId);
     args.set_requestid(reqId);
 
     raftKVRpcProctoc::TxnPrewriteReply reply;
@@ -136,8 +149,9 @@ TxnStatus RaftMvccStorage::Prewrite(const std::string& key, const std::string& v
 
 TxnStatus RaftMvccStorage::PrewriteDelete(const std::string& key, const std::string& primaryKey, uint64_t startTs,
                                          uint64_t ttlMs) {
-  std::lock_guard<std::mutex> mutationLock(mutationMutex_);
-  const int reqId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
+  MutationLane& lane = PickMutationLane();
+  std::lock_guard<std::mutex> mutationLock(lane.mutex);
+  const int reqId = ++lane.requestId;
   int server = recentLeaderId_.load(std::memory_order_relaxed);
 
   int attempt = 0;
@@ -150,7 +164,7 @@ TxnStatus RaftMvccStorage::PrewriteDelete(const std::string& key, const std::str
     args.set_startts(startTs);
     args.set_ttlms(ttlMs);
     args.set_isdelete(true);
-    args.set_clientid(clientId_);
+    args.set_clientid(lane.clientId);
     args.set_requestid(reqId);
 
     raftKVRpcProctoc::TxnPrewriteReply reply;
@@ -173,8 +187,9 @@ TxnStatus RaftMvccStorage::PrewriteDelete(const std::string& key, const std::str
 
 TxnStatus RaftMvccStorage::AcquirePessimisticLock(const std::string& key, const std::string& primaryKey,
                                                  uint64_t startTs, uint64_t ttlMs) {
-  std::lock_guard<std::mutex> mutationLock(mutationMutex_);
-  const int reqId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
+  MutationLane& lane = PickMutationLane();
+  std::lock_guard<std::mutex> mutationLock(lane.mutex);
+  const int reqId = ++lane.requestId;
   int server = recentLeaderId_.load(std::memory_order_relaxed);
 
   int attempt = 0;
@@ -185,7 +200,7 @@ TxnStatus RaftMvccStorage::AcquirePessimisticLock(const std::string& key, const 
     args.set_primarykey(primaryKey);
     args.set_startts(startTs);
     args.set_ttlms(ttlMs);
-    args.set_clientid(clientId_);
+    args.set_clientid(lane.clientId);
     args.set_requestid(reqId);
 
     raftKVRpcProctoc::TxnAcquirePessimisticLockReply reply;
@@ -207,8 +222,9 @@ TxnStatus RaftMvccStorage::AcquirePessimisticLock(const std::string& key, const 
 }
 
 TxnStatus RaftMvccStorage::Commit(const std::string& key, uint64_t startTs, uint64_t commitTs) {
-  std::lock_guard<std::mutex> mutationLock(mutationMutex_);
-  const int reqId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
+  MutationLane& lane = PickMutationLane();
+  std::lock_guard<std::mutex> mutationLock(lane.mutex);
+  const int reqId = ++lane.requestId;
   int server = recentLeaderId_.load(std::memory_order_relaxed);
 
   int attempt = 0;
@@ -218,7 +234,7 @@ TxnStatus RaftMvccStorage::Commit(const std::string& key, uint64_t startTs, uint
     args.set_key(key);
     args.set_startts(startTs);
     args.set_committs(commitTs);
-    args.set_clientid(clientId_);
+    args.set_clientid(lane.clientId);
     args.set_requestid(reqId);
 
     raftKVRpcProctoc::TxnCommitReply reply;
@@ -242,8 +258,9 @@ TxnStatus RaftMvccStorage::Commit(const std::string& key, uint64_t startTs, uint
 }
 
 TxnStatus RaftMvccStorage::Rollback(const std::string& key, uint64_t startTs) {
-  std::lock_guard<std::mutex> mutationLock(mutationMutex_);
-  const int reqId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
+  MutationLane& lane = PickMutationLane();
+  std::lock_guard<std::mutex> mutationLock(lane.mutex);
+  const int reqId = ++lane.requestId;
   int server = recentLeaderId_.load(std::memory_order_relaxed);
 
   int attempt = 0;
@@ -252,7 +269,7 @@ TxnStatus RaftMvccStorage::Rollback(const std::string& key, uint64_t startTs) {
     args.set_regionid(shardId_);
     args.set_key(key);
     args.set_startts(startTs);
-    args.set_clientid(clientId_);
+    args.set_clientid(lane.clientId);
     args.set_requestid(reqId);
 
     raftKVRpcProctoc::TxnRollbackReply reply;

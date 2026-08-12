@@ -277,6 +277,7 @@ class Gateway {
       openTransactions = transactions_.size();
     }
     std::ostringstream output;
+    const stratakv::ClientMetrics clientMetrics = client_->Metrics();
     output << "# HELP stratakv_gateway_requests_total Total HTTP requests handled by the StrataKV gateway.\n"
            << "# TYPE stratakv_gateway_requests_total counter\n"
            << "stratakv_gateway_requests_total " << requests_.load() << "\n"
@@ -295,6 +296,9 @@ class Gateway {
            << "# HELP stratakv_gateway_open_transactions Number of active in-memory transaction sessions.\n"
            << "# TYPE stratakv_gateway_open_transactions gauge\n"
            << "stratakv_gateway_open_transactions " << openTransactions << "\n"
+           << "# HELP stratakv_txn_rollback_region_total Region rollback groups issued by the 2PC coordinator.\n"
+           << "# TYPE stratakv_txn_rollback_region_total counter\n"
+           << "stratakv_txn_rollback_region_total " << clientMetrics.rollbackRegionCount << "\n"
            << "# HELP stratakv_gateway_runtime_info Active Gateway concurrency runtime.\n"
            << "# TYPE stratakv_gateway_runtime_info gauge\n"
            << "stratakv_gateway_runtime_info{mode=\"" << runtimeMode_ << "\",io_workers=\"" << runtimeWorkers_

@@ -190,6 +190,28 @@ message TxnMaxObservedTsReply {
   uint64 MaxTs = 2;
 }
 
+// Versioned physical MVCC mutations carried in a Raft log entry. Keeping the
+// wire format in protobuf lets replicas reject unknown command versions and
+// permits future fields to be added without depending on a host ABI.
+enum MvccModificationType {
+  MVCC_MODIFICATION_PUT = 0;
+  MVCC_MODIFICATION_DELETE = 1;
+}
+
+message MvccModification {
+  MvccModificationType Type = 1;
+  bytes Key = 2;
+  bytes Value = 3;
+}
+
+message PreparedMvccWriteCommand {
+  uint32 Version = 1;
+  int32 PreparedStatus = 2;
+  uint64 ExpectedRevision = 3;
+  uint64 NewRevision = 4;
+  repeated MvccModification Modifications = 5;
+}
+
 //只有raft节点之间才会涉及rpc通信
 service kvServerRpc
 {

@@ -6,6 +6,13 @@ add_executable(stratakv-test-bounded-thread-pool bounded_thread_pool_check.cpp)
 target_link_libraries(stratakv-test-bounded-thread-pool PRIVATE pthread)
 add_test(NAME stratakv-test-bounded-thread-pool COMMAND stratakv-test-bounded-thread-pool)
 
+add_executable(stratakv-test-txn-scheduler txn_scheduler_check.cpp)
+target_link_libraries(stratakv-test-txn-scheduler PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-txn-scheduler COMMAND stratakv-test-txn-scheduler)
+
+add_executable(stratakv-test-txn-contention txn_contention_benchmark.cpp)
+target_link_libraries(stratakv-test-txn-contention PRIVATE stratakv_sdk pthread)
+
 # Release-oriented coroutine benchmark. It is intentionally not registered in
 # CTest because the case sizes and CPU-affinity policy belong to the caller.
 add_executable(stratakv-test-fiber-benchmark fiber_benchmark.cpp)

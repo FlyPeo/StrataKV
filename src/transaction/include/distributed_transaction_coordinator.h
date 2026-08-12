@@ -2,6 +2,7 @@
 #define STRATAKV_TRANSACTION_DISTRIBUTED_TRANSACTION_COORDINATOR_H
 
 #include <memory>
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,10 @@
 #include "transaction_coordinator.h"
 
 class BoundedThreadPool;
+
+struct DistributedTxnMetrics {
+  uint64_t rollbackRegionCount = 0;
+};
 
 class DistributedTransactionCoordinator {
  public:
@@ -26,6 +31,7 @@ class DistributedTransactionCoordinator {
   void Rollback(const Transaction& txn);
   size_t ResolveExpiredLocks();
   size_t GarbageCollect(uint64_t safePointTs);
+  DistributedTxnMetrics Metrics() const;
 
  private:
   std::shared_ptr<ShardRouter> router_;
@@ -36,6 +42,9 @@ class DistributedTransactionCoordinator {
   std::shared_ptr<LockResolver> lockResolver_;
   std::vector<std::unique_ptr<LockManager>> lockManagers_;
   std::vector<std::unique_ptr<DataGcManager>> dataGcManagers_;
+  std::atomic<uint64_t> rollbackRegionCount_{0};
+
+  void RecordRollbackRegions(const std::vector<std::string>& keys);
 };
 
 #endif  // STRATAKV_TRANSACTION_DISTRIBUTED_TRANSACTION_COORDINATOR_H

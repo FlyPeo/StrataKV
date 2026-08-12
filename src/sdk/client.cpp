@@ -136,4 +136,9 @@ Result Client::Rollback(const std::shared_ptr<Transaction>& transaction) {
   return {Status::kOk, {}, "OK"};
 }
 
+ClientMetrics Client::Metrics() const {
+  const DistributedTxnMetrics metrics = impl_->coordinator->Metrics();
+  return {metrics.rollbackRegionCount};
+}
+
 }  // namespace stratakv

@@ -9,6 +9,7 @@
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/serialization/access.hpp>
 #include <boost/serialization/unordered_map.hpp>
+#include <atomic>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -22,6 +23,7 @@
 #include "kv_server_rpc.pb.h"
 #include "raft.h"
 #include "mvcc_storage.h"
+#include "txn_scheduler.h"
 
 // A lightweight replicated state-machine peer for one Region. Networking is
 // owned by the physical-node NodeServer; this object owns only Region-local
@@ -42,12 +44,18 @@ class RegionPeer {
   std::string m_serializedKVData;  // todo ： 序列化后的kv数据，理论上可以不用，但是目前没有找到特别好的替代方法
   std::unique_ptr<IKVEngine> m_kvEngine;
   std::shared_ptr<MvccStorage> m_mvccStorage;
+  std::unique_ptr<TxnScheduler> m_txnScheduler;
 
   using WaitApplyQueue = std::shared_ptr<LockQueue<Op>>;
   std::unordered_map<std::string, WaitApplyQueue> waitApplyCh;
   // reqKey -> chan  waitApplyCh是一个map，键是std::string，值 is Op类型的管道
 
   std::unordered_map<std::string, int> m_lastRequestId;  // clientid -> requestID  //一个kV服务器可能连接多个client
+
+  std::atomic<uint64_t> m_prewritePrecheckConflicts{0};
+  std::atomic<uint64_t> m_prewriteApplyConflicts{0};
+  std::atomic<uint64_t> m_prewriteRaftProposals{0};
+  std::atomic<uint64_t> m_txnRaftApplies{0};
 
   // last SnapShot point , raftIndex
   int m_lastSnapShotRaftLogIndex;

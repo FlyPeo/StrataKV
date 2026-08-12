@@ -35,6 +35,12 @@ class RaftMvccStorage : public MvccStorage {
   uint64_t MaxObservedTs() override;
 
  private:
+  struct MutationLane {
+    std::mutex mutex;
+    std::string clientId;
+    int requestId = 0;
+  };
+
   std::string Uuid() {
     static std::mt19937_64 rng([] {
       std::random_device rd;
@@ -54,10 +60,13 @@ class RaftMvccStorage : public MvccStorage {
   std::atomic<int> recentLeaderId_;
   std::string clientId_;
   std::atomic<int> requestId_;
-  // RegionPeer's duplicate table stores the greatest applied request ID per
-  // client. Replicated transaction mutations from one client therefore must be
-  // issued in order. Read-only maintenance RPCs do not take this lock.
-  std::mutex mutationMutex_;
+  // Each lane is an ordered idempotency stream, while different lanes can use
+  // the channel pool and RegionScheduler concurrently. This removes the former
+  // whole-Region client mutex without allowing request IDs from one stream to
+  // apply out of order.
+  std::vector<std::unique_ptr<MutationLane>> mutationLanes_;
+  std::atomic<size_t> nextMutationLane_{0};
+  MutationLane& PickMutationLane();
   std::string maintenanceClientId_;
   std::atomic<int> maintenanceRequestId_;
 };
