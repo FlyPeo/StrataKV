@@ -1,0 +1,46 @@
+schema: spec-driven
+
+context: |
+  StrataKV is a C++/CMake distributed transactional key-value store using
+  Raft, MVCC, RocksDB, synchronous MPRPC, and a Gateway HTTP entry point.
+
+  Preserve these architecture boundaries:
+  - Pulsar Fiber handles only Gateway HTTP socket read/wait/write concurrency.
+  - Blocking SDK, 2PC, and synchronous RPC work runs on bounded pthread pools.
+  - A physical storage node owns one NodeServer, one RpcProvider/listening port,
+    and a shared RPC worker pool. NodeServer routes requests by RegionId.
+  - Each local RegionPeer belongs to one independent Raft Group and owns its
+    Raft state, Apply Loop, MVCC/Persister path, and RocksDB-backed region data.
+  - Transaction coordination spans Regions; Raft replication and consistency
+    are enforced independently inside each Region.
+  - Do not describe distributed transactions as coroutine-based and do not
+    describe NodeServer or the shared RPC workers as a Raft Group/thread.
+
+  The repository may already contain unrelated uncommitted user changes.
+  Preserve them. The docs/ directory is maintained as a separate Git repository.
+
+rules:
+  proposal:
+    - State the current problem, goals, non-goals, affected components, compatibility impact, and rollback strategy.
+    - For concurrency or distributed-system changes, identify correctness risk and expected performance effect.
+  specs:
+    - Express requirements as testable MUST/SHALL statements with concrete scenarios.
+    - Cover success, timeout, retry, duplicate request, leader change, partial failure, and recovery where applicable.
+  design:
+    - Document class ownership, instance count, thread ownership, queues, locks/latches, and object lifetime.
+    - Include request and state-transition flows across Gateway, SDK/2PC, RPC, NodeServer, RegionPeer, Raft Apply, MVCC, and RocksDB as applicable.
+    - State safety invariants, failure handling, observability, performance trade-offs, and rollback design.
+  tasks:
+    - Separate implementation, unit tests, integration tests, performance comparison, and documentation tasks.
+    - Every task must name its verification method and avoid modifying unrelated dirty files.
+
+operations:
+  apply:
+    guidance:
+      - Inspect the existing implementation before editing and preserve unrelated user changes.
+      - Run the narrowest relevant tests first, then the applicable build and regression suite.
+      - Do not claim a performance improvement without a reproducible before/after benchmark under the same workload.
+  archive:
+    guidance:
+      - Archive only after requirements are implemented and verification results are recorded.
+      - Summarize changed architecture, test evidence, performance evidence, known limitations, and rollback path.

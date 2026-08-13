@@ -513,6 +513,8 @@ void HandleConnection(int fd, Gateway* gateway, BoundedThreadPool* requestExecut
 void PrintUsage(const char* program) {
   std::cerr << "Usage: " << program
             << " --regions-config <path> [--host 0.0.0.0] [--port 8080]"
+               " [--tso-host 127.0.0.1] [--tso-port 26300]"
+               " [--tso-endpoints host:port,host:port,...]"
                " [--runtime thread|fiber] [--workers 4] [--request-workers 16]\n";
 }
 
@@ -521,11 +523,14 @@ void PrintUsage(const char* program) {
 int main(int argc, char** argv) {
   std::string regionConfigPath;
   std::string host = "0.0.0.0";
+  std::string tsoHost = "127.0.0.1";
+  std::string tsoEndpoints = "127.0.0.1:26300,127.0.0.1:26301,127.0.0.1:26302";
   // Keep the established pthread path as the latency-oriented default. Fiber
   // mode is an explicit bounded-thread option for high connection fan-in; the
   // benchmark record documents its resource win and tail-latency trade-off.
   std::string runtimeMode = "thread";
   int port = 8080;
+  int tsoPort = 26300;
   int runtimeWorkers = 4;
   int requestWorkers = 16;
   for (int index = 1; index < argc; index += 2) {
@@ -537,9 +542,14 @@ int main(int argc, char** argv) {
     const std::string value = argv[index + 1];
     if (option == "--regions-config") regionConfigPath = value;
     else if (option == "--host") host = value;
+    else if (option == "--tso-host") { tsoHost = value; tsoEndpoints.clear(); }
+    else if (option == "--tso-endpoints") tsoEndpoints = value;
     else if (option == "--runtime") runtimeMode = value;
     else if (option == "--port") {
       try { port = std::stoi(value); } catch (const std::exception&) { port = 0; }
+    } else if (option == "--tso-port") {
+      try { tsoPort = std::stoi(value); } catch (const std::exception&) { tsoPort = 0; }
+      tsoEndpoints.clear();
     } else if (option == "--workers") {
       try { runtimeWorkers = std::stoi(value); } catch (const std::exception&) { runtimeWorkers = 0; }
     } else if (option == "--request-workers") {
@@ -549,7 +559,8 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
-  if (regionConfigPath.empty() || port <= 0 || port > 65535 || runtimeWorkers <= 0 || runtimeWorkers > 256 ||
+  if (regionConfigPath.empty() || tsoHost.empty() || port <= 0 || port > 65535 || tsoPort <= 0 || tsoPort > 65535 ||
+      runtimeWorkers <= 0 || runtimeWorkers > 256 ||
       requestWorkers <= 0 || requestWorkers > 256 ||
       (runtimeMode != "fiber" && runtimeMode != "thread")) {
     PrintUsage(argv[0]);
@@ -562,7 +573,8 @@ int main(int argc, char** argv) {
       requestExecutor = std::make_unique<BoundedThreadPool>(
           static_cast<size_t>(requestWorkers), static_cast<size_t>(requestWorkers) * 16);
     }
-    Gateway gateway(stratakv::Client::Connect(regionConfigPath), runtimeMode,
+    if (tsoEndpoints.empty()) tsoEndpoints = tsoHost + ":" + std::to_string(tsoPort);
+    Gateway gateway(stratakv::Client::Connect(regionConfigPath, tsoEndpoints), runtimeMode,
                     runtimeMode == "fiber" ? static_cast<size_t>(runtimeWorkers) : 0,
                     requestExecutor.get());
     const int listener = socket(AF_INET, SOCK_STREAM, 0);

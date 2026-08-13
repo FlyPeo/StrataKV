@@ -5,6 +5,12 @@
 !/README.md
 !/CMakeLists.txt
 
+# OpenSpec project workflow and Codex skills.
+!/.agents/
+!/.agents/**
+!/openspec/
+!/openspec/**
+
 !/src/
 !/src/**
 

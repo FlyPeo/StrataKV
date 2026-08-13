@@ -18,7 +18,10 @@ void RegionUnavailable(Reply* response, google::protobuf::Closure* done) {
 }  // namespace
 
 NodeServer::NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalog)
-    : nodeId_(nodeId), kvService_(this), raftService_(this) {
+    : nodeId_(nodeId),
+      txnScheduler_(std::make_shared<NodeTxnScheduler>()),
+      kvService_(this),
+      raftService_(this) {
   const auto assignments = catalog.PeersOnNode(nodeId);
   if (assignments.empty()) {
     throw std::invalid_argument("physical node has no Region peers");
@@ -40,7 +43,8 @@ NodeServer::NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalo
 
     auto regionPeer = std::make_shared<RegionPeer>(
         nodeId_, assignment.region.regionId, static_cast<int>(assignment.peerIndex), maxRaftState,
-        std::move(addresses));
+        std::move(addresses), txnScheduler_);
+    txnScheduler_->RegisterRegion(regionPeer);
     peersByRegion_.emplace(assignment.region.regionId, regionPeer);
     peers_.push_back(std::move(regionPeer));
   }

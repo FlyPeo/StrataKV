@@ -187,7 +187,8 @@ curl -fsS http://127.0.0.1:8080/healthz
 
 正常情况下：
 
-- `node-0`、`node-1`、`node-2` 和 Gateway 均为 `running`；
+- `node-0`、`node-1`、`node-2`、`tso-0`、`tso-1`、`tso-2` 和 Gateway 均为 `running`；
+- TSO control plane 显示 `leaders=1`；
 - Region 100、101、102 均显示 `leaders=1`；
 - `verify` 输出 `Verification passed`；
 - 健康接口返回 `{"status":"ok"}`。
@@ -256,11 +257,13 @@ bash deploy/stratakv-server reset --project my-db
 | 程序 | 用途 |
 | --- | --- |
 | `bin/stratakv-node` | 数据节点，承载 Region、Raft 副本和 RocksDB |
+| `bin/stratakv-tso` | TSO 控制层成员，运行独立 Raft Group 并持久化预分配水位 |
 | `bin/stratakv-gateway` | 面向业务的 HTTP/JSON 事务入口 |
 | `bin/stratakv-client` | 业务 CLI，支持单条命令和交互事务 |
 | `bin/stratakv-admin` | 直连内部 RPC 的开发与运维工具 |
 | `bin/stratakv-test-fiber-sync` | Pulsar 同步原语正确性测试 |
 | `bin/stratakv-test-bounded-thread-pool` | 有界线程池与过载背压正确性测试 |
+| `bin/stratakv-test-tso` | 多客户端全局时间戳与崩溃重启测试 |
 | `bin/stratakv-test-fiber-benchmark` | Pulsar 性能与压力基准 |
 | `bin/stratakv-test-reliability` | 集群事务与持久化验证负载 |
 
@@ -319,12 +322,14 @@ bash deploy/stratakv-server down --project my-db
 
 ```bash
 cmake --build build --target stratakv-node
+cmake --build build --target stratakv-tso
 cmake --build build --target stratakv-gateway
 cmake --build build --target stratakv-client
 cmake --build build --target stratakv-admin
 cmake --build build --target stratakv_sdk
 cmake --build build --target stratakv-test-fiber-sync
 cmake --build build --target stratakv-test-bounded-thread-pool
+cmake --build build --target stratakv-test-tso
 cmake --build build --target stratakv-test-fiber-benchmark
 cmake --build build --target stratakv-test-reliability
 ```
@@ -358,13 +363,18 @@ C++ SDK 的入口为 `stratakv/client.h`：
 ```cpp
 #include <stratakv/client.h>
 
-auto client = stratakv::Client::Connect("deploy/runtime/my-db/regions.conf");
+auto client = stratakv::Client::Connect(
+    "deploy/runtime/my-db/regions.conf",
+    "127.0.0.1:26300,127.0.0.1:26301,127.0.0.1:26302");
 auto txn = client->Begin();
 auto put = client->Put(txn, "apple:1", "value-a");
 if (put.ok()) {
   auto commit = client->Commit(txn);
 }
 ```
+
+SDK 不再在客户端本地发号；`Begin` 和 `Commit` 使用的时间戳都来自 TSO Leader。
+客户端缓存最近成功的 Leader，并在连接失败或收到 `NotLeader` 时轮询三个控制层端点。
 
 在通过 `add_subdirectory` 引入 StrataKV 的 CMake 工程中，可链接
 `stratakv_sdk`。业务程序不应直接依赖 `src/proto` 中的内部 RPC。
@@ -383,6 +393,9 @@ bash deploy/stratakv-server logs --project my-db --node node-0
 # 重启一个物理节点
 bash deploy/stratakv-server restart-node --project my-db --node node-2
 
+# 重启一个 TSO 成员；若它是 Leader，另外两个成员会自动选主
+bash deploy/stratakv-server restart-tso --project my-db --node tso-0
+
 # 查看指定节点的本地数据
 bash deploy/stratakv-server local-data \
   --project my-db \
@@ -399,12 +412,17 @@ deploy/runtime/<project>/
 ├── pids/
 ├── logs/
 ├── gateway/
+├── tso-0/{tso.state,run_data/}
+├── tso-1/{tso.state,run_data/}
+├── tso-2/{tso.state,run_data/}
 ├── node-0/run_data/
 ├── node-1/run_data/
 └── node-2/run_data/
 ```
 
 `node-N/run_data/` 包含 RocksDB、Raft 状态和快照，不是构建缓存。
+`tso-N/tso.state` 保存各成员已预留的时间戳上界，`tso-N/run_data/` 保存控制层
+Raft 日志和快照；停止集群时必须与节点数据一起保留。
 
 当前 Raft 端口固定，因此同一台机器不能同时运行两套本地集群。修改
 `--gateway-port` 只会改变 Gateway 端口，不会改变 Raft 端口：
@@ -412,6 +430,7 @@ deploy/runtime/<project>/
 | 服务 | 默认地址 |
 | --- | --- |
 | Gateway | `127.0.0.1:8080` |
+| TSO control plane | `127.0.0.1:26300`～`26302` |
 | node-0 shared RPC | `127.0.0.1:26200` |
 | node-1 shared RPC | `127.0.0.1:26201` |
 | node-2 shared RPC | `127.0.0.1:26202` |
@@ -419,6 +438,8 @@ deploy/runtime/<project>/
 三个 Region 在同一物理节点上共享一个 `NodeServer`、监听端口和 Muduo
 `RpcProvider`；KV 与 Raft 请求通过协议中的 `RegionId` 分发到对应的轻量
 `RegionPeer`。Region Peer 仍分别维护 Raft、MVCC、快照和 RocksDB 数据目录。
+三个 `stratakv-tso` 进程组成独立的控制层 Raft Group，同一时刻只有 Leader 发号；
+Leader 故障后多数派自动选主。该控制层只负责全局时间戳，不参与 Region 路由或调度。
 
 ## 7. 测试与基准
 
@@ -428,7 +449,8 @@ deploy/runtime/<project>/
 ctest --test-dir build --output-on-failure
 ```
 
-当前 CTest 自动执行 Pulsar Fiber 同步和有界线程池测试。集群测试
+当前 CTest 自动执行 Pulsar Fiber 同步、有界线程池、事务调度，以及 TSO 多客户端并发、
+少数派拒绝、Leader 切换和全控制层重启测试。集群测试
 不会自动注册到 CTest，避免在普通构建过程中启动服务和写入持久化数据。
 
 ### 7.2 集群冒烟测试

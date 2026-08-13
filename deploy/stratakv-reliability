@@ -18,6 +18,7 @@ Options:
   --request-timeout-ms N Per-request socket timeout. Default: 180000.
   --run-id ID             Stable test ID. Default: current date and time.
   --gateway-port P        Local Gateway port. Default: 18080.
+  --tso-port P            First of three TSO control-plane ports. Default: 26380.
   --max-runtime-seconds N Fail a stalled workload after N seconds. Default: 900.
   --progress-seconds N    Print workload progress every N seconds. Default: 10.
   --fault MODE            restart-node or none. Default: restart-node.
@@ -45,6 +46,7 @@ retries=20
 request_timeout_ms=180000
 run_id=$(date +%Y%m%d-%H%M%S)
 gateway_port=18080
+tso_port=26380
 max_runtime_seconds=900
 progress_seconds=10
 fault=restart-node
@@ -61,6 +63,7 @@ while [ "$#" -gt 0 ]; do
     --request-timeout-ms) request_timeout_ms=${2:?--request-timeout-ms requires a value}; shift 2 ;;
     --run-id) run_id=${2:?--run-id requires a value}; shift 2 ;;
     --gateway-port) gateway_port=${2:?--gateway-port requires a value}; shift 2 ;;
+    --tso-port) tso_port=${2:?--tso-port requires a value}; shift 2 ;;
     --max-runtime-seconds) max_runtime_seconds=${2:?--max-runtime-seconds requires a value}; shift 2 ;;
     --progress-seconds) progress_seconds=${2:?--progress-seconds requires a value}; shift 2 ;;
     --fault) fault=${2:?--fault requires a value}; shift 2 ;;
@@ -73,7 +76,7 @@ done
 case "$project" in ''|*[!A-Za-z0-9_-]*) echo "Invalid --project." >&2; exit 2 ;; esac
 case "$run_id" in ''|*[!A-Za-z0-9_-]*) echo "Invalid --run-id." >&2; exit 2 ;; esac
 case "$fault" in restart-node|none) ;; *) echo "--fault must be restart-node or none." >&2; exit 2 ;; esac
-for number in "$transactions" "$workers" "$retries" "$request_timeout_ms" "$gateway_port" "$max_runtime_seconds" "$progress_seconds"; do
+for number in "$transactions" "$workers" "$retries" "$request_timeout_ms" "$gateway_port" "$tso_port" "$max_runtime_seconds" "$progress_seconds"; do
   case "$number" in ''|*[!0-9]*|0) echo "Counts and ports must be positive integers." >&2; exit 2 ;; esac
 done
 
@@ -136,11 +139,11 @@ start_cluster() {
   if [ "$no_build" = true ]; then
     bash "${deploy_dir}/stratakv-server" up \
       --project "$project" --nodes 3 --replicas 3 \
-      --gateway-port "$gateway_port" --no-build
+      --gateway-port "$gateway_port" --tso-port "$tso_port" --no-build
   else
     bash "${deploy_dir}/stratakv-server" up \
       --project "$project" --nodes 3 --replicas 3 \
-      --gateway-port "$gateway_port"
+      --gateway-port "$gateway_port" --tso-port "$tso_port"
   fi
 }
 

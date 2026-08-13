@@ -50,6 +50,12 @@ class Transaction {
 class Client {
  public:
   static std::shared_ptr<Client> Connect(const std::string& regionConfigPath);
+  static std::shared_ptr<Client> Connect(const std::string& regionConfigPath,
+                                         const std::string& tsoHost, uint16_t tsoPort);
+  // Comma-separated control-plane members, for example
+  // "127.0.0.1:26300,127.0.0.1:26301,127.0.0.1:26302".
+  static std::shared_ptr<Client> Connect(const std::string& regionConfigPath,
+                                         const std::string& tsoEndpoints);
 
   std::shared_ptr<Transaction> Begin();
   Result Get(const std::shared_ptr<Transaction>& transaction, const std::string& key);

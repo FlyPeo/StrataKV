@@ -32,6 +32,10 @@ std::string EscapeJson(const std::string& value) {
   return escaped;
 }
 
+bool IsNodeScheduledTxn(const std::string& operation) {
+  return operation.rfind("TxnPrepared", 0) == 0 || operation == "TxnGarbageCollect";
+}
+
 }  // namespace
 
 void RegionPeer::DprintfKVDB() {
@@ -314,8 +318,14 @@ void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
     //如果raft的log太大（大于指定的比例）就把制作快照
   }
 
-  // Send message to the chan of op.ClientId
-  SendMessageToWaitChan(op, reqKey);
+  // Transaction writes use the node-level pending-task table. Raw KV and the
+  // current TxnGet read barrier keep the legacy per-Region wait channel.
+  if (IsNodeScheduledTxn(op.Operation)) {
+    const auto scheduler = m_nodeTxnScheduler.lock();
+    if (scheduler) scheduler->OnApplied(m_regionId, op, message.CommandIndex);
+  } else {
+    SendMessageToWaitChan(op, reqKey);
+  }
 }
 
 bool RegionPeer::ifRequestDuplicate(std::string ClientId, int RequestId) {
@@ -547,12 +557,14 @@ void RegionPeer::List(google::protobuf::RpcController *controller, const ::raftK
 }
 
 RegionPeer::RegionPeer(int physicalNodeId, int regionId, int localPeerId, int maxraftstate,
-                       std::vector<std::pair<std::string, short>> peerAddresses)
+                       std::vector<std::pair<std::string, short>> peerAddresses,
+                       const std::shared_ptr<NodeTxnScheduler>& nodeTxnScheduler)
     : m_me(localPeerId),
       m_physicalNodeId(physicalNodeId),
       m_regionId(regionId),
       m_maxRaftState(maxraftstate),
-      m_peerAddresses(std::move(peerAddresses)) {
+      m_peerAddresses(std::move(peerAddresses)),
+      m_nodeTxnScheduler(nodeTxnScheduler) {
   if (localPeerId < 0 || localPeerId >= static_cast<int>(m_peerAddresses.size())) {
     throw std::invalid_argument("local peer index is outside the Region peer list");
   }
@@ -565,10 +577,41 @@ RegionPeer::RegionPeer(int physicalNodeId, int regionId, int localPeerId, int ma
   m_kvEngine = KVEngineFactory::Create(dbPath);
   std::shared_ptr<IKVEngine> engineShared(m_kvEngine.get(), [](IKVEngine*) {});
   m_mvccStorage = std::make_shared<MvccStorage>(engineShared);
-  m_txnScheduler = std::make_unique<TxnScheduler>();
   applyChan = std::make_shared<LockQueue<ApplyMsg>>();
   m_raftNode = std::make_shared<Raft>();
   m_lastSnapShotRaftLogIndex = 0;
+}
+
+bool RegionPeer::IsTxnLeader() {
+  int term = -1;
+  bool isLeader = false;
+  m_raftNode->GetState(&term, &isLeader);
+  return isLeader;
+}
+
+PreparedMvccWrite RegionPeer::PrepareTxn(const TxnCommand& command) {
+  switch (command.type) {
+    case TxnCommandType::Prewrite:
+      return m_mvccStorage->PreparePrewrite(command.key, command.value, command.primaryKey,
+                                            command.startTs, command.ttlMs, command.isDelete);
+    case TxnCommandType::Commit:
+      return m_mvccStorage->PrepareCommit(command.key, command.startTs, command.commitTs);
+    case TxnCommandType::Rollback:
+      return m_mvccStorage->PrepareRollback(command.key, command.startTs);
+    case TxnCommandType::PessimisticLock:
+      return m_mvccStorage->PreparePessimisticLock(command.key, command.primaryKey,
+                                                   command.startTs, command.ttlMs);
+    case TxnCommandType::GarbageCollect:
+      return {};
+  }
+  return {};
+}
+
+bool RegionPeer::ProposeTxn(const Op& op, int* raftIndex) {
+  int term = -1;
+  bool isLeader = false;
+  m_raftNode->Start(op, raftIndex, &term, &isLeader);
+  return isLeader;
 }
 
 void RegionPeer::Start() {
@@ -598,7 +641,9 @@ void RegionPeer::WriteRaftStatusLoop() {
   while (true) {
     const Raft::NodeStatus status = m_raftNode->GetStatus();
     const MvccStats mvccStats = m_mvccStorage->Stats();
-    const TxnScheduler::Stats schedulerStats = m_txnScheduler->GetStats();
+    const auto nodeScheduler = m_nodeTxnScheduler.lock();
+    const NodeTxnScheduler::Stats schedulerStats =
+        nodeScheduler ? nodeScheduler->GetStats() : NodeTxnScheduler::Stats{};
     const std::string suffix = m_regionId < 0 ? std::to_string(m_me)
                                                 : "region_" + std::to_string(m_regionId) + "_node_" +
                                                       std::to_string(m_physicalNodeId) + "_peer_" +
@@ -612,15 +657,21 @@ void RegionPeer::WriteRaftStatusLoop() {
            << ",\"mvccDataVersionCount\":" << mvccStats.dataVersionCount
            << ",\"mvccWriteBatchCount\":" << mvccStats.writeBatchCount
            << ",\"mvccAppliedRaftIndex\":" << mvccStats.appliedRaftIndex
-           << ",\"prewritePrecheckConflicts\":" << m_prewritePrecheckConflicts.load(std::memory_order_relaxed)
            << ",\"prewriteApplyConflicts\":" << m_prewriteApplyConflicts.load(std::memory_order_relaxed)
-           << ",\"prewriteRaftProposals\":" << m_prewriteRaftProposals.load(std::memory_order_relaxed)
            << ",\"txnRaftApplies\":" << m_txnRaftApplies.load(std::memory_order_relaxed)
-           << ",\"latchAcquisitions\":" << schedulerStats.acquisitions
-           << ",\"latchWaits\":" << schedulerStats.waits
-           << ",\"latchWaitMicros\":" << schedulerStats.waitMicros
-           << ",\"latchCurrentWaiters\":" << schedulerStats.currentWaiters
-           << ",\"latchMaxWaiters\":" << schedulerStats.maxWaiters
+           << ",\"nodeTxnPrepareConflicts\":" << schedulerStats.prepareConflicts
+           << ",\"nodeTxnRaftProposals\":" << schedulerStats.raftProposals
+           << ",\"nodeTxnApplies\":" << schedulerStats.applied
+           << ",\"latchAcquisitions\":" << schedulerStats.latches.acquisitions
+           << ",\"latchWaits\":" << schedulerStats.latches.waits
+           << ",\"latchWaitMicros\":" << schedulerStats.latches.waitMicros
+           << ",\"latchCurrentWaiters\":" << schedulerStats.latches.currentWaiters
+           << ",\"latchMaxWaiters\":" << schedulerStats.latches.maxWaiters
+           << ",\"nodeTxnPendingTasks\":" << schedulerStats.pendingTasks
+           << ",\"nodeTxnWorkerThreads\":" << schedulerStats.workerThreads
+           << ",\"nodeTxnQueuedWorkers\":" << schedulerStats.queuedWorkers
+           << ",\"nodeTxnActiveWorkers\":" << schedulerStats.activeWorkers
+           << ",\"nodeTxnResponseTimeouts\":" << schedulerStats.responseTimeouts
            << "}";
     output.flush();
 
@@ -695,193 +746,76 @@ void RegionPeer::TxnGet(google::protobuf::RpcController *controller, const ::raf
 
 void RegionPeer::TxnPrewrite(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnPrewriteArgs *request,
                            ::raftKVRpcProctoc::TxnPrewriteReply *response, ::google::protobuf::Closure *done) {
-  int leaderTerm = -1;
-  bool leaderNow = false;
-  m_raftNode->GetState(&leaderTerm, &leaderNow);
-  if (!leaderNow) {
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  if (!scheduler) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
-  auto schedulerGuard = m_txnScheduler->Acquire(request->key());
-  // Leadership may have changed while this RPC waited for a hot-key latch.
-  m_raftNode->GetState(&leaderTerm, &leaderNow);
-  if (!leaderNow) {
-    response->set_err(ErrWrongLeader);
+  TxnCommand command;
+  command.type = TxnCommandType::Prewrite;
+  command.regionId = m_regionId;
+  command.key = request->key();
+  command.keys = {command.key};
+  command.value = request->value();
+  command.primaryKey = request->primarykey();
+  command.startTs = request->startts();
+  command.ttlMs = request->ttlms();
+  command.isDelete = request->isdelete();
+  command.clientId = request->clientid();
+  command.requestId = request->requestid();
+  command.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(CONSENSUS_TIMEOUT);
+  scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
+    response->set_err(result.status);
     done->Run();
-    return;
-  }
-  const TxnStatus precheck = m_mvccStorage->PrecheckPrewrite(request->key(), request->startts());
-  if (precheck != TxnStatus::Ok) {
-    m_prewritePrecheckConflicts.fetch_add(1, std::memory_order_relaxed);
-    response->set_err(std::to_string(static_cast<int>(precheck)));
-    done->Run();
-    return;
-  }
-
-  Op op;
-  op.Operation = "TxnPreparedPrewrite";
-  op.Key = request->key();
-  op.ClientId = request->clientid();
-  op.RequestId = request->requestid();
-
-  const PreparedMvccWrite prepared = m_mvccStorage->PreparePrewrite(
-      request->key(), request->value(), request->primarykey(), request->startts(), request->ttlms(),
-      request->isdelete());
-  if (prepared.status != TxnStatus::Ok) {
-    m_prewritePrecheckConflicts.fetch_add(1, std::memory_order_relaxed);
-    response->set_err(std::to_string(static_cast<int>(prepared.status)));
-    done->Run();
-    return;
-  }
-  if (!prepared.HasChanges()) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
-    done->Run();
-    return;
-  }
-  op.Value = prepared.Serialize();
-
-  std::string reqKey = op.ClientId + "_" + std::to_string(op.RequestId);
-  auto ch = AcquireWaitApplyQueue(reqKey);
-  int raftIndex = -1;
-  int _ = -1;
-  bool isLeader = false;
-  m_prewriteRaftProposals.fetch_add(1, std::memory_order_relaxed);
-  m_raftNode->Start(op, &raftIndex, &_, &isLeader);
-
-  if (!isLeader) {
-    ReleaseWaitApplyQueue(reqKey, ch);
-    response->set_err(ErrWrongLeader);
-    done->Run();
-    return;
-  }
-
-  Op committedOp;
-  if (!ch->timeOutPop(CONSENSUS_TIMEOUT, &committedOp)) {
-    if (ifRequestDuplicate(op.ClientId, op.RequestId)) {
-      response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
-    } else {
-      response->set_err(ErrWrongLeader);
-    }
-  } else {
-    if (committedOp.ClientId == op.ClientId && committedOp.RequestId == op.RequestId) {
-      response->set_err(committedOp.Status);
-    } else {
-      response->set_err(ErrWrongLeader);
-    }
-  }
-
-  ReleaseWaitApplyQueue(reqKey, ch);
-  done->Run();
+  });
 }
 
 void RegionPeer::TxnCommit(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnCommitArgs *request,
                          ::raftKVRpcProctoc::TxnCommitReply *response, ::google::protobuf::Closure *done) {
-  auto schedulerGuard = m_txnScheduler->Acquire(request->key());
-  int leaderTerm = -1;
-  bool leaderNow = false;
-  m_raftNode->GetState(&leaderTerm, &leaderNow);
-  if (!leaderNow) {
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  if (!scheduler) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
-  const PreparedMvccWrite prepared =
-      m_mvccStorage->PrepareCommit(request->key(), request->startts(), request->committs());
-  if (prepared.status != TxnStatus::Ok || !prepared.HasChanges()) {
-    response->set_err(std::to_string(static_cast<int>(prepared.status)));
+  TxnCommand command;
+  command.type = TxnCommandType::Commit;
+  command.regionId = m_regionId;
+  command.key = request->key();
+  command.keys = {command.key};
+  command.startTs = request->startts();
+  command.commitTs = request->committs();
+  command.clientId = request->clientid();
+  command.requestId = request->requestid();
+  command.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(CONSENSUS_TIMEOUT);
+  scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
+    response->set_err(result.status);
     done->Run();
-    return;
-  }
-  Op op;
-  op.Operation = "TxnPreparedCommit";
-  op.Key = request->key();
-  op.ClientId = request->clientid();
-  op.RequestId = request->requestid();
-
-  op.Value = prepared.Serialize();
-
-  std::string reqKey = op.ClientId + "_" + std::to_string(op.RequestId);
-  auto ch = AcquireWaitApplyQueue(reqKey);
-  int raftIndex = -1;
-  int _ = -1;
-  bool isLeader = false;
-  m_raftNode->Start(op, &raftIndex, &_, &isLeader);
-
-  if (!isLeader) {
-    ReleaseWaitApplyQueue(reqKey, ch);
-    response->set_err(ErrWrongLeader);
-    done->Run();
-    return;
-  }
-
-  Op committedOp;
-  if (!ch->timeOutPop(CONSENSUS_TIMEOUT, &committedOp)) {
-    response->set_err(ErrWrongLeader);
-  } else {
-    if (committedOp.ClientId == op.ClientId && committedOp.RequestId == op.RequestId) {
-      response->set_err(committedOp.Status);
-    } else {
-      response->set_err(ErrWrongLeader);
-    }
-  }
-
-  ReleaseWaitApplyQueue(reqKey, ch);
-  done->Run();
+  });
 }
 
 void RegionPeer::TxnRollback(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnRollbackArgs *request,
                            ::raftKVRpcProctoc::TxnRollbackReply *response, ::google::protobuf::Closure *done) {
-  auto schedulerGuard = m_txnScheduler->Acquire(request->key());
-  int leaderTerm = -1;
-  bool leaderNow = false;
-  m_raftNode->GetState(&leaderTerm, &leaderNow);
-  if (!leaderNow) {
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  if (!scheduler) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
-  const PreparedMvccWrite prepared = m_mvccStorage->PrepareRollback(request->key(), request->startts());
-  if (prepared.status != TxnStatus::Ok || !prepared.HasChanges()) {
-    response->set_err(std::to_string(static_cast<int>(prepared.status)));
+  TxnCommand command;
+  command.type = TxnCommandType::Rollback;
+  command.regionId = m_regionId;
+  command.key = request->key();
+  command.keys = {command.key};
+  command.startTs = request->startts();
+  command.clientId = request->clientid();
+  command.requestId = request->requestid();
+  command.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(CONSENSUS_TIMEOUT);
+  scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
+    response->set_err(result.status);
     done->Run();
-    return;
-  }
-  Op op;
-  op.Operation = "TxnPreparedRollback";
-  op.Key = request->key();
-  op.ClientId = request->clientid();
-  op.RequestId = request->requestid();
-
-  op.Value = prepared.Serialize();
-
-  std::string reqKey = op.ClientId + "_" + std::to_string(op.RequestId);
-  auto ch = AcquireWaitApplyQueue(reqKey);
-  int raftIndex = -1;
-  int _ = -1;
-  bool isLeader = false;
-  m_raftNode->Start(op, &raftIndex, &_, &isLeader);
-
-  if (!isLeader) {
-    ReleaseWaitApplyQueue(reqKey, ch);
-    response->set_err(ErrWrongLeader);
-    done->Run();
-    return;
-  }
-
-  Op committedOp;
-  if (!ch->timeOutPop(CONSENSUS_TIMEOUT, &committedOp)) {
-    response->set_err(ErrWrongLeader);
-  } else {
-    if (committedOp.ClientId == op.ClientId && committedOp.RequestId == op.RequestId) {
-      response->set_err(committedOp.Status);
-    } else {
-      response->set_err(ErrWrongLeader);
-    }
-  }
-
-  ReleaseWaitApplyQueue(reqKey, ch);
-  done->Run();
+  });
 }
 
 void RegionPeer::TxnGetLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetLockArgs *request,
@@ -914,61 +848,27 @@ void RegionPeer::TxnGetLock(google::protobuf::RpcController *controller, const :
 
 void RegionPeer::TxnAcquirePessimisticLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs *request,
                                          ::raftKVRpcProctoc::TxnAcquirePessimisticLockReply *response, ::google::protobuf::Closure *done) {
-  auto schedulerGuard = m_txnScheduler->Acquire(request->key());
-  int leaderTerm = -1;
-  bool leaderNow = false;
-  m_raftNode->GetState(&leaderTerm, &leaderNow);
-  if (!leaderNow) {
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  if (!scheduler) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
-  const PreparedMvccWrite prepared = m_mvccStorage->PreparePessimisticLock(
-      request->key(), request->primarykey(), request->startts(), request->ttlms());
-  if (prepared.status != TxnStatus::Ok || !prepared.HasChanges()) {
-    response->set_err(std::to_string(static_cast<int>(prepared.status)));
+  TxnCommand command;
+  command.type = TxnCommandType::PessimisticLock;
+  command.regionId = m_regionId;
+  command.key = request->key();
+  command.keys = {command.key};
+  command.primaryKey = request->primarykey();
+  command.startTs = request->startts();
+  command.ttlMs = request->ttlms();
+  command.clientId = request->clientid();
+  command.requestId = request->requestid();
+  command.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(CONSENSUS_TIMEOUT);
+  scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
+    response->set_err(result.status);
     done->Run();
-    return;
-  }
-  Op op;
-  op.Operation = "TxnPreparedPessimisticLock";
-  op.Key = request->key();
-  op.ClientId = request->clientid();
-  op.RequestId = request->requestid();
-
-  op.Value = prepared.Serialize();
-
-  std::string reqKey = op.ClientId + "_" + std::to_string(op.RequestId);
-  auto ch = AcquireWaitApplyQueue(reqKey);
-  int raftIndex = -1;
-  int _ = -1;
-  bool isLeader = false;
-  m_raftNode->Start(op, &raftIndex, &_, &isLeader);
-
-  if (!isLeader) {
-    ReleaseWaitApplyQueue(reqKey, ch);
-    response->set_err(ErrWrongLeader);
-    done->Run();
-    return;
-  }
-
-  Op committedOp;
-  if (!ch->timeOutPop(CONSENSUS_TIMEOUT, &committedOp)) {
-    if (ifRequestDuplicate(op.ClientId, op.RequestId)) {
-      response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
-    } else {
-      response->set_err(ErrWrongLeader);
-    }
-  } else {
-    if (committedOp.ClientId == op.ClientId && committedOp.RequestId == op.RequestId) {
-      response->set_err(committedOp.Status);
-    } else {
-      response->set_err(ErrWrongLeader);
-    }
-  }
-
-  ReleaseWaitApplyQueue(reqKey, ch);
-  done->Run();
+  });
 }
 
 void RegionPeer::TxnFindCommitTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnFindCommitTsArgs *request,
@@ -1023,45 +923,27 @@ void RegionPeer::TxnExpiredLocks(google::protobuf::RpcController *controller, co
 
 void RegionPeer::TxnGarbageCollect(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGarbageCollectArgs *request,
                                  ::raftKVRpcProctoc::TxnGarbageCollectReply *response, ::google::protobuf::Closure *done) {
-  auto schedulerGuard = m_txnScheduler->AcquireRegionExclusive();
-  Op op;
-  op.Operation = "TxnGarbageCollect";
-  op.ClientId = request->clientid();
-  op.RequestId = request->requestid();
-
-  TxnOpPayload payload;
-  payload.startTs = request->safepointts();
-
-  op.Value = payload.asString();
-
-  std::string reqKey = op.ClientId + "_" + std::to_string(op.RequestId);
-  auto ch = AcquireWaitApplyQueue(reqKey);
-  int raftIndex = -1;
-  int _ = -1;
-  bool isLeader = false;
-  m_raftNode->Start(op, &raftIndex, &_, &isLeader);
-
-  if (!isLeader) {
-    ReleaseWaitApplyQueue(reqKey, ch);
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  if (!scheduler) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
-
-  Op committedOp;
-  if (!ch->timeOutPop(CONSENSUS_TIMEOUT, &committedOp)) {
-    response->set_err(ErrWrongLeader);
-  } else {
-    if (committedOp.ClientId == op.ClientId && committedOp.RequestId == op.RequestId) {
-      response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
-      response->set_removedcount(std::stoull(committedOp.Status));
-    } else {
-      response->set_err(ErrWrongLeader);
+  TxnCommand command;
+  command.type = TxnCommandType::GarbageCollect;
+  command.latchMode = TxnLatchMode::RegionExclusive;
+  command.regionId = m_regionId;
+  command.safePointTs = request->safepointts();
+  command.clientId = request->clientid();
+  command.requestId = request->requestid();
+  command.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(CONSENSUS_TIMEOUT);
+  scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
+    response->set_err(result.status);
+    if (result.status == std::to_string(static_cast<int>(TxnStatus::Ok))) {
+      response->set_removedcount(result.removedCount);
     }
-  }
-
-  ReleaseWaitApplyQueue(reqKey, ch);
-  done->Run();
+    done->Run();
+  });
 }
 
 void RegionPeer::TxnMaxObservedTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnMaxObservedTsArgs *request,

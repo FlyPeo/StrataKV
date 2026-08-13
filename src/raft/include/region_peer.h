@@ -28,7 +28,7 @@
 // A lightweight replicated state-machine peer for one Region. Networking is
 // owned by the physical-node NodeServer; this object owns only Region-local
 // Raft, MVCC, persistence and apply state.
-class RegionPeer {
+class RegionPeer : public TxnRegionExecutor {
  private:
   std::mutex m_mtx;
   int m_me;
@@ -44,7 +44,7 @@ class RegionPeer {
   std::string m_serializedKVData;  // todo ： 序列化后的kv数据，理论上可以不用，但是目前没有找到特别好的替代方法
   std::unique_ptr<IKVEngine> m_kvEngine;
   std::shared_ptr<MvccStorage> m_mvccStorage;
-  std::unique_ptr<TxnScheduler> m_txnScheduler;
+  std::weak_ptr<NodeTxnScheduler> m_nodeTxnScheduler;
 
   using WaitApplyQueue = std::shared_ptr<LockQueue<Op>>;
   std::unordered_map<std::string, WaitApplyQueue> waitApplyCh;
@@ -52,9 +52,7 @@ class RegionPeer {
 
   std::unordered_map<std::string, int> m_lastRequestId;  // clientid -> requestID  //一个kV服务器可能连接多个client
 
-  std::atomic<uint64_t> m_prewritePrecheckConflicts{0};
   std::atomic<uint64_t> m_prewriteApplyConflicts{0};
-  std::atomic<uint64_t> m_prewriteRaftProposals{0};
   std::atomic<uint64_t> m_txnRaftApplies{0};
 
   // last SnapShot point , raftIndex
@@ -64,13 +62,23 @@ class RegionPeer {
   RegionPeer() = delete;
 
   RegionPeer(int physicalNodeId, int regionId, int localPeerId, int maxraftstate,
-             std::vector<std::pair<std::string, short>> peerAddresses);
+             std::vector<std::pair<std::string, short>> peerAddresses,
+             const std::shared_ptr<NodeTxnScheduler>& nodeTxnScheduler);
 
   // Start Region-local Raft and apply workers after the NodeServer listener is
   // accepting RPCs. The call is non-blocking after initialization completes.
   void Start();
   int RegionId() const { return m_regionId; }
   Raft* RaftNode() const { return m_raftNode.get(); }
+  NodeTxnScheduler* NodeSchedulerForTest() const {
+    const auto scheduler = m_nodeTxnScheduler.lock();
+    return scheduler.get();
+  }
+
+  int TxnRegionId() const override { return m_regionId; }
+  bool IsTxnLeader() override;
+  PreparedMvccWrite PrepareTxn(const TxnCommand& command) override;
+  bool ProposeTxn(const Op& op, int* raftIndex) override;
 
   void DprintfKVDB();
 

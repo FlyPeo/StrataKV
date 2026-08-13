@@ -69,6 +69,8 @@ class NodeServer {
  public:
   NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalog);
   void Start();
+  NodeTxnScheduler* TxnSchedulerForTest() const { return txnScheduler_.get(); }
+  const std::vector<std::shared_ptr<RegionPeer>>& PeersForTest() const { return peers_; }
 
  private:
   friend class KvServiceDispatcher;
@@ -78,6 +80,9 @@ class NodeServer {
 
   int nodeId_;
   short port_ = 0;
+  // Declared before peers so it is destroyed after them. There is exactly one
+  // transaction scheduler and one latch table per physical NodeServer.
+  std::shared_ptr<NodeTxnScheduler> txnScheduler_;
   std::vector<std::shared_ptr<RegionPeer>> peers_;
   std::unordered_map<int, std::shared_ptr<RegionPeer>> peersByRegion_;
   KvServiceDispatcher kvService_;

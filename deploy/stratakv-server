@@ -13,6 +13,7 @@ Usage:
   bash deploy/stratakv-server config [options]
   bash deploy/stratakv-server rebuild [--project NAME]
   bash deploy/stratakv-server restart-node [--project NAME] --node node-N
+  bash deploy/stratakv-server restart-tso [--project NAME] --node tso-N
   bash deploy/stratakv-server status [--project NAME]
   bash deploy/stratakv-server verify [--project NAME]
   bash deploy/stratakv-server logs [--project NAME] [--node node-N]
@@ -25,6 +26,7 @@ Options:
   --replicas R       Raft replicas in every Region. Default: 3.
   --project NAME     Persistent deployment name. Default: stratakv-local.
   --gateway-port P   Local HTTP Gateway port. Default: 8080.
+  --tso-port P       First of three TSO control-plane ports. Default: 26300.
   --gateway-runtime MODE
                      Gateway concurrency mode: thread or fiber. Default: thread.
   --gateway-workers N
@@ -32,7 +34,7 @@ Options:
   --gateway-request-workers N
                      Native blocking-request workers in fiber mode. Default: 16.
   --max-raft-state B Snapshot threshold base in bytes. Default: 1048576.
-  --node node-N      Physical node selected by restart-node/logs/local-data.
+  --node NAME        Member selected by restart-node/restart-tso/logs/local-data.
   --prefix PREFIX    Key prefix used by local-data.
   --no-build         Reuse the current bin/ executables.
 
@@ -51,6 +53,7 @@ nodes=3
 replicas=3
 project=stratakv-local
 gateway_port=8080
+tso_port=26300
 gateway_runtime=thread
 gateway_workers=4
 gateway_request_workers=16
@@ -65,6 +68,7 @@ while [ "$#" -gt 0 ]; do
     --replicas) replicas=${2:?--replicas requires a value}; shift 2 ;;
     --project) project=${2:?--project requires a value}; shift 2 ;;
     --gateway-port) gateway_port=${2:?--gateway-port requires a value}; shift 2 ;;
+    --tso-port) tso_port=${2:?--tso-port requires a value}; shift 2 ;;
     --gateway-runtime) gateway_runtime=${2:?--gateway-runtime requires a value}; shift 2 ;;
     --gateway-workers) gateway_workers=${2:?--gateway-workers requires a value}; shift 2 ;;
     --gateway-request-workers) gateway_request_workers=${2:?--gateway-request-workers requires a value}; shift 2 ;;
@@ -85,6 +89,7 @@ pids_dir="${runtime_dir}/pids"
 logs_dir="${runtime_dir}/logs"
 node_bin="${repo_dir}/bin/stratakv-node"
 gateway_bin="${repo_dir}/bin/stratakv-gateway"
+tso_bin="${repo_dir}/bin/stratakv-tso"
 admin_bin="${repo_dir}/bin/stratakv-admin"
 
 load_settings() {
@@ -95,6 +100,8 @@ load_settings() {
   nodes=$(sed -n 's/^nodes=//p' "$settings_file")
   replicas=$(sed -n 's/^replicas=//p' "$settings_file")
   gateway_port=$(sed -n 's/^gateway_port=//p' "$settings_file")
+  saved_tso_port=$(sed -n 's/^tso_port=//p' "$settings_file")
+  [ -z "$saved_tso_port" ] || tso_port=$saved_tso_port
   saved_gateway_runtime=$(sed -n 's/^gateway_runtime=//p' "$settings_file")
   [ -z "$saved_gateway_runtime" ] || gateway_runtime=$saved_gateway_runtime
   saved_gateway_workers=$(sed -n 's/^gateway_workers=//p' "$settings_file")
@@ -111,6 +118,19 @@ validate_topology() {
   is_uint "$gateway_port" && [ "$gateway_port" -gt 0 ] && [ "$gateway_port" -le 65535 ] || {
     echo "--gateway-port must be between 1 and 65535." >&2; exit 2;
   }
+  is_uint "$tso_port" && [ "$tso_port" -gt 0 ] && [ "$tso_port" -le 65535 ] || {
+    echo "--tso-port must be between 1 and 65535." >&2; exit 2;
+  }
+  [ "$tso_port" -le 65533 ] || { echo "--tso-port must leave room for three consecutive ports." >&2; exit 2; }
+  tso_index=0
+  while [ "$tso_index" -lt 3 ]; do
+    candidate=$((tso_port + tso_index))
+    [ "$candidate" -ne "$gateway_port" ] && [ "$candidate" -ne 26200 ] &&
+      [ "$candidate" -ne 26201 ] && [ "$candidate" -ne 26202 ] || {
+      echo "TSO ports must not overlap the Gateway or node RPC ports." >&2; exit 2;
+    }
+    tso_index=$((tso_index + 1))
+  done
   case "$gateway_runtime" in fiber|thread) ;;
     *) echo "--gateway-runtime must be fiber or thread." >&2; exit 2 ;;
   esac
@@ -127,8 +147,8 @@ validate_topology() {
     echo "Native local deployment currently requires --nodes 3 --replicas 3." >&2
     exit 2
   }
-  case "$selected_node" in all|node-0|node-1|node-2) ;;
-    *) echo "--node must be node-0, node-1, node-2 or all." >&2; exit 2 ;;
+  case "$selected_node" in all|node-0|node-1|node-2|tso-0|tso-1|tso-2) ;;
+    *) echo "--node must be node-0..2, tso-0..2 or all." >&2; exit 2 ;;
   esac
 }
 
@@ -139,7 +159,7 @@ build_programs() {
     -DCMAKE_BUILD_TYPE=Release \
     -DSTRATAKV_ENABLE_ASAN="$asan"
   cmake --build "${repo_dir}/build" -j"$(nproc)" \
-    --target stratakv-node stratakv-admin stratakv-gateway stratakv-client stratakv-test-reliability
+    --target stratakv-node stratakv-tso stratakv-admin stratakv-gateway stratakv-client stratakv-test-reliability
 }
 
 write_regions() {
@@ -180,6 +200,7 @@ write_regions() {
     echo "nodes=3"
     echo "replicas=3"
     echo "gateway_port=${gateway_port}"
+    echo "tso_port=${tso_port}"
     echo "gateway_runtime=${gateway_runtime}"
     echo "gateway_workers=${gateway_workers}"
     echo "gateway_request_workers=${gateway_request_workers}"
@@ -198,6 +219,7 @@ managed_pid() {
   kill -0 "$pid" 2>/dev/null || return 1
   expected=$node_bin
   [ "$name" = gateway ] && expected=$gateway_bin
+  case "$name" in tso|tso-*) expected=$tso_bin ;; esac
   actual=$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)
   expected=$(readlink -f "$expected")
   # Replacing an executable while its process is alive makes procfs report
@@ -208,6 +230,44 @@ managed_pid() {
     *) return 1 ;;
   esac
   printf '%s' "$pid"
+}
+
+time_service_endpoints() {
+  printf '127.0.0.1:%s,127.0.0.1:%s,127.0.0.1:%s' "$tso_port" "$((tso_port + 1))" "$((tso_port + 2))"
+}
+
+start_tso_node() {
+  name=$1
+  node_id=${name#tso-}
+  if managed_pid "$name" >/dev/null 2>&1; then
+    echo "${name} is already running." >&2
+    return 1
+  fi
+  data_dir="${runtime_dir}/${name}"
+  mkdir -p "$pids_dir" "$logs_dir" "$data_dir"
+  rm -f "${data_dir}/run_data/tso_raft_status.json"
+  log="${logs_dir}/${name}.log"
+  (
+    cd "$data_dir"
+    setsid "$tso_bin" \
+      --node-id "$node_id" \
+      --peers "$(time_service_endpoints)" \
+      --state-file "${data_dir}/tso.state" >>"$log" 2>&1 </dev/null &
+    echo "$!" >"$(pid_file "$name")"
+  )
+}
+
+migrate_legacy_tso_state() {
+  legacy_state="${runtime_dir}/tso/tso.state"
+  [ -f "$legacy_state" ] || return 0
+  for name in tso-0 tso-1 tso-2; do
+    data_dir="${runtime_dir}/${name}"
+    target="${data_dir}/tso.state"
+    if [ ! -f "$target" ]; then
+      mkdir -p "$data_dir"
+      cp "$legacy_state" "$target"
+    fi
+  done
 }
 
 start_node() {
@@ -244,6 +304,7 @@ start_gateway() {
       --regions-config "$regions_file" \
       --host 127.0.0.1 \
       --port "$gateway_port" \
+      --tso-endpoints "$(time_service_endpoints)" \
       --runtime "$gateway_runtime" \
       --workers "$gateway_workers" \
       --request-workers "$gateway_request_workers" >>"$log" 2>&1 </dev/null &
@@ -278,6 +339,35 @@ leader_count() {
     if grep -q '"isLeader":true' "$file"; then count=$((count + 1)); fi
   done
   printf '%s' "$count"
+}
+
+tso_leader_count() {
+  count=0
+  for name in tso-0 tso-1 tso-2; do
+    managed_pid "$name" >/dev/null 2>&1 || continue
+    file="${runtime_dir}/${name}/run_data/tso_raft_status.json"
+    if [ -f "$file" ] && grep -q '"isLeader":true' "$file"; then count=$((count + 1)); fi
+  done
+  printf '%s' "$count"
+}
+
+wait_for_tso() {
+  attempt=0
+  while [ "$attempt" -lt 60 ]; do
+    running=0
+    for name in tso-0 tso-1 tso-2; do
+      if managed_pid "$name" >/dev/null 2>&1; then running=$((running + 1)); fi
+    done
+    if [ "$running" -eq 3 ] && [ "$(tso_leader_count)" -eq 1 ]; then return 0; fi
+    [ "$running" -eq 3 ] || {
+      echo "A TSO control-plane member exited during startup. See ${logs_dir}." >&2
+      return 1
+    }
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  echo "TSO control plane did not elect a Leader within 60 seconds." >&2
+  return 1
 }
 
 caught_up_count() {
@@ -348,11 +438,16 @@ generate() {
 start_all() {
   generate
   build_programs
+  # Upgrade an existing single-node TSO deployment before binding tso-0 to its port.
+  stop_process tso
+  migrate_legacy_tso_state
+  for name in tso-0 tso-1 tso-2; do start_tso_node "$name"; done
+  wait_for_tso
   for name in node-0 node-1 node-2; do start_node "$name"; done
   wait_for_cluster
   start_gateway
   wait_for_gateway
-  echo "StrataKV local cluster is ready: http://127.0.0.1:${gateway_port}"
+  echo "StrataKV local cluster is ready: gateway=http://127.0.0.1:${gateway_port} tso=$(time_service_endpoints)"
 }
 
 stop_all() {
@@ -360,11 +455,15 @@ stop_all() {
   stop_process node-2
   stop_process node-1
   stop_process node-0
+  stop_process tso-2
+  stop_process tso-1
+  stop_process tso-0
+  stop_process tso
 }
 
 show_status() {
   load_settings
-  for name in node-0 node-1 node-2 gateway; do
+  for name in tso-0 tso-1 tso-2 node-0 node-1 node-2 gateway; do
     if pid=$(managed_pid "$name" 2>/dev/null); then
       echo "${name}: running pid=${pid}"
     else
@@ -372,6 +471,7 @@ show_status() {
     fi
   done
   echo "gateway=http://127.0.0.1:${gateway_port}"
+  echo "tso=$(time_service_endpoints) leaders=$(tso_leader_count)"
   echo "gateway-runtime=${gateway_runtime} io-workers=${gateway_workers} request-workers=${gateway_request_workers}"
   for region_id in 100 101 102; do
     echo "region-${region_id}: leaders=$(leader_count "$region_id")"
@@ -380,9 +480,13 @@ show_status() {
 
 verify_cluster() {
   load_settings
-  for name in node-0 node-1 node-2 gateway; do
+  for name in tso-0 tso-1 tso-2 node-0 node-1 node-2 gateway; do
     managed_pid "$name" >/dev/null || { echo "Verification failed: ${name} is stopped." >&2; return 1; }
   done
+  [ "$(tso_leader_count)" -eq 1 ] || {
+    echo "Verification failed: TSO control plane does not have exactly one Leader." >&2
+    return 1
+  }
   for region_id in 100 101 102; do
     [ "$(leader_count "$region_id")" -eq 1 ] || {
       echo "Verification failed: Region ${region_id} does not have exactly one Leader." >&2
@@ -390,13 +494,15 @@ verify_cluster() {
     }
   done
   curl -fsS "http://127.0.0.1:${gateway_port}/healthz" >/dev/null
-  echo "Verification passed: 3 local nodes, 9 Region peers, 3 Leaders and Gateway are healthy."
+  echo "Verification passed: 3 TSO members, 3 local nodes, 9 Region peers, 4 Raft Leaders and Gateway are healthy."
 }
 
 restart_one() {
   load_settings
   validate_topology
-  [ "$selected_node" != all ] || { echo "restart-node requires --node node-N." >&2; exit 2; }
+  case "$selected_node" in node-0|node-1|node-2) ;;
+    *) echo "restart-node requires --node node-0, node-1 or node-2." >&2; exit 2 ;;
+  esac
   stop_process "$selected_node"
   start_node "$selected_node"
   attempt=0
@@ -420,6 +526,18 @@ restart_one() {
   done
   echo "${selected_node} did not recover within 60 seconds." >&2
   return 1
+}
+
+restart_tso() {
+  load_settings
+  validate_topology
+  case "$selected_node" in tso-0|tso-1|tso-2) ;;
+    *) echo "restart-tso requires --node tso-0, tso-1 or tso-2." >&2; exit 2 ;;
+  esac
+  stop_process "$selected_node"
+  start_tso_node "$selected_node"
+  wait_for_tso
+  echo "Restarted ${selected_node}; the TSO control plane has exactly one Leader."
 }
 
 show_logs() {
@@ -462,6 +580,7 @@ case "$command" in
     start_all
     ;;
   restart-node) restart_one ;;
+  restart-tso) restart_tso ;;
   status) show_status ;;
   verify) verify_cluster ;;
   logs) show_logs ;;

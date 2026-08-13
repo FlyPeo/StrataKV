@@ -199,7 +199,21 @@ TxnStatus DistributedTransactionCoordinator::Commit(const Transaction& txn, cons
     return firstError;
   }
 
-  const uint64_t commitTs = tso_->Next();
+  uint64_t commitTs = 0;
+  try {
+    commitTs = tso_->Next();
+  } catch (const std::exception&) {
+    for (const auto& key : prewritten) {
+      router_->Route(key)->Rollback(key, txn.StartTs());
+    }
+    for (const auto& key : txn.PessimisticLocks()) {
+      router_->Route(key)->Rollback(key, txn.StartTs());
+    }
+    std::vector<std::string> rollbackKeys = prewritten;
+    rollbackKeys.insert(rollbackKeys.end(), txn.PessimisticLocks().begin(), txn.PessimisticLocks().end());
+    RecordRollbackRegions(rollbackKeys);
+    return TxnStatus::StorageError;
+  }
   TxnStatus primaryStatus = router_->Route(primaryKey)->Commit(primaryKey, txn.StartTs(), commitTs);
   if (primaryStatus != TxnStatus::Ok && primaryStatus != TxnStatus::AlreadyCommitted) {
     for (const auto& key : prewritten) {

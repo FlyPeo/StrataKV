@@ -84,6 +84,12 @@ add_executable(stratakv-node src/server/node_main.cpp src/server/node_server.cpp
 target_include_directories(stratakv-node PRIVATE ${PROJECT_SOURCE_DIR}/src/server)
 target_link_libraries(stratakv-node PRIVATE stratakv_core)
 
+# Cluster-wide timestamp authority. It is intentionally independent from the
+# storage nodes so every SDK/Gateway process observes one timestamp sequence.
+add_executable(stratakv-tso src/tso/tso_main.cpp src/tso/tso_service.cpp src/tso/tso_consensus.cpp)
+target_include_directories(stratakv-tso PRIVATE ${PROJECT_SOURCE_DIR}/src/tso)
+target_link_libraries(stratakv-tso PRIVATE stratakv_core)
+
 # 面向部署用户的最小 KV 客户端。自动在配置的 peer 中寻找当前 Leader。
 add_executable(stratakv-admin src/admin/admin_main.cpp)
 target_link_libraries(stratakv-admin PRIVATE stratakv_core stratakv_rpc)
@@ -107,6 +113,7 @@ target_link_libraries(stratakv-client PRIVATE pthread)
 
 install(TARGETS
     stratakv-node
+    stratakv-tso
     stratakv-admin
     stratakv-gateway
     stratakv-client

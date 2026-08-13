@@ -6,9 +6,9 @@
 
 #include "distributed_transaction_coordinator.h"
 #include "raft_mvcc_storage.h"
+#include "remote_timestamp_oracle.h"
 #include "region_metadata.h"
 #include "shard_router.h"
-#include "timestamp_oracle.h"
 
 namespace stratakv {
 namespace {
@@ -64,6 +64,17 @@ bool Transaction::Finished() const { return impl_ == nullptr || impl_->finished;
 Client::Client(std::shared_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
 std::shared_ptr<Client> Client::Connect(const std::string& regionConfigPath) {
+  return Connect(regionConfigPath,
+                 std::string("127.0.0.1:26300,127.0.0.1:26301,127.0.0.1:26302"));
+}
+
+std::shared_ptr<Client> Client::Connect(const std::string& regionConfigPath,
+                                        const std::string& tsoHost, uint16_t tsoPort) {
+  return Client::Connect(regionConfigPath, std::string(tsoHost + ":" + std::to_string(tsoPort)));
+}
+
+std::shared_ptr<Client> Client::Connect(const std::string& regionConfigPath,
+                                        const std::string& tsoEndpoints) {
   const RegionCatalog catalog = RegionCatalog::LoadFromConfig(regionConfigPath);
   std::vector<ShardRouter::RegionRoute> routes;
   routes.reserve(catalog.Regions().size());
@@ -76,7 +87,8 @@ std::shared_ptr<Client> Client::Connect(const std::string& regionConfigPath) {
 
   auto impl = std::make_shared<Impl>();
   impl->coordinator = std::make_shared<DistributedTransactionCoordinator>(
-      std::make_shared<ShardRouter>(std::move(routes)), std::make_shared<TimestampOracle>());
+      std::make_shared<ShardRouter>(std::move(routes)),
+      std::make_shared<RemoteTimestampOracle>(tsoEndpoints));
   return std::shared_ptr<Client>(new Client(std::move(impl)));
 }
 

@@ -1,6 +1,8 @@
 // Transaction subsystem: obsolete MVCC data collection.
 #include "data_gc_manager.h"
 
+#include <exception>
+
 namespace {
 uint64_t NowMs() {
   using namespace std::chrono;
@@ -26,7 +28,12 @@ void DataGcManager::Start() {
   }
   worker_ = std::thread([this]() {
     while (!stopped_.load()) {
-      ScanOnce();
+      try {
+        ScanOnce();
+      } catch (const std::exception&) {
+        // A temporary TSO outage must not terminate the client process. GC can
+        // safely skip a round because retaining old MVCC versions is harmless.
+      }
       std::this_thread::sleep_for(checkInterval_);
     }
   });

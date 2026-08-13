@@ -10,6 +10,12 @@ add_executable(stratakv-test-txn-scheduler txn_scheduler_check.cpp)
 target_link_libraries(stratakv-test-txn-scheduler PRIVATE stratakv_core pthread)
 add_test(NAME stratakv-test-txn-scheduler COMMAND stratakv-test-txn-scheduler)
 
+add_executable(stratakv-test-tso tso_integration_check.cpp)
+target_link_libraries(stratakv-test-tso PRIVATE stratakv_core pthread)
+add_dependencies(stratakv-test-tso stratakv-tso)
+add_test(NAME stratakv-test-tso COMMAND stratakv-test-tso)
+set_tests_properties(stratakv-test-tso PROPERTIES TIMEOUT 120)
+
 add_executable(stratakv-test-txn-contention txn_contention_benchmark.cpp)
 target_link_libraries(stratakv-test-txn-contention PRIVATE stratakv_sdk pthread)
 

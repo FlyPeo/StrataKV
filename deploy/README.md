@@ -1,7 +1,7 @@
 # StrataKV 本地部署指南
 
 StrataKV 只使用 Linux/WSL 本地进程部署。部署脚本会启动三个
-`stratakv-node` 和一个 `stratakv-gateway`，不需要容器运行时。
+`stratakv-node`、三个 `stratakv-tso` 控制层成员和一个 `stratakv-gateway`，不需要容器运行时。
 
 ## 启动
 
@@ -12,13 +12,14 @@ bash deploy/stratakv-server up \
   --project my-db \
   --nodes 3 \
   --replicas 3 \
-  --gateway-port 8080
+  --gateway-port 8080 \
+  --tso-port 26300
 ```
 
 结果：
 
 - 自动构建程序到 `bin/`；
-- 启动 `node-0`、`node-1`、`node-2` 和 `gateway`；
+- 启动 `node-0`、`node-1`、`node-2`、`tso-0`、`tso-1`、`tso-2` 和 `gateway`；
 - 创建 Region 100、101、102，每个 Region 有三个 Raft 副本；
 - 把 PID、日志、配置和 RocksDB 数据放入
   `deploy/runtime/my-db/`；
@@ -53,7 +54,7 @@ bash deploy/stratakv-server verify --project my-db
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-正常结果是四个进程均为 `running`，三个 Region 均为 `leaders=1`，
+正常结果是七个进程均为 `running`，TSO 显示 `leaders=1`，三个 Region 均为 `leaders=1`，
 `verify` 输出 `Verification passed`。
 
 ## 使用客户端
@@ -99,13 +100,17 @@ bash deploy/stratakv-client batch --project my-db deploy/examples/bulk-demo.txn
 | PID | `deploy/runtime/my-db/pids/` |
 | 日志 | `deploy/runtime/my-db/logs/` |
 | 节点数据 | `deploy/runtime/my-db/node-N/run_data/` |
+| TSO 水位与 Raft 数据 | `deploy/runtime/my-db/tso-N/` |
 | Gateway | `127.0.0.1:8080` |
+| TSO control plane | `127.0.0.1:26300`～`26302` |
 | node-0 shared RPC | `127.0.0.1:26200` |
 | node-1 shared RPC | `127.0.0.1:26201` |
 | node-2 shared RPC | `127.0.0.1:26202` |
 
 每个物理节点只有一个 `NodeServer`/`RpcProvider`。三个 Region 的 KV 与
 Raft RPC 共享该节点端口，并通过 `RegionId` 路由到各自的 `RegionPeer`。
+三个 TSO 成员运行独立 Raft Group，只有 Leader 分配时间戳；Gateway/SDK 会在 Leader
+故障后切换到新 Leader。停止项目不会删除水位、Raft 日志或快照。
 
 查看日志：
 
@@ -113,6 +118,13 @@ Raft RPC 共享该节点端口，并通过 `RegionId` 路由到各自的 `Region
 bash deploy/stratakv-server logs --project my-db
 bash deploy/stratakv-server logs --project my-db --node node-1
 tail -f deploy/runtime/my-db/logs/gateway.log
+```
+
+重启 TSO 成员并验证自动选主：
+
+```bash
+bash deploy/stratakv-server restart-tso --project my-db --node tso-0
+bash deploy/stratakv-server verify --project my-db
 ```
 
 查看 Gateway 指标：

@@ -13,6 +13,9 @@
 namespace {
 struct Options {
   std::string regions;
+  std::string tsoHost = "127.0.0.1";
+  int tsoPort = 26300;
+  std::string tsoEndpoints = "127.0.0.1:26300,127.0.0.1:26301,127.0.0.1:26302";
   std::string runId = "run";
   int workers = 16;
   int transactions = 1000;
@@ -33,6 +36,9 @@ Options Parse(int argc, char** argv) {
     if (index + 1 >= argc) throw std::invalid_argument("missing value for " + option);
     const std::string value = argv[++index];
     if (option == "--regions-config") options.regions = value;
+    else if (option == "--tso-host") { options.tsoHost = value; options.tsoEndpoints.clear(); }
+    else if (option == "--tso-port") { options.tsoPort = Number(value); options.tsoEndpoints.clear(); }
+    else if (option == "--tso-endpoints") options.tsoEndpoints = value;
     else if (option == "--run-id") options.runId = value;
     else if (option == "--workers") options.workers = Number(value);
     else if (option == "--transactions") options.transactions = Number(value);
@@ -40,8 +46,9 @@ Options Parse(int argc, char** argv) {
     else if (option == "--hot-percent") options.hotPercent = Number(value);
     else throw std::invalid_argument("unknown option " + option);
   }
-  if (options.regions.empty() || options.workers <= 0 || options.transactions <= 0) {
-    throw std::invalid_argument("--regions-config, positive --workers and --transactions are required");
+  if (options.regions.empty() || options.tsoHost.empty() || options.tsoPort <= 0 || options.tsoPort > 65535 ||
+      options.workers <= 0 || options.transactions <= 0) {
+    throw std::invalid_argument("--regions-config, valid TSO endpoint, positive --workers and --transactions are required");
   }
   if (options.hotPercent > 100) throw std::invalid_argument("--hot-percent must be at most 100");
   return options;
@@ -51,6 +58,13 @@ long long Percentile(std::vector<long long> values, double percentile) {
   if (values.empty()) return 0;
   std::sort(values.begin(), values.end());
   return values[static_cast<size_t>(percentile * static_cast<double>(values.size() - 1))];
+}
+
+long long Average(const std::vector<long long>& values) {
+  if (values.empty()) return 0;
+  long long total = 0;
+  for (long long value : values) total += value;
+  return total / static_cast<long long>(values.size());
 }
 
 std::vector<std::string> SlotKeys(const Options& options, int slot) {
@@ -66,8 +80,11 @@ std::vector<std::string> Keys(const Options& options, int index) {
 
 int main(int argc, char** argv) {
   try {
-    const Options options = Parse(argc, argv);
-    auto client = stratakv::Client::Connect(options.regions);
+    Options options = Parse(argc, argv);
+    if (options.tsoEndpoints.empty()) {
+      options.tsoEndpoints = options.tsoHost + ":" + std::to_string(options.tsoPort);
+    }
+    auto client = stratakv::Client::Connect(options.regions, options.tsoEndpoints);
     std::atomic<int> next{0};
     std::atomic<int> committed{0};
     std::atomic<int> conflicts{0};
@@ -127,6 +144,7 @@ int main(int argc, char** argv) {
               << "atomicity_failures=" << atomicityFailures << '\n'
               << "throughput_attempts_per_sec=" << options.transactions / seconds << '\n'
               << "throughput_commits_per_sec=" << committed.load() / seconds << '\n'
+              << "latency_avg_us=" << Average(latencies) << '\n'
               << "latency_p50_us=" << Percentile(latencies, 0.50) << '\n'
               << "latency_p95_us=" << Percentile(latencies, 0.95) << '\n'
               << "latency_p99_us=" << Percentile(latencies, 0.99) << '\n';

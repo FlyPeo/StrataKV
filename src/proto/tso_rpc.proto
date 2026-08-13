@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package tsoRpcProtocol;
+
+option cc_generic_services = true;
+
+message TimestampRequest {}
+
+message TimestampReply {
+  uint64 Timestamp = 1;
+  bytes Err = 2;
+  bool NotLeader = 3;
+}
+
+message ObserveTimestampRequest {
+  uint64 Timestamp = 1;
+}
+
+message ObserveTimestampReply {
+  bytes Err = 1;
+  bool NotLeader = 2;
+}
+
+message TimestampStatusRequest {}
+
+message TimestampStatusReply {
+  int32 NodeId = 1;
+  int32 Term = 2;
+  bool IsLeader = 3;
+  uint64 HighWater = 4;
+}
+
+service timestampOracleRpc {
+  rpc Next(TimestampRequest) returns (TimestampReply);
+  rpc Peek(TimestampRequest) returns (TimestampReply);
+  rpc Observe(ObserveTimestampRequest) returns (ObserveTimestampReply);
+  rpc Status(TimestampStatusRequest) returns (TimestampStatusReply);
+}

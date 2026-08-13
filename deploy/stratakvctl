@@ -5,6 +5,7 @@ set -eu
 deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 project=${STRATAKV_PROJECT:-stratakv-local}
 gateway_port=${STRATAKV_GATEWAY_PORT:-8080}
+tso_port=${STRATAKV_TSO_PORT:-26300}
 gateway="http://127.0.0.1:${gateway_port}"
 
 usage() {
@@ -30,7 +31,7 @@ Commands:
   logs [node-N]                Show native process logs.
   reset                        Stop and delete this local project's data.
 
-Set STRATAKV_PROJECT and STRATAKV_GATEWAY_PORT to select another local project.
+Set STRATAKV_PROJECT, STRATAKV_GATEWAY_PORT and STRATAKV_TSO_PORT to select another local project.
 Docker is not used.
 EOF
 }
@@ -43,7 +44,7 @@ case "${1:-}" in
     cmake -S "${deploy_dir}/.." -B "${deploy_dir}/../build" -DCMAKE_BUILD_TYPE=Release
     cmake --build "${deploy_dir}/../build" -j"$(nproc)"
     ;;
-  up) server up --gateway-port "$gateway_port" ;;
+  up) server up --gateway-port "$gateway_port" --tso-port "$tso_port" ;;
   down) server down ;;
   status) server status ;;
   verify) server verify ;;

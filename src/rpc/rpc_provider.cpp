@@ -216,8 +216,12 @@ void RpcProvider::OnMessage(const muduo::net::TcpConnectionPtr &conn, muduo::net
     }
 
     google::protobuf::Message *response = service->GetResponsePrototype(method).New();
+    // The callback can outlive OnMessage because transaction writes complete
+    // asynchronously after Raft apply. Store a TcpConnectionPtr by value in
+    // the closure; storing `const TcpConnectionPtr&` leaves a dangling
+    // reference as soon as OnMessage returns.
     google::protobuf::Closure *done =
-        google::protobuf::NewCallback<RpcProvider, const muduo::net::TcpConnectionPtr &, google::protobuf::Message *>(
+        google::protobuf::NewCallback<RpcProvider, muduo::net::TcpConnectionPtr, google::protobuf::Message *>(
             this, &RpcProvider::SendRpcResponse, conn, response);
 
     // Consume exactly one frame before invoking user code. This leaves incomplete
@@ -228,7 +232,7 @@ void RpcProvider::OnMessage(const muduo::net::TcpConnectionPtr &conn, muduo::net
 }
 
 // Closure的回调操作，用于序列化rpc的响应和网络发送,发送响应回去
-void RpcProvider::SendRpcResponse(const muduo::net::TcpConnectionPtr &conn, google::protobuf::Message *response) {
+void RpcProvider::SendRpcResponse(muduo::net::TcpConnectionPtr conn, google::protobuf::Message *response) {
   std::string response_str;
   if (response->SerializeToString(&response_str))  // response进行序列化
   {
@@ -237,7 +241,14 @@ void RpcProvider::SendRpcResponse(const muduo::net::TcpConnectionPtr &conn, goog
     send_str.append(reinterpret_cast<char*>(&len), 4);
     send_str.append(response_str);
     // 序列化成功后，通过网络把rpc方法执行的结果发送会rpc的调用方
-    conn->send(send_str);
+    // Transaction callbacks may now run on the node scheduler or a Region
+    // apply thread. Marshal the response back to the connection's EventLoop
+    // and keep both the connection and frame alive until that loop sends it.
+    // The bundled Muduo cross-thread path captures a raw TcpConnection pointer,
+    // which is unsafe when an RPC timeout closes the socket concurrently.
+    conn->getLoop()->runInLoop([conn, frame = std::move(send_str)]() {
+      if (conn->connected()) conn->send(frame);
+    });
   } else {
     std::cout << "serialize response_str error!" << std::endl;
   }
