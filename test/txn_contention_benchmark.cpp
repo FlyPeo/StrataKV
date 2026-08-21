@@ -21,6 +21,7 @@ struct Options {
   int transactions = 1000;
   int hotKeyCount = 0;
   int hotPercent = 100;
+  std::string workload = "optimistic-contention";
 };
 
 int Number(const std::string& value) {
@@ -44,6 +45,7 @@ Options Parse(int argc, char** argv) {
     else if (option == "--transactions") options.transactions = Number(value);
     else if (option == "--hot-key-count") options.hotKeyCount = Number(value);
     else if (option == "--hot-percent") options.hotPercent = Number(value);
+    else if (option == "--workload") options.workload = value;
     else throw std::invalid_argument("unknown option " + option);
   }
   if (options.regions.empty() || options.tsoHost.empty() || options.tsoPort <= 0 || options.tsoPort > 65535 ||
@@ -100,11 +102,24 @@ int main(int argc, char** argv) {
           const int index = next.fetch_add(1);
           if (index >= options.transactions) return;
           const auto started = std::chrono::steady_clock::now();
-          auto txn = client->Begin();
+          auto txn = client->Begin(3000);
           const auto keys = Keys(options, index);
           const std::string value = "value-" + options.runId + "-" + std::to_string(index);
-          for (const auto& key : keys) client->Put(txn, key, value);
-          const stratakv::Result result = client->Commit(txn);
+          
+          stratakv::Result result;
+          if (options.workload == "pessimistic-contention") {
+            result = client->LockKeys(txn, keys);
+            if (result.ok()) {
+              for (const auto& key : keys) client->Put(txn, key, value);
+              result = client->Commit(txn);
+            } else if (result.status == stratakv::Status::kTimeout) {
+              result.status = stratakv::Status::kLockConflict;
+            }
+          } else {
+            for (const auto& key : keys) client->Put(txn, key, value);
+            result = client->Commit(txn);
+          }
+          
           if (result.ok()) committed.fetch_add(1);
           else if (result.status == stratakv::Status::kLockConflict ||
                    result.status == stratakv::Status::kWriteConflict) conflicts.fetch_add(1);
@@ -125,7 +140,7 @@ int main(int argc, char** argv) {
     int atomicityFailures = 0;
     if (options.hotKeyCount > 0) {
       for (int slot = 0; slot < options.hotKeyCount; ++slot) {
-        auto txn = client->Begin();
+        auto txn = client->Begin(3000);
         const auto keys = SlotKeys(options, slot);
         const auto first = client->Get(txn, keys[0]);
         const auto second = client->Get(txn, keys[1]);

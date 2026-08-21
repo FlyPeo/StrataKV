@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace stratakv {
 
@@ -14,6 +16,10 @@ enum class Status {
   kLockConflict,
   kWriteConflict,
   kAlreadyCommitted,
+  kTimeout,
+  kAbortOnly,
+  kCleanupPending,
+  kResultUnknown,
   kUnavailable,
   kInvalidTransaction,
 };
@@ -22,8 +28,33 @@ struct Result {
   Status status = Status::kOk;
   std::string value;
   std::string message;
+  bool found = false;
+  bool retryable = false;
+  uint64_t startTimestamp = 0;
+  std::string primaryKey;
 
   bool ok() const { return status == Status::kOk || status == Status::kAlreadyCommitted; }
+};
+
+struct BatchResult {
+  Status status = Status::kOk;
+  std::vector<std::pair<std::string, Result>> values;
+  std::string message;
+  bool retryable = false;
+};
+
+enum class TransactionRecordState {
+  kLocked,
+  kCommitted,
+  kRolledBack,
+  kNotFound,
+};
+
+struct TransactionStatusResult {
+  Status status = Status::kUnavailable;
+  TransactionRecordState state = TransactionRecordState::kNotFound;
+  uint64_t commitTimestamp = 0;
+  std::string message;
 };
 
 struct ClientMetrics {
@@ -57,12 +88,19 @@ class Client {
   static std::shared_ptr<Client> Connect(const std::string& regionConfigPath,
                                          const std::string& tsoEndpoints);
 
-  std::shared_ptr<Transaction> Begin();
+  std::shared_ptr<Transaction> Begin(uint64_t lockTtlMs);
   Result Get(const std::shared_ptr<Transaction>& transaction, const std::string& key);
+  Result GetForUpdate(const std::shared_ptr<Transaction>& transaction, const std::string& key);
+  BatchResult BatchGetForUpdate(const std::shared_ptr<Transaction>& transaction,
+                                const std::vector<std::string>& keys);
+  Result LockKeys(const std::shared_ptr<Transaction>& transaction,
+                  const std::vector<std::string>& keys);
   Result Put(const std::shared_ptr<Transaction>& transaction, const std::string& key, const std::string& value);
   Result Delete(const std::shared_ptr<Transaction>& transaction, const std::string& key);
   Result Commit(const std::shared_ptr<Transaction>& transaction);
   Result Rollback(const std::shared_ptr<Transaction>& transaction);
+  TransactionStatusResult QueryTransactionStatus(
+      const std::shared_ptr<Transaction>& transaction);
   ClientMetrics Metrics() const;
 
  private:

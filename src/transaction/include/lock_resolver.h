@@ -21,6 +21,7 @@ enum class PrimaryTxnState {
 
 // PrimaryTxnStatus 汇总 primary 事务的裁决结果，供 secondary 恢复时使用。
 struct PrimaryTxnStatus {
+  TxnStatus queryStatus = TxnStatus::StorageError;
   // primary 当前状态。
   PrimaryTxnState state = PrimaryTxnState::Missing;
   // primary 对应的提交时间戳，只有已提交时才有效。
@@ -37,7 +38,9 @@ class LockResolver {
   explicit LockResolver(std::shared_ptr<ShardRouter> router);
 
   // 查询某个 primary 事务的全局状态，给恢复逻辑提供裁决依据。
-  PrimaryTxnStatus CheckPrimary(const std::string& primaryKey, uint64_t startTs);
+  PrimaryTxnStatus CheckPrimary(const std::string& primaryKey, uint64_t startTs,
+                                uint64_t currentPhysicalMs = 0,
+                                bool rollbackIfExpired = false);
   // 根据 primary 裁决结果处理某个具体 key 上的锁。
   TxnStatus ResolveLock(const std::string& key, const MvccLock& lock);
   // 扫描所有分片上的过期锁，并批量触发恢复处理。

@@ -166,9 +166,17 @@ int main() {
     }
 
     const int firstLeader = WaitForLeader(endpoints);
+    const auto firstStatus = ReadStatus(endpoints[static_cast<size_t>(firstLeader)]);
+    if (!firstStatus.has_value() || firstStatus->protocolversion() < 2 ||
+        !firstStatus->hybridlogical()) {
+      throw std::runtime_error("TSO leader did not advertise HLC protocol v2");
+    }
     RemoteTimestampOracle failoverClient(endpoints);
     std::vector<uint64_t> timestamps;
     timestamps.push_back(failoverClient.Next());
+    if (HlcTimestamp::PhysicalMs(timestamps.back()) == 0) {
+      throw std::runtime_error("TSO did not return a physical-plus-logical timestamp");
+    }
 
     constexpr int kClients = 8;
     constexpr int kTimestampsPerClient = 100;

@@ -108,7 +108,63 @@ bool JsonBool(const std::string& body, const std::string& field, bool defaultVal
   if (cursor == std::string::npos) return defaultValue;
   ++cursor;
   while (cursor < body.size() && std::isspace(static_cast<unsigned char>(body[cursor]))) ++cursor;
-  return body.compare(cursor, 4, "true") == 0;
+  if (cursor + 4 <= body.size() && body.compare(cursor, 4, "true") == 0) return true;
+  if (cursor + 5 <= body.size() && body.compare(cursor, 5, "false") == 0) return false;
+  return defaultValue;
+}
+
+std::optional<uint64_t> JsonUint64(const std::string& body, const std::string& field) {
+  const std::string name = "\"" + field + "\"";
+  const size_t fieldPos = body.find(name);
+  if (fieldPos == std::string::npos) return std::nullopt;
+  size_t cursor = body.find(':', fieldPos + name.size());
+  if (cursor == std::string::npos) return std::nullopt;
+  ++cursor;
+  while (cursor < body.size() && std::isspace(static_cast<unsigned char>(body[cursor]))) ++cursor;
+  
+  uint64_t value = 0;
+  bool found = false;
+  while (cursor < body.size() && std::isdigit(static_cast<unsigned char>(body[cursor]))) {
+    value = value * 10 + (body[cursor] - '0');
+    found = true;
+    ++cursor;
+  }
+  if (!found) return std::nullopt;
+  return value;
+}
+
+std::vector<std::string> JsonStringArray(const std::string& body, const std::string& field) {
+  std::vector<std::string> result;
+  const std::string name = "\"" + field + "\"";
+  const size_t fieldPos = body.find(name);
+  if (fieldPos == std::string::npos) return result;
+  size_t cursor = body.find(':', fieldPos + name.size());
+  if (cursor == std::string::npos) return result;
+  ++cursor;
+  while (cursor < body.size() && std::isspace(static_cast<unsigned char>(body[cursor]))) ++cursor;
+  if (cursor >= body.size() || body[cursor] != '[') return result;
+  ++cursor;
+  
+  while (cursor < body.size() && body[cursor] != ']') {
+    while (cursor < body.size() && std::isspace(static_cast<unsigned char>(body[cursor]))) ++cursor;
+    if (cursor < body.size() && body[cursor] == '"') {
+      ++cursor;
+      std::string value;
+      while (cursor < body.size() && body[cursor] != '"') {
+        if (body[cursor] == '\\' && cursor + 1 < body.size()) {
+          ++cursor;
+          value += body[cursor++];
+        } else {
+          value += body[cursor++];
+        }
+      }
+      if (cursor < body.size() && body[cursor] == '"') ++cursor;
+      result.push_back(value);
+    }
+    while (cursor < body.size() && body[cursor] != ',' && body[cursor] != ']') ++cursor;
+    if (cursor < body.size() && body[cursor] == ',') ++cursor;
+  }
+  return result;
 }
 
 std::string PercentDecode(const std::string& value) {
@@ -157,6 +213,40 @@ std::string ResultJson(const stratakv::Result& result) {
   return output.str();
 }
 
+std::string BatchResultJson(const stratakv::BatchResult& result) {
+  std::ostringstream output;
+  output << "{\"status\":\"" << stratakv::StatusName(result.status) << "\"";
+  if (!result.message.empty()) output << ",\"message\":\"" << JsonEscape(result.message) << "\"";
+  output << ",\"values\":[";
+  for (size_t i = 0; i < result.values.size(); ++i) {
+    if (i > 0) output << ",";
+    output << "{\"key\":\"" << JsonEscape(result.values[i].first) << "\"";
+    if (!result.values[i].second.value.empty()) {
+      output << ",\"value\":\"" << JsonEscape(result.values[i].second.value) << "\"";
+    }
+    output << "}";
+  }
+  output << "]}";
+  return output.str();
+}
+
+std::string TransactionStatusResultJson(const stratakv::TransactionStatusResult& result) {
+  std::ostringstream output;
+  output << "{\"status\":\"" << stratakv::StatusName(result.status) << "\"";
+  if (!result.message.empty()) output << ",\"message\":\"" << JsonEscape(result.message) << "\"";
+  std::string stateName = "NOT_FOUND";
+  switch (result.state) {
+    case stratakv::TransactionRecordState::kLocked: stateName = "LOCKED"; break;
+    case stratakv::TransactionRecordState::kCommitted: stateName = "COMMITTED"; break;
+    case stratakv::TransactionRecordState::kRolledBack: stateName = "ROLLED_BACK"; break;
+    case stratakv::TransactionRecordState::kNotFound: stateName = "NOT_FOUND"; break;
+  }
+  output << ",\"state\":\"" << stateName << "\"";
+  output << ",\"commitTs\":" << result.commitTimestamp;
+  output << '}';
+  return output.str();
+}
+
 HttpResponse Error(int status, const std::string& code, const std::string& message) {
   return {status, "{\"status\":\"" + code + "\",\"message\":\"" + JsonEscape(message) + "\"}"};
 }
@@ -190,7 +280,9 @@ class Gateway {
       return {200, Metrics(), "text/plain; version=0.0.4; charset=utf-8"};
     }
     if (request.method == "POST" && request.path == "/v1/transactions") {
-      const auto transaction = client_->Begin();
+      const auto lockTtlMs = JsonUint64(request.body, "lockTtlMs");
+      if (!lockTtlMs) return Error(400, "INVALID_ARGUMENT", "JSON field lockTtlMs is required");
+      const auto transaction = client_->Begin(*lockTtlMs);
       const std::string id = NewId();
       {
         std::lock_guard<std::mutex> lock(transactionsMutex_);
@@ -242,6 +334,28 @@ class Gateway {
       Remove(id);
       rolledBack_.fetch_add(1, std::memory_order_relaxed);
       return ResultResponse(result);
+    }
+    
+    if (request.method == "GET" && action.empty()) {
+      const stratakv::TransactionStatusResult result = client_->QueryTransactionStatus(transaction);
+      return {HttpStatus(result.status), TransactionStatusResultJson(result)};
+    }
+    
+    if (request.method == "POST" && action.rfind("/keys/", 0) == 0 && action.rfind("/lock") == action.size() - 5) {
+      const std::string key = PercentDecode(action.substr(6, action.size() - 11)); // /keys/<key>/lock
+      if (key.empty()) return Error(400, "INVALID_ARGUMENT", "key is required");
+      return ResultResponse(client_->GetForUpdate(transaction, key));
+    }
+    
+    if (request.method == "POST" && action == "/locks") {
+      const auto keys = JsonStringArray(request.body, "keys");
+      if (keys.empty()) return Error(400, "INVALID_ARGUMENT", "JSON array field keys is required");
+      if (JsonBool(request.body, "read", false)) {
+        const stratakv::BatchResult result = client_->BatchGetForUpdate(transaction, keys);
+        return {HttpStatus(result.status), BatchResultJson(result)};
+      } else {
+        return ResultResponse(client_->LockKeys(transaction, keys));
+      }
     }
 
     return Error(404, "NOT_FOUND", "route does not exist");

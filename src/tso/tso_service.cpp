@@ -48,5 +48,7 @@ void TsoService::Status(google::protobuf::RpcController*, const tsoRpcProtocol::
   response->set_term(status.term);
   response->set_isleader(status.isLeader);
   response->set_highwater(oracle_->HighWater());
+  response->set_protocolversion(TsoConsensusNode::kProtocolVersion);
+  response->set_hybridlogical(true);
   done->Run();
 }

@@ -1,5 +1,7 @@
 #include "node_server.h"
 
+#include "txn_recovery_manager.h"
+#include "remote_timestamp_oracle.h"
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
@@ -17,7 +19,7 @@ void RegionUnavailable(Reply* response, google::protobuf::Closure* done) {
 
 }  // namespace
 
-NodeServer::NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalog)
+NodeServer::NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalog, const std::string& tsoEndpoints)
     : nodeId_(nodeId),
       txnScheduler_(std::make_shared<NodeTxnScheduler>()),
       kvService_(this),
@@ -48,7 +50,14 @@ NodeServer::NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalo
     peersByRegion_.emplace(assignment.region.regionId, regionPeer);
     peers_.push_back(std::move(regionPeer));
   }
+
+  if (!tsoEndpoints.empty()) {
+    auto tsoClient = std::make_shared<RemoteTimestampOracle>(tsoEndpoints);
+    recoveryManager_ = std::make_unique<TxnRecoveryManager>(txnScheduler_, std::move(tsoClient), catalog);
+  }
 }
+
+NodeServer::~NodeServer() = default;
 
 void NodeServer::Start() {
   std::thread rpcThread([this]() {
@@ -64,6 +73,10 @@ void NodeServer::Start() {
   std::this_thread::sleep_for(std::chrono::seconds(6));
   for (const auto& peer : peers_) {
     peer->Start();
+  }
+
+  if (recoveryManager_) {
+    recoveryManager_->Start();
   }
 
   std::cout << "NodeServer " << nodeId_ << " listening on shared RPC port " << port_
@@ -97,12 +110,26 @@ DISPATCH_KV(TxnCommit, TxnCommitArgs, TxnCommitReply)
 DISPATCH_KV(TxnRollback, TxnRollbackArgs, TxnRollbackReply)
 DISPATCH_KV(TxnGetLock, TxnGetLockArgs, TxnGetLockReply)
 DISPATCH_KV(TxnAcquirePessimisticLock, TxnAcquirePessimisticLockArgs, TxnAcquirePessimisticLockReply)
+DISPATCH_KV(TxnCheckStatus, TxnCheckStatusArgs, TxnCheckStatusReply)
+DISPATCH_KV(TxnResolveLock, TxnResolveLockArgs, TxnResolveLockReply)
 DISPATCH_KV(TxnFindCommitTs, TxnFindCommitTsArgs, TxnFindCommitTsReply)
 DISPATCH_KV(TxnExpiredLocks, TxnExpiredLocksArgs, TxnExpiredLocksReply)
 DISPATCH_KV(TxnGarbageCollect, TxnGarbageCollectArgs, TxnGarbageCollectReply)
 DISPATCH_KV(TxnMaxObservedTs, TxnMaxObservedTsArgs, TxnMaxObservedTsReply)
 
 #undef DISPATCH_KV
+
+void KvServiceDispatcher::TxnProtocolCapabilities(
+    google::protobuf::RpcController*,
+    const raftKVRpcProctoc::TxnProtocolCapabilitiesArgs*,
+    raftKVRpcProctoc::TxnProtocolCapabilitiesReply* response,
+    google::protobuf::Closure* done) {
+  response->set_protocolversion(kTxnProtocolVersion);
+  response->set_preparedcommandversion(PreparedMvccWrite::kCommandVersion);
+  response->set_lockformatversion(kMvccLockFormatVersion);
+  response->set_hlcexpiry(true);
+  done->Run();
+}
 
 void RaftServiceDispatcher::AppendEntries(google::protobuf::RpcController* controller,
                                           const raftRpcProctoc::AppendEntriesArgs* request,

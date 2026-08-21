@@ -84,6 +84,10 @@ message TxnPrewriteArgs {
   bytes ClientId = 7;
   int32 RequestId = 8;
   int32 RegionId = 9;
+  uint64 MaxForUpdateTs = 10;
+  uint32 ProtocolVersion = 11;
+  uint64 RemainingBudgetMs = 12;
+  bool IsLockOnly = 13;
 }
 
 message TxnPrewriteReply {
@@ -130,6 +134,10 @@ message TxnGetLockReply {
   uint64 CreateTimeMs = 7;
   bool IsDelete = 8;
   bool IsPessimistic = 9;
+  uint64 ForUpdateTs = 10;
+  uint64 ExpireAtPhysicalMs = 11;
+  bool LegacyExpiry = 12;
+  bool IsLockOnly = 13;
 }
 
 message TxnAcquirePessimisticLockArgs {
@@ -140,10 +148,73 @@ message TxnAcquirePessimisticLockArgs {
   bytes ClientId = 5;
   int32 RequestId = 6;
   int32 RegionId = 7;
+  uint64 ForUpdateTs = 8;
+  uint64 ExpireAtPhysicalMs = 9;
+  uint64 RemainingBudgetMs = 10;
+  uint32 ProtocolVersion = 11;
+  bool ReturnValue = 12;
 }
 
 message TxnAcquirePessimisticLockReply {
   bytes Err = 1;
+  bool Found = 2;
+  bytes Value = 3;
+  uint64 ValueCommitTs = 4;
+  bool Applied = 5;
+}
+
+enum TxnRecordStateProto {
+  TXN_RECORD_NOT_FOUND = 0;
+  TXN_RECORD_LOCKED = 1;
+  TXN_RECORD_COMMITTED = 2;
+  TXN_RECORD_ROLLED_BACK = 3;
+}
+
+message TxnCheckStatusArgs {
+  bytes PrimaryKey = 1;
+  uint64 StartTs = 2;
+  uint64 CurrentPhysicalMs = 3;
+  bool RollbackIfExpired = 4;
+  bytes ClientId = 5;
+  int32 RequestId = 6;
+  int32 RegionId = 7;
+  uint64 RemainingBudgetMs = 8;
+  uint32 ProtocolVersion = 9;
+}
+
+message TxnCheckStatusReply {
+  bytes Err = 1;
+  TxnRecordStateProto State = 2;
+  uint64 CommitTs = 3;
+  TxnGetLockReply Lock = 4;
+  bool Applied = 5;
+}
+
+message TxnResolveLockArgs {
+  bytes Key = 1;
+  uint64 StartTs = 2;
+  TxnRecordStateProto Decision = 3;
+  uint64 CommitTs = 4;
+  bytes ClientId = 5;
+  int32 RequestId = 6;
+  int32 RegionId = 7;
+  uint64 RemainingBudgetMs = 8;
+  uint32 ProtocolVersion = 9;
+}
+
+message TxnResolveLockReply {
+  bytes Err = 1;
+  bool Applied = 2;
+}
+
+message TxnProtocolCapabilitiesArgs {}
+
+message TxnProtocolCapabilitiesReply {
+  bytes Err = 1;
+  uint32 ProtocolVersion = 2;
+  uint32 PreparedCommandVersion = 3;
+  uint32 LockFormatVersion = 4;
+  bool HlcExpiry = 5;
 }
 
 message TxnFindCommitTsArgs {
@@ -225,6 +296,9 @@ service kvServerRpc
   rpc TxnRollback(TxnRollbackArgs) returns (TxnRollbackReply);
   rpc TxnGetLock(TxnGetLockArgs) returns (TxnGetLockReply);
   rpc TxnAcquirePessimisticLock(TxnAcquirePessimisticLockArgs) returns (TxnAcquirePessimisticLockReply);
+  rpc TxnCheckStatus(TxnCheckStatusArgs) returns (TxnCheckStatusReply);
+  rpc TxnResolveLock(TxnResolveLockArgs) returns (TxnResolveLockReply);
+  rpc TxnProtocolCapabilities(TxnProtocolCapabilitiesArgs) returns (TxnProtocolCapabilitiesReply);
   rpc TxnFindCommitTs(TxnFindCommitTsArgs) returns (TxnFindCommitTsReply);
   rpc TxnExpiredLocks(TxnExpiredLocksArgs) returns (TxnExpiredLocksReply);
   rpc TxnGarbageCollect(TxnGarbageCollectArgs) returns (TxnGarbageCollectReply);

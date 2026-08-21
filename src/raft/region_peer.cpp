@@ -36,6 +36,49 @@ bool IsNodeScheduledTxn(const std::string& operation) {
   return operation.rfind("TxnPrepared", 0) == 0 || operation == "TxnGarbageCollect";
 }
 
+std::chrono::steady_clock::time_point RequestDeadline(uint64_t remainingBudgetMs) {
+  const uint64_t budget = remainingBudgetMs == 0
+                              ? static_cast<uint64_t>(CONSENSUS_TIMEOUT)
+                              : std::min<uint64_t>(remainingBudgetMs, CONSENSUS_TIMEOUT);
+  return std::chrono::steady_clock::now() + std::chrono::milliseconds(budget);
+}
+
+raftKVRpcProctoc::TxnRecordStateProto ToProtoTxnState(TxnRecordState state) {
+  switch (state) {
+    case TxnRecordState::Locked: return raftKVRpcProctoc::TXN_RECORD_LOCKED;
+    case TxnRecordState::Committed: return raftKVRpcProctoc::TXN_RECORD_COMMITTED;
+    case TxnRecordState::RolledBack: return raftKVRpcProctoc::TXN_RECORD_ROLLED_BACK;
+    case TxnRecordState::NotFound: return raftKVRpcProctoc::TXN_RECORD_NOT_FOUND;
+  }
+  return raftKVRpcProctoc::TXN_RECORD_NOT_FOUND;
+}
+
+TxnRecordState FromProtoTxnState(raftKVRpcProctoc::TxnRecordStateProto state) {
+  switch (state) {
+    case raftKVRpcProctoc::TXN_RECORD_LOCKED: return TxnRecordState::Locked;
+    case raftKVRpcProctoc::TXN_RECORD_COMMITTED: return TxnRecordState::Committed;
+    case raftKVRpcProctoc::TXN_RECORD_ROLLED_BACK: return TxnRecordState::RolledBack;
+    case raftKVRpcProctoc::TXN_RECORD_NOT_FOUND: return TxnRecordState::NotFound;
+  }
+  return TxnRecordState::NotFound;
+}
+
+void FillLockReply(const MvccLock& lock, raftKVRpcProctoc::TxnGetLockReply* response) {
+  response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
+  response->set_haslock(true);
+  response->set_primarykey(lock.primaryKey);
+  response->set_value(lock.value);
+  response->set_startts(lock.startTs);
+  response->set_ttlms(lock.ttlMs);
+  response->set_createtimems(lock.createTimeMs);
+  response->set_isdelete(lock.isDelete);
+  response->set_ispessimistic(lock.isPessimistic);
+  response->set_forupdatets(lock.forUpdateTs);
+  response->set_expireatphysicalms(lock.expireAtPhysicalMs);
+  response->set_legacyexpiry(lock.legacyExpiry);
+  response->set_islockonly(lock.isLockOnly);
+}
+
 }  // namespace
 
 void RegionPeer::DprintfKVDB() {
@@ -592,15 +635,31 @@ bool RegionPeer::IsTxnLeader() {
 PreparedMvccWrite RegionPeer::PrepareTxn(const TxnCommand& command) {
   switch (command.type) {
     case TxnCommandType::Prewrite:
+      if (command.isLockOnly) {
+        return m_mvccStorage->PreparePrewriteLock(command.key, command.primaryKey,
+                                                  command.startTs, command.ttlMs,
+                                                  command.forUpdateTs);
+      }
       return m_mvccStorage->PreparePrewrite(command.key, command.value, command.primaryKey,
-                                            command.startTs, command.ttlMs, command.isDelete);
+                                            command.startTs, command.ttlMs, command.isDelete,
+                                            command.forUpdateTs);
     case TxnCommandType::Commit:
       return m_mvccStorage->PrepareCommit(command.key, command.startTs, command.commitTs);
     case TxnCommandType::Rollback:
       return m_mvccStorage->PrepareRollback(command.key, command.startTs);
     case TxnCommandType::PessimisticLock:
       return m_mvccStorage->PreparePessimisticLock(command.key, command.primaryKey,
-                                                   command.startTs, command.ttlMs);
+                                                   command.startTs, command.ttlMs,
+                                                   command.forUpdateTs,
+                                                   command.expireAtPhysicalMs);
+    case TxnCommandType::CheckTxnStatus:
+      return m_mvccStorage->PrepareCheckTxnStatus(command.key, command.startTs,
+                                                  command.currentPhysicalMs,
+                                                  command.rollbackIfExpired);
+    case TxnCommandType::ResolveLock:
+      return m_mvccStorage->PrepareResolveLock(command.key, command.startTs,
+                                               command.resolutionState,
+                                               command.commitTs);
     case TxnCommandType::GarbageCollect:
       return {};
   }
@@ -608,10 +667,15 @@ PreparedMvccWrite RegionPeer::PrepareTxn(const TxnCommand& command) {
 }
 
 bool RegionPeer::ProposeTxn(const Op& op, int* raftIndex) {
-  int term = -1;
+  int term = 0;
   bool isLeader = false;
   m_raftNode->Start(op, raftIndex, &term, &isLeader);
   return isLeader;
+}
+
+std::vector<std::pair<std::string, MvccLock>> RegionPeer::ExpiredLocks(uint64_t currentPhysicalMs) {
+  if (!IsTxnLeader()) return {};
+  return m_mvccStorage->ExpiredLocks(currentPhysicalMs);
 }
 
 void RegionPeer::Start() {
@@ -752,6 +816,11 @@ void RegionPeer::TxnPrewrite(google::protobuf::RpcController *controller, const 
     done->Run();
     return;
   }
+  if (request->maxforupdatets() != 0 && request->protocolversion() < kTxnProtocolVersion) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
   TxnCommand command;
   command.type = TxnCommandType::Prewrite;
   command.regionId = m_regionId;
@@ -761,10 +830,12 @@ void RegionPeer::TxnPrewrite(google::protobuf::RpcController *controller, const 
   command.primaryKey = request->primarykey();
   command.startTs = request->startts();
   command.ttlMs = request->ttlms();
+  command.forUpdateTs = request->maxforupdatets();
   command.isDelete = request->isdelete();
+  command.isLockOnly = request->islockonly();
   command.clientId = request->clientid();
   command.requestId = request->requestid();
-  command.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(CONSENSUS_TIMEOUT);
+  command.deadline = RequestDeadline(request->remainingbudgetms());
   scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
     response->set_err(result.status);
     done->Run();
@@ -830,15 +901,7 @@ void RegionPeer::TxnGetLock(google::protobuf::RpcController *controller, const :
   }
   auto lockOpt = m_mvccStorage->GetLock(request->key());
   if (lockOpt) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
-    response->set_haslock(true);
-    response->set_primarykey(lockOpt->primaryKey);
-    response->set_value(lockOpt->value);
-    response->set_startts(lockOpt->startTs);
-    response->set_ttlms(lockOpt->ttlMs);
-    response->set_createtimems(lockOpt->createTimeMs);
-    response->set_isdelete(lockOpt->isDelete);
-    response->set_ispessimistic(lockOpt->isPessimistic);
+    FillLockReply(*lockOpt, response);
   } else {
     response->set_err(std::to_string(static_cast<int>(TxnStatus::NotFound)));
     response->set_haslock(false);
@@ -854,6 +917,11 @@ void RegionPeer::TxnAcquirePessimisticLock(google::protobuf::RpcController *cont
     done->Run();
     return;
   }
+  if (request->protocolversion() < kTxnProtocolVersion) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
   TxnCommand command;
   command.type = TxnCommandType::PessimisticLock;
   command.regionId = m_regionId;
@@ -862,11 +930,80 @@ void RegionPeer::TxnAcquirePessimisticLock(google::protobuf::RpcController *cont
   command.primaryKey = request->primarykey();
   command.startTs = request->startts();
   command.ttlMs = request->ttlms();
+  command.forUpdateTs = request->forupdatets();
+  command.expireAtPhysicalMs = request->expireatphysicalms();
   command.clientId = request->clientid();
   command.requestId = request->requestid();
-  command.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(CONSENSUS_TIMEOUT);
+  command.deadline = RequestDeadline(request->remainingbudgetms());
   scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
     response->set_err(result.status);
+    response->set_found(result.readStatus == TxnStatus::Ok);
+    response->set_value(result.value);
+    response->set_valuecommitts(result.valueCommitTs);
+    response->set_applied(result.applied);
+    done->Run();
+  });
+}
+
+void RegionPeer::TxnCheckStatus(google::protobuf::RpcController*,
+                                const ::raftKVRpcProctoc::TxnCheckStatusArgs* request,
+                                ::raftKVRpcProctoc::TxnCheckStatusReply* response,
+                                ::google::protobuf::Closure* done) {
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  if (!scheduler || request->protocolversion() < kTxnProtocolVersion) {
+    response->set_err(scheduler ? std::to_string(static_cast<int>(TxnStatus::StorageError))
+                                : ErrWrongLeader);
+    done->Run();
+    return;
+  }
+  TxnCommand command;
+  command.type = TxnCommandType::CheckTxnStatus;
+  command.regionId = m_regionId;
+  command.key = request->primarykey();
+  command.keys = {command.key};
+  command.startTs = request->startts();
+  command.currentPhysicalMs = request->currentphysicalms();
+  command.rollbackIfExpired = request->rollbackifexpired();
+  command.clientId = request->clientid();
+  command.requestId = request->requestid();
+  command.deadline = RequestDeadline(request->remainingbudgetms());
+  scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
+    response->set_err(result.status);
+    response->set_state(ToProtoTxnState(result.txnRecordStatus.state));
+    response->set_committs(result.txnRecordStatus.commitTs);
+    if (result.txnRecordStatus.lock.has_value()) {
+      FillLockReply(*result.txnRecordStatus.lock, response->mutable_lock());
+    }
+    response->set_applied(result.applied);
+    done->Run();
+  });
+}
+
+void RegionPeer::TxnResolveLock(google::protobuf::RpcController*,
+                                const ::raftKVRpcProctoc::TxnResolveLockArgs* request,
+                                ::raftKVRpcProctoc::TxnResolveLockReply* response,
+                                ::google::protobuf::Closure* done) {
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  if (!scheduler || request->protocolversion() < kTxnProtocolVersion) {
+    response->set_err(scheduler ? std::to_string(static_cast<int>(TxnStatus::StorageError))
+                                : ErrWrongLeader);
+    done->Run();
+    return;
+  }
+  TxnCommand command;
+  command.type = TxnCommandType::ResolveLock;
+  command.regionId = m_regionId;
+  command.key = request->key();
+  command.keys = {command.key};
+  command.startTs = request->startts();
+  command.resolutionState = FromProtoTxnState(request->decision());
+  command.commitTs = request->committs();
+  command.clientId = request->clientid();
+  command.requestId = request->requestid();
+  command.deadline = RequestDeadline(request->remainingbudgetms());
+  scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
+    response->set_err(result.status);
+    response->set_applied(result.applied);
     done->Run();
   });
 }
@@ -917,6 +1054,9 @@ void RegionPeer::TxnExpiredLocks(google::protobuf::RpcController *controller, co
     lockReply->set_createtimems(pair.second.createTimeMs);
     lockReply->set_isdelete(pair.second.isDelete);
     lockReply->set_ispessimistic(pair.second.isPessimistic);
+    lockReply->set_forupdatets(pair.second.forUpdateTs);
+    lockReply->set_expireatphysicalms(pair.second.expireAtPhysicalMs);
+    lockReply->set_legacyexpiry(pair.second.legacyExpiry);
   }
   done->Run();
 }

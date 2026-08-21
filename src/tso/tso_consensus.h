@@ -26,6 +26,8 @@ class TsoNotLeaderError final : public std::runtime_error {
 // reservation fence so a restarted member can only move the sequence forward.
 class TsoConsensusNode final : public TimestampOracle {
  public:
+  static constexpr uint32_t kProtocolVersion = 2;
+
   using Endpoint = std::pair<std::string, short>;
 
   TsoConsensusNode(int nodeId, std::vector<Endpoint> peers, std::string statePath,

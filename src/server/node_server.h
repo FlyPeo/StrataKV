@@ -13,6 +13,10 @@ class NodeServer;
 
 // One protobuf service per physical node. Requests carry RegionId and are
 // forwarded to lightweight RegionPeer objects owned by NodeServer.
+class NodeTxnScheduler;
+class TxnRecoveryManager;
+class RemoteTimestampOracle;
+
 class KvServiceDispatcher final : public raftKVRpcProctoc::kvServerRpc {
  public:
   explicit KvServiceDispatcher(NodeServer* server) : server_(server) {}
@@ -37,6 +41,18 @@ class KvServiceDispatcher final : public raftKVRpcProctoc::kvServerRpc {
                                  const raftKVRpcProctoc::TxnAcquirePessimisticLockArgs*,
                                  raftKVRpcProctoc::TxnAcquirePessimisticLockReply*,
                                  google::protobuf::Closure*) override;
+  void TxnCheckStatus(google::protobuf::RpcController*,
+                      const raftKVRpcProctoc::TxnCheckStatusArgs*,
+                      raftKVRpcProctoc::TxnCheckStatusReply*,
+                      google::protobuf::Closure*) override;
+  void TxnResolveLock(google::protobuf::RpcController*,
+                      const raftKVRpcProctoc::TxnResolveLockArgs*,
+                      raftKVRpcProctoc::TxnResolveLockReply*,
+                      google::protobuf::Closure*) override;
+  void TxnProtocolCapabilities(google::protobuf::RpcController*,
+                               const raftKVRpcProctoc::TxnProtocolCapabilitiesArgs*,
+                               raftKVRpcProctoc::TxnProtocolCapabilitiesReply*,
+                               google::protobuf::Closure*) override;
   void TxnFindCommitTs(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnFindCommitTsArgs*,
                        raftKVRpcProctoc::TxnFindCommitTsReply*, google::protobuf::Closure*) override;
   void TxnExpiredLocks(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnExpiredLocksArgs*,
@@ -67,7 +83,8 @@ class RaftServiceDispatcher final : public raftRpcProctoc::raftRpc {
 
 class NodeServer {
  public:
-  NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalog);
+  NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalog, const std::string& tsoEndpoints = "");
+  ~NodeServer();
   void Start();
   NodeTxnScheduler* TxnSchedulerForTest() const { return txnScheduler_.get(); }
   const std::vector<std::shared_ptr<RegionPeer>>& PeersForTest() const { return peers_; }
@@ -83,6 +100,7 @@ class NodeServer {
   // Declared before peers so it is destroyed after them. There is exactly one
   // transaction scheduler and one latch table per physical NodeServer.
   std::shared_ptr<NodeTxnScheduler> txnScheduler_;
+  std::unique_ptr<TxnRecoveryManager> recoveryManager_;
   std::vector<std::shared_ptr<RegionPeer>> peers_;
   std::unordered_map<int, std::shared_ptr<RegionPeer>> peersByRegion_;
   KvServiceDispatcher kvService_;

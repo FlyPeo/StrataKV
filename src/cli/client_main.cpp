@@ -10,6 +10,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -145,7 +146,8 @@ std::optional<std::string> JsonField(const std::string& body, const std::string&
 }
 
 std::string Begin(const Endpoint& endpoint) {
-  const Response response = Request(endpoint, "POST", "/v1/transactions");
+  const std::string body = "{\"lockTtlMs\":3000}";
+  const Response response = Request(endpoint, "POST", "/v1/transactions", body);
   const auto id = JsonField(response.body, "id");
   if (response.status != 201 || !id) throw std::runtime_error("Begin failed: " + response.body);
   return *id;
@@ -183,6 +185,29 @@ std::string Get(const Endpoint& endpoint, const std::string& transactionId, cons
   if (response.status != 200 || !status || *status != "OK") throw std::runtime_error("Get failed: " + response.body);
   const auto value = JsonField(response.body, "value");
   return value.value_or("");
+}
+
+std::string GetForUpdate(const Endpoint& endpoint, const std::string& transactionId, const std::string& key) {
+  const Response response = Request(endpoint, "POST", "/v1/transactions/" + transactionId + "/keys/" + UrlEncode(key) + "/lock");
+  const auto status = JsonField(response.body, "status");
+  if (response.status != 200 || !status || (*status != "OK" && *status != "NOT_FOUND")) throw std::runtime_error("GetForUpdate failed: " + response.body);
+  const auto value = JsonField(response.body, "value");
+  return value.value_or("");
+}
+
+void LockKeys(const Endpoint& endpoint, const std::string& transactionId, const std::vector<std::string>& keys) {
+  std::string body = "{\"keys\":[";
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (i > 0) body += ",";
+    body += "\"" + JsonEscape(keys[i]) + "\"";
+  }
+  body += "]}";
+  RequireOk(Request(endpoint, "POST", "/v1/transactions/" + transactionId + "/locks", body), "LockKeys");
+}
+
+void QueryStatus(const Endpoint& endpoint, const std::string& transactionId) {
+  const Response response = Request(endpoint, "GET", "/v1/transactions/" + transactionId);
+  std::cout << response.body << "\n";
 }
 
 std::string Trim(const std::string& value) {
@@ -225,11 +250,15 @@ int RunShell(const Endpoint& endpoint) {
     TakeWord(&line, &command);
     try {
       if (command == "help") {
-        std::cout << "begin | put <key> <value> | get <key> | delete <key> | commit | rollback | status | quit\n";
+        std::cout << "begin | put <key> <value> | get <key> | get-for-update <key> | lock <key>... | delete <key> | commit | rollback | status | quit\n";
       } else if (command == "quit" || command == "exit") {
         break;
       } else if (command == "status") {
-        std::cout << (transactionId.empty() ? "no active transaction" : "active transaction=" + transactionId) << '\n';
+        if (transactionId.empty()) {
+          std::cout << "no active transaction\n";
+        } else {
+          QueryStatus(endpoint, transactionId);
+        }
       } else if (command == "begin") {
         if (!transactionId.empty()) throw std::runtime_error("a transaction is already active; commit or rollback it first");
         transactionId = Begin(endpoint);
@@ -244,22 +273,55 @@ int RunShell(const Endpoint& endpoint) {
         Rollback(endpoint, transactionId);
         transactionId.clear();
         std::cout << "OK rolled back\n";
+      } else if (command == "get") {
+        std::string key;
+        if (!TakeWord(&line, &key)) throw std::runtime_error("usage: get <key>");
+        const bool autoCommit = transactionId.empty();
+        const std::string id = autoCommit ? Begin(endpoint) : transactionId;
+        try {
+          std::cout << Get(endpoint, id, key) << '\n';
+          if (autoCommit) Commit(endpoint, id);
+        } catch (...) {
+          if (autoCommit) try { Rollback(endpoint, id); } catch (...) {}
+          throw;
+        }
+      } else if (command == "get-for-update") {
+        std::string key;
+        if (!TakeWord(&line, &key)) throw std::runtime_error("usage: get-for-update <key>");
+        const bool autoCommit = transactionId.empty();
+        const std::string id = autoCommit ? Begin(endpoint) : transactionId;
+        try {
+          std::cout << GetForUpdate(endpoint, id, key) << '\n';
+          if (autoCommit) Commit(endpoint, id);
+        } catch (...) {
+          if (autoCommit) try { Rollback(endpoint, id); } catch (...) {}
+          throw;
+        }
+      } else if (command == "lock") {
+        std::vector<std::string> keys;
+        std::string key;
+        while (TakeWord(&line, &key)) keys.push_back(key);
+        if (keys.empty()) throw std::runtime_error("usage: lock <key1> [key2...]");
+        const bool autoCommit = transactionId.empty();
+        const std::string id = autoCommit ? Begin(endpoint) : transactionId;
+        try {
+          LockKeys(endpoint, id, keys);
+          std::cout << "OK locked\n";
+          if (autoCommit) Commit(endpoint, id);
+        } catch (...) {
+          if (autoCommit) try { Rollback(endpoint, id); } catch (...) {}
+          throw;
+        }
       } else if (command == "put") {
         std::string key;
         if (!TakeWord(&line, &key) || line.empty()) throw std::runtime_error("usage: put <key> <value>");
         const bool autoCommit = transactionId.empty();
-        if (autoCommit) transactionId = Begin(endpoint);
+        const std::string id = autoCommit ? Begin(endpoint) : transactionId;
         try {
-          Put(endpoint, transactionId, key, line);
-          if (autoCommit) {
-            Commit(endpoint, transactionId);
-            transactionId.clear();
-          }
+          Put(endpoint, id, key, line);
+          if (autoCommit) Commit(endpoint, id);
         } catch (...) {
-          if (autoCommit && !transactionId.empty()) {
-            try { Rollback(endpoint, transactionId); } catch (...) {}
-            transactionId.clear();
-          }
+          if (autoCommit) try { Rollback(endpoint, id); } catch (...) {}
           throw;
         }
         std::cout << "OK key=" << key << (autoCommit ? " committed" : " staged") << '\n';

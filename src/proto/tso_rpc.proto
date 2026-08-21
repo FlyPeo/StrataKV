@@ -28,6 +28,8 @@ message TimestampStatusReply {
   int32 Term = 2;
   bool IsLeader = 3;
   uint64 HighWater = 4;
+  uint32 ProtocolVersion = 5;
+  bool HybridLogical = 6;
 }
 
 service timestampOracleRpc {

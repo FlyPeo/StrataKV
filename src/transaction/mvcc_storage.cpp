@@ -69,6 +69,8 @@ std::string WriteTypeName(MvccWriteType type) {
       return "delete";
     case MvccWriteType::Rollback:
       return "rollback";
+    case MvccWriteType::Lock:
+      return "lock";
   }
   return "put";
 }
@@ -80,13 +82,18 @@ MvccWriteType ParseWriteType(const std::string& type) {
   if (type == "rollback") {
     return MvccWriteType::Rollback;
   }
+  if (type == "lock") {
+    return MvccWriteType::Lock;
+  }
   return MvccWriteType::Put;
 }
 
 std::string EncodeLockValue(const MvccLock& lock) {
   return EncodeFields({lock.primaryKey, std::to_string(lock.startTs), std::to_string(lock.ttlMs),
                        std::to_string(lock.createTimeMs), lock.isDelete ? "1" : "0",
-                       lock.isPessimistic ? "1" : "0"});
+                       lock.isPessimistic ? "1" : "0",
+                       std::to_string(lock.forUpdateTs == 0 ? lock.startTs : lock.forUpdateTs),
+                       std::to_string(lock.expireAtPhysicalMs), lock.isLockOnly ? "1" : "0"});
 }
 
 bool DecodeLockValue(const std::string& encoded, MvccLock* lock) {
@@ -98,6 +105,11 @@ bool DecodeLockValue(const std::string& encoded, MvccLock* lock) {
     lock->createTimeMs = DecodeTs(fields[3]);
     lock->isDelete = fields[4] == "1";
     lock->isPessimistic = fields.size() >= 6 && fields[5] == "1";
+    lock->forUpdateTs = fields.size() >= 7 ? DecodeTs(fields[6]) : lock->startTs;
+    if (lock->forUpdateTs == 0) lock->forUpdateTs = lock->startTs;
+    lock->expireAtPhysicalMs = fields.size() >= 8 ? DecodeTs(fields[7]) : 0;
+    lock->legacyExpiry = fields.size() < 8 || lock->expireAtPhysicalMs == 0;
+    lock->isLockOnly = fields.size() >= 9 && fields[8] == "1";
     return true;
   }
 
@@ -111,6 +123,10 @@ bool DecodeLockValue(const std::string& encoded, MvccLock* lock) {
   lock->createTimeMs = NowMs();
   lock->isDelete = false;
   lock->isPessimistic = false;
+  lock->forUpdateTs = lock->startTs;
+  lock->expireAtPhysicalMs = 0;
+  lock->legacyExpiry = true;
+  lock->isLockOnly = false;
   return true;
 }
 
@@ -166,7 +182,8 @@ std::string PreparedMvccWrite::Serialize() const {
 
 bool PreparedMvccWrite::Parse(const std::string& encoded) {
   raftKVRpcProctoc::PreparedMvccWriteCommand command;
-  if (!command.ParseFromString(encoded) || command.version() != kCommandVersion ||
+  if (!command.ParseFromString(encoded) ||
+      (command.version() != kLegacyCommandVersion && command.version() != kCommandVersion) ||
       command.modifications_size() > 1000000) return false;
   commandVersion = command.version();
   const int32_t rawStatus = command.preparedstatus();
@@ -231,7 +248,7 @@ TxnStatus MvccStorage::Get(const std::string& key, uint64_t readTs, std::string*
   do {
     --version;
     const MvccWrite& write = version->second;
-    if (write.type == MvccWriteType::Rollback) {
+    if (write.type == MvccWriteType::Rollback || write.type == MvccWriteType::Lock) {
       if (version == writeIt->second.begin()) {
         return TxnStatus::NotFound;
       }
@@ -247,13 +264,27 @@ TxnStatus MvccStorage::Get(const std::string& key, uint64_t readTs, std::string*
 }
 
 TxnStatus MvccStorage::Prewrite(const std::string& key, const std::string& value, const std::string& primaryKey,
-                                uint64_t startTs, uint64_t ttlMs) {
-  return PrewriteLocked(key, value, primaryKey, startTs, ttlMs, false);
+                                uint64_t startTs, uint64_t ttlMs, uint64_t forUpdateTs,
+                                uint64_t remainingBudgetMs) {
+  (void)remainingBudgetMs;
+  return PrewriteLocked(key, value, primaryKey, startTs, ttlMs, false, forUpdateTs);
 }
 
 TxnStatus MvccStorage::PrewriteDelete(const std::string& key, const std::string& primaryKey, uint64_t startTs,
-                                      uint64_t ttlMs) {
-  return PrewriteLocked(key, "", primaryKey, startTs, ttlMs, true);
+                                      uint64_t ttlMs, uint64_t forUpdateTs,
+                                      uint64_t remainingBudgetMs) {
+  (void)remainingBudgetMs;
+  return PrewriteLocked(key, "", primaryKey, startTs, ttlMs, true, forUpdateTs);
+}
+
+TxnStatus MvccStorage::PrewriteLock(const std::string& key, const std::string& primaryKey,
+                                    uint64_t startTs, uint64_t ttlMs, uint64_t forUpdateTs,
+                                    uint64_t remainingBudgetMs) {
+  (void)remainingBudgetMs;
+  PreparedMvccWrite prepared =
+      PreparePrewriteLock(key, primaryKey, startTs, ttlMs, forUpdateTs);
+  if (prepared.status != TxnStatus::Ok || !prepared.HasChanges()) return prepared.status;
+  return ApplyPrepared(key, prepared);
 }
 
 TxnStatus MvccStorage::PrecheckPrewrite(const std::string& key, uint64_t startTs) {
@@ -283,6 +314,24 @@ uint64_t MvccStorage::CurrentRevisionLocked(const std::string& key) const {
   return revision == revisions_.end() ? 0 : revision->second;
 }
 
+TxnStatus MvccStorage::ReadCommittedLocked(const std::string& key, uint64_t readTs,
+                                           std::string* value, uint64_t* commitTs) const {
+  const auto writeIt = writes_.find(key);
+  if (writeIt == writes_.end()) return TxnStatus::NotFound;
+
+  auto version = writeIt->second.upper_bound(readTs);
+  while (version != writeIt->second.begin()) {
+    --version;
+    const MvccWrite& write = version->second;
+    if (write.type == MvccWriteType::Rollback || write.type == MvccWriteType::Lock) continue;
+    if (commitTs != nullptr) *commitTs = version->first;
+    if (write.type == MvccWriteType::Delete) return TxnStatus::NotFound;
+    return engine_->Get(DataKey(key, write.startTs), value) ? TxnStatus::Ok
+                                                            : TxnStatus::StorageError;
+  }
+  return TxnStatus::NotFound;
+}
+
 void MvccStorage::AppendRevisionMutationLocked(const std::string& key, std::vector<KVBatchOp>* ops,
                                                uint64_t* newRevision) {
   *newRevision = CurrentRevisionLocked(key) + 1;
@@ -291,7 +340,8 @@ void MvccStorage::AppendRevisionMutationLocked(const std::string& key, std::vect
 
 PreparedMvccWrite MvccStorage::PreparePrewrite(const std::string& key, const std::string& value,
                                                const std::string& primaryKey, uint64_t startTs,
-                                               uint64_t ttlMs, bool isDelete) {
+                                               uint64_t ttlMs, bool isDelete,
+                                               uint64_t forUpdateTs) {
   std::shared_lock<std::shared_mutex> lock(mutex_);
   PreparedMvccWrite prepared;
   prepared.expectedRevision = CurrentRevisionLocked(key);
@@ -302,10 +352,22 @@ PreparedMvccWrite MvccStorage::PreparePrewrite(const std::string& key, const std
       prepared.status = TxnStatus::LockConflict;
       return prepared;
     }
+    if (existingLock->second.primaryKey != primaryKey) {
+      prepared.status = TxnStatus::LockConflict;
+      return prepared;
+    }
     if (!existingLock->second.isPessimistic) {
       // A retry of an already applied Prewrite is successful without another
       // Raft entry. The persisted lock is the idempotency evidence.
       prepared.status = TxnStatus::Ok;
+      return prepared;
+    }
+    if (forUpdateTs != 0 && forUpdateTs < existingLock->second.forUpdateTs) {
+      prepared.status = TxnStatus::WriteConflict;
+      return prepared;
+    }
+    if (forUpdateTs == 0 && !existingLock->second.legacyExpiry && existingLock->second.isPessimistic) {
+      prepared.status = TxnStatus::WriteConflict;
       return prepared;
     }
   }
@@ -324,7 +386,14 @@ PreparedMvccWrite MvccStorage::PreparePrewrite(const std::string& key, const std
     }
   }
 
-  const MvccLock mvccLock{primaryKey, value, startTs, ttlMs, NowMs(), isDelete, false};
+  MvccLock mvccLock{primaryKey, value, startTs, ttlMs, NowMs(), isDelete, false};
+  if (existingLock != locks_.end() && existingLock->second.isPessimistic) {
+    mvccLock.forUpdateTs = existingLock->second.forUpdateTs;
+    mvccLock.expireAtPhysicalMs = existingLock->second.expireAtPhysicalMs;
+    mvccLock.legacyExpiry = existingLock->second.legacyExpiry;
+  } else {
+    mvccLock.forUpdateTs = forUpdateTs == 0 ? startTs : forUpdateTs;
+  }
   if (isDelete) {
     prepared.modifications.push_back({KVBatchOpType::Delete, DataKey(key, startTs), {}});
   } else {
@@ -337,13 +406,48 @@ PreparedMvccWrite MvccStorage::PreparePrewrite(const std::string& key, const std
 }
 
 PreparedMvccWrite MvccStorage::PreparePessimisticLock(const std::string& key, const std::string& primaryKey,
-                                                      uint64_t startTs, uint64_t ttlMs) {
+                                                      uint64_t startTs, uint64_t ttlMs,
+                                                      uint64_t forUpdateTs,
+                                                      uint64_t expireAtPhysicalMs) {
   std::shared_lock<std::shared_mutex> lock(mutex_);
   PreparedMvccWrite prepared;
+  prepared.commandVersion = PreparedMvccWrite::kCommandVersion;
   prepared.expectedRevision = CurrentRevisionLocked(key);
+  const uint64_t requestedForUpdateTs = forUpdateTs == 0 ? startTs : forUpdateTs;
   const auto existingLock = locks_.find(key);
   if (existingLock != locks_.end()) {
-    prepared.status = existingLock->second.startTs == startTs ? TxnStatus::Ok : TxnStatus::LockConflict;
+    if (existingLock->second.startTs != startTs) {
+      prepared.status = TxnStatus::LockConflict;
+      return prepared;
+    }
+    if (!existingLock->second.isPessimistic || existingLock->second.primaryKey != primaryKey) {
+      prepared.status = TxnStatus::LockConflict;
+      return prepared;
+    }
+
+    const uint64_t effectiveForUpdateTs =
+        std::max(existingLock->second.forUpdateTs, requestedForUpdateTs);
+    prepared.readStatus =
+        ReadCommittedLocked(key, effectiveForUpdateTs, &prepared.readValue, &prepared.readCommitTs);
+    if (prepared.readStatus == TxnStatus::StorageError) {
+      prepared.status = TxnStatus::StorageError;
+      return prepared;
+    }
+    const uint64_t effectiveExpiry =
+        std::max(existingLock->second.expireAtPhysicalMs, expireAtPhysicalMs);
+    if (effectiveForUpdateTs == existingLock->second.forUpdateTs &&
+        effectiveExpiry == existingLock->second.expireAtPhysicalMs) {
+      prepared.status = TxnStatus::Ok;
+      return prepared;
+    }
+
+    MvccLock advanced = existingLock->second;
+    advanced.forUpdateTs = effectiveForUpdateTs;
+    advanced.expireAtPhysicalMs = effectiveExpiry;
+    advanced.legacyExpiry = effectiveExpiry == 0;
+    prepared.modifications.push_back({KVBatchOpType::Put, LockKey(key), EncodeLockValue(advanced)});
+    AppendRevisionMutationLocked(key, &prepared.modifications, &prepared.newRevision);
+    prepared.status = TxnStatus::Ok;
     return prepared;
   }
   const auto writeIt = writes_.find(key);
@@ -354,13 +458,58 @@ PreparedMvccWrite MvccStorage::PreparePessimisticLock(const std::string& key, co
         return prepared;
       }
     }
-    if (!writeIt->second.empty() && writeIt->second.rbegin()->first >= startTs) {
-      prepared.status = TxnStatus::WriteConflict;
-      return prepared;
+    for (auto latest = writeIt->second.rbegin(); latest != writeIt->second.rend(); ++latest) {
+      if (latest->second.type == MvccWriteType::Rollback) continue;
+      if (latest->first > requestedForUpdateTs) prepared.status = TxnStatus::WriteConflict;
+      if (prepared.status == TxnStatus::WriteConflict) return prepared;
+      break;
     }
   }
-  const MvccLock mvccLock{primaryKey, "", startTs, ttlMs, NowMs(), false, true};
+  prepared.readStatus =
+      ReadCommittedLocked(key, requestedForUpdateTs, &prepared.readValue, &prepared.readCommitTs);
+  if (prepared.readStatus == TxnStatus::StorageError) {
+    prepared.status = TxnStatus::StorageError;
+    return prepared;
+  }
+  MvccLock mvccLock{primaryKey, "", startTs, ttlMs, NowMs(), false, true};
+  mvccLock.forUpdateTs = requestedForUpdateTs;
+  mvccLock.expireAtPhysicalMs = expireAtPhysicalMs;
+  mvccLock.legacyExpiry = expireAtPhysicalMs == 0;
   prepared.modifications.push_back({KVBatchOpType::Put, LockKey(key), EncodeLockValue(mvccLock)});
+  AppendRevisionMutationLocked(key, &prepared.modifications, &prepared.newRevision);
+  prepared.commandVersion = PreparedMvccWrite::kCommandVersion;
+  prepared.status = TxnStatus::Ok;
+  return prepared;
+}
+
+PreparedMvccWrite MvccStorage::PreparePrewriteLock(const std::string& key,
+                                                   const std::string& primaryKey,
+                                                   uint64_t startTs, uint64_t ttlMs,
+                                                   uint64_t forUpdateTs) {
+  std::shared_lock<std::shared_mutex> lock(mutex_);
+  PreparedMvccWrite prepared;
+  prepared.commandVersion = PreparedMvccWrite::kCommandVersion;
+  prepared.expectedRevision = CurrentRevisionLocked(key);
+  const auto existing = locks_.find(key);
+  if (existing == locks_.end() || existing->second.startTs != startTs ||
+      existing->second.primaryKey != primaryKey) {
+    prepared.status = existing == locks_.end() ? TxnStatus::NotFound : TxnStatus::LockConflict;
+    return prepared;
+  }
+  if (!existing->second.isPessimistic) {
+    prepared.status = existing->second.isLockOnly ? TxnStatus::Ok : TxnStatus::LockConflict;
+    return prepared;
+  }
+  if (forUpdateTs != 0 && forUpdateTs < existing->second.forUpdateTs) {
+    prepared.status = TxnStatus::WriteConflict;
+    return prepared;
+  }
+
+  MvccLock upgraded = existing->second;
+  upgraded.isPessimistic = false;
+  upgraded.isLockOnly = true;
+  upgraded.ttlMs = ttlMs;
+  prepared.modifications.push_back({KVBatchOpType::Put, LockKey(key), EncodeLockValue(upgraded)});
   AppendRevisionMutationLocked(key, &prepared.modifications, &prepared.newRevision);
   prepared.status = TxnStatus::Ok;
   return prepared;
@@ -389,6 +538,10 @@ PreparedMvccWrite MvccStorage::PrepareCommit(const std::string& key, uint64_t st
     prepared.status = TxnStatus::LockConflict;
     return prepared;
   }
+  if (commitTs <= std::max(startTs, lockIt->second.forUpdateTs)) {
+    prepared.status = TxnStatus::WriteConflict;
+    return prepared;
+  }
 
   const auto writeIt = writes_.find(key);
   if (writeIt != writes_.end()) {
@@ -407,8 +560,11 @@ PreparedMvccWrite MvccStorage::PrepareCommit(const std::string& key, uint64_t st
     }
   }
 
-  const MvccWrite write{startTs, commitTs,
-                        lockIt->second.isDelete ? MvccWriteType::Delete : MvccWriteType::Put};
+  const MvccWrite write{
+      startTs, commitTs,
+      lockIt->second.isLockOnly
+          ? MvccWriteType::Lock
+          : (lockIt->second.isDelete ? MvccWriteType::Delete : MvccWriteType::Put)};
   prepared.modifications.push_back({KVBatchOpType::Put, WriteKey(key, commitTs), EncodeWriteValue(write)});
   prepared.modifications.push_back({KVBatchOpType::Delete, LockKey(key), {}});
   AppendRevisionMutationLocked(key, &prepared.modifications, &prepared.newRevision);
@@ -418,6 +574,11 @@ PreparedMvccWrite MvccStorage::PrepareCommit(const std::string& key, uint64_t st
 
 PreparedMvccWrite MvccStorage::PrepareRollback(const std::string& key, uint64_t startTs) {
   std::shared_lock<std::shared_mutex> lock(mutex_);
+  return PrepareRollbackLocked(key, startTs);
+}
+
+PreparedMvccWrite MvccStorage::PrepareRollbackLocked(const std::string& key,
+                                                      uint64_t startTs) {
   PreparedMvccWrite prepared;
   prepared.expectedRevision = CurrentRevisionLocked(key);
   const auto writeIt = writes_.find(key);
@@ -442,6 +603,74 @@ PreparedMvccWrite MvccStorage::PrepareRollback(const std::string& key, uint64_t 
   prepared.modifications.push_back({KVBatchOpType::Put, WriteKey(key, startTs), EncodeWriteValue(rollback)});
   AppendRevisionMutationLocked(key, &prepared.modifications, &prepared.newRevision);
   prepared.status = TxnStatus::Ok;
+  return prepared;
+}
+
+TxnRecordStatus MvccStorage::InspectTxnStatusLocked(const std::string& key,
+                                                    uint64_t startTs) const {
+  const auto writeIt = writes_.find(key);
+  if (writeIt != writes_.end()) {
+    for (const auto& item : writeIt->second) {
+      if (item.second.startTs != startTs) continue;
+      if (item.second.type == MvccWriteType::Rollback) {
+        return TxnRecordStatus{TxnRecordState::RolledBack, 0, std::nullopt};
+      }
+      return TxnRecordStatus{TxnRecordState::Committed, item.first, std::nullopt};
+    }
+  }
+
+  const auto lockIt = locks_.find(key);
+  if (lockIt != locks_.end() && lockIt->second.startTs == startTs) {
+    return TxnRecordStatus{TxnRecordState::Locked, 0, lockIt->second};
+  }
+  return TxnRecordStatus{};
+}
+
+PreparedMvccWrite MvccStorage::PrepareCheckTxnStatus(const std::string& primaryKey,
+                                                     uint64_t startTs,
+                                                     uint64_t currentPhysicalMs,
+                                                     bool rollbackIfExpired) {
+  std::shared_lock<std::shared_mutex> lock(mutex_);
+  PreparedMvccWrite prepared;
+  prepared.expectedRevision = CurrentRevisionLocked(primaryKey);
+  prepared.status = TxnStatus::Ok;
+  prepared.txnRecordStatus = InspectTxnStatusLocked(primaryKey, startTs);
+  if (!rollbackIfExpired || prepared.txnRecordStatus.state != TxnRecordState::Locked ||
+      !prepared.txnRecordStatus.lock.has_value()) {
+    return prepared;
+  }
+
+  const MvccLock& txnLock = *prepared.txnRecordStatus.lock;
+  // Legacy createTimeMs came from another process's steady_clock epoch and is
+  // not comparable to HLC physical time. It must never be auto-expired here.
+  const bool expired = !txnLock.legacyExpiry && txnLock.expireAtPhysicalMs != 0 &&
+                       txnLock.expireAtPhysicalMs <= currentPhysicalMs;
+  if (!expired) return prepared;
+
+  prepared = PrepareRollbackLocked(primaryKey, startTs);
+  if (prepared.status == TxnStatus::Ok) {
+    prepared.commandVersion = PreparedMvccWrite::kCommandVersion;
+    prepared.txnRecordStatus =
+        TxnRecordStatus{TxnRecordState::RolledBack, 0, std::nullopt};
+  }
+  return prepared;
+}
+
+PreparedMvccWrite MvccStorage::PrepareResolveLock(const std::string& key, uint64_t startTs,
+                                                  TxnRecordState decision,
+                                                  uint64_t commitTs) {
+  if (decision == TxnRecordState::Committed && commitTs != 0) {
+    PreparedMvccWrite prepared = PrepareCommit(key, startTs, commitTs);
+    prepared.commandVersion = PreparedMvccWrite::kCommandVersion;
+    return prepared;
+  }
+  if (decision == TxnRecordState::RolledBack) {
+    PreparedMvccWrite prepared = PrepareRollback(key, startTs);
+    prepared.commandVersion = PreparedMvccWrite::kCommandVersion;
+    return prepared;
+  }
+  PreparedMvccWrite prepared;
+  prepared.status = TxnStatus::StorageError;
   return prepared;
 }
 
@@ -479,7 +708,9 @@ void MvccStorage::ApplyMetadataMutationLocked(const KVBatchOp& op) {
 
 TxnStatus MvccStorage::ApplyPrepared(const std::string& key, const PreparedMvccWrite& prepared,
                                      uint64_t appliedRaftIndex) {
-  if (prepared.commandVersion != PreparedMvccWrite::kCommandVersion || prepared.status != TxnStatus::Ok ||
+  if ((prepared.commandVersion != PreparedMvccWrite::kLegacyCommandVersion &&
+       prepared.commandVersion != PreparedMvccWrite::kCommandVersion) ||
+      prepared.status != TxnStatus::Ok ||
       prepared.modifications.empty() || prepared.newRevision != prepared.expectedRevision + 1) {
     return TxnStatus::StorageError;
   }
@@ -513,7 +744,8 @@ TxnStatus MvccStorage::ApplyPrepared(const std::string& key, const PreparedMvccW
 }
 
 TxnStatus MvccStorage::AcquirePessimisticLock(const std::string& key, const std::string& primaryKey, uint64_t startTs,
-                                              uint64_t ttlMs) {
+                                              uint64_t ttlMs, uint64_t forUpdateTs,
+                                              uint64_t expireAtPhysicalMs) {
   std::unique_lock<std::shared_mutex> lock(mutex_);
   const auto lockIt = locks_.find(key);
   if (lockIt != locks_.end()) {
@@ -533,6 +765,9 @@ TxnStatus MvccStorage::AcquirePessimisticLock(const std::string& key, const std:
   }
 
   MvccLock mvccLock{primaryKey, "", startTs, ttlMs, NowMs(), false, true};
+  mvccLock.forUpdateTs = forUpdateTs == 0 ? startTs : forUpdateTs;
+  mvccLock.expireAtPhysicalMs = expireAtPhysicalMs;
+  mvccLock.legacyExpiry = expireAtPhysicalMs == 0;
   std::vector<KVBatchOp> ops{{KVBatchOpType::Put, LockKey(key), EncodeLockValue(mvccLock)}};
   uint64_t newRevision = 0;
   AppendRevisionMutationLocked(key, &ops, &newRevision);
@@ -545,12 +780,37 @@ TxnStatus MvccStorage::AcquirePessimisticLock(const std::string& key, const std:
   return TxnStatus::Ok;
 }
 
+PessimisticLockResult MvccStorage::AcquirePessimisticLockForUpdate(
+    const std::string& key, const std::string& primaryKey, uint64_t startTs,
+    uint64_t ttlMs, uint64_t forUpdateTs, uint64_t expireAtPhysicalMs,
+    uint64_t remainingBudgetMs) {
+  (void)remainingBudgetMs;
+  PreparedMvccWrite prepared = PreparePessimisticLock(
+      key, primaryKey, startTs, ttlMs, forUpdateTs, expireAtPhysicalMs);
+  PessimisticLockResult result;
+  result.status = prepared.status;
+  result.found = prepared.readStatus == TxnStatus::Ok;
+  result.value = prepared.readValue;
+  result.valueCommitTs = prepared.readCommitTs;
+  if (prepared.status != TxnStatus::Ok) return result;
+  if (prepared.HasChanges()) {
+    result.status = ApplyPrepared(key, prepared);
+    result.applied = result.status == TxnStatus::Ok;
+  } else {
+    result.applied = true;
+  }
+  return result;
+}
+
 TxnStatus MvccStorage::PrewriteLocked(const std::string& key, const std::string& value, const std::string& primaryKey,
-                                      uint64_t startTs, uint64_t ttlMs, bool isDelete) {
+                                      uint64_t startTs, uint64_t ttlMs, bool isDelete,
+                                      uint64_t forUpdateTs) {
   std::unique_lock<std::shared_mutex> lock(mutex_);
   const auto existingLock = locks_.find(key);
   if (existingLock != locks_.end()) {
-    if (existingLock->second.startTs != startTs || !existingLock->second.isPessimistic) {
+    if (existingLock->second.startTs != startTs || !existingLock->second.isPessimistic ||
+        existingLock->second.primaryKey != primaryKey ||
+        (forUpdateTs != 0 && forUpdateTs < existingLock->second.forUpdateTs)) {
       return TxnStatus::LockConflict;
     }
   }
@@ -568,6 +828,13 @@ TxnStatus MvccStorage::PrewriteLocked(const std::string& key, const std::string&
   }
 
   MvccLock mvccLock{primaryKey, value, startTs, ttlMs, NowMs(), isDelete, false};
+  if (existingLock != locks_.end()) {
+    mvccLock.forUpdateTs = existingLock->second.forUpdateTs;
+    mvccLock.expireAtPhysicalMs = existingLock->second.expireAtPhysicalMs;
+    mvccLock.legacyExpiry = existingLock->second.legacyExpiry;
+  } else {
+    mvccLock.forUpdateTs = forUpdateTs == 0 ? startTs : forUpdateTs;
+  }
   std::vector<KVBatchOp> ops;
   if (isDelete) {
     ops.push_back({KVBatchOpType::Delete, DataKey(key, startTs), {}});
@@ -603,6 +870,9 @@ TxnStatus MvccStorage::Commit(const std::string& key, uint64_t startTs, uint64_t
   if (lockIt->second.startTs != startTs) {
     return TxnStatus::LockConflict;
   }
+  if (commitTs <= std::max(startTs, lockIt->second.forUpdateTs)) {
+    return TxnStatus::WriteConflict;
+  }
 
   const auto writeIt = writes_.find(key);
   if (writeIt != writes_.end()) {
@@ -618,7 +888,10 @@ TxnStatus MvccStorage::Commit(const std::string& key, uint64_t startTs, uint64_t
     }
   }
 
-  const MvccWriteType type = lockIt->second.isDelete ? MvccWriteType::Delete : MvccWriteType::Put;
+  const MvccWriteType type =
+      lockIt->second.isLockOnly
+          ? MvccWriteType::Lock
+          : (lockIt->second.isDelete ? MvccWriteType::Delete : MvccWriteType::Put);
   MvccWrite write{startTs, commitTs, type};
   std::vector<KVBatchOp> ops{{KVBatchOpType::Put, WriteKey(key, commitTs), EncodeWriteValue(write)},
                              {KVBatchOpType::Delete, LockKey(key), {}}};
@@ -683,18 +956,50 @@ std::optional<uint64_t> MvccStorage::FindCommitTs(const std::string& key, uint64
     return std::nullopt;
   }
   for (const auto& item : writeIt->second) {
-    if (item.second.startTs == startTs) {
+    if (item.second.startTs == startTs && item.second.type != MvccWriteType::Rollback) {
       return item.first;
     }
   }
   return std::nullopt;
 }
 
+TxnStatus MvccStorage::CheckTxnStatus(const std::string& primaryKey, uint64_t startTs,
+                                      TxnRecordStatus* status) {
+  return CheckTxnStatus(primaryKey, startTs, 0, false, 0, status);
+}
+
+TxnStatus MvccStorage::CheckTxnStatus(const std::string& primaryKey, uint64_t startTs,
+                                      uint64_t currentPhysicalMs, bool rollbackIfExpired,
+                                      uint64_t remainingBudgetMs, TxnRecordStatus* status) {
+  (void)remainingBudgetMs;
+  if (status == nullptr) return TxnStatus::StorageError;
+  PreparedMvccWrite prepared = PrepareCheckTxnStatus(primaryKey, startTs, currentPhysicalMs,
+                                                      rollbackIfExpired);
+  if (prepared.status != TxnStatus::Ok) return prepared.status;
+  if (prepared.HasChanges()) {
+    const TxnStatus applied = ApplyPrepared(primaryKey, prepared);
+    if (applied != TxnStatus::Ok) return applied;
+  }
+  *status = prepared.txnRecordStatus;
+  return TxnStatus::Ok;
+}
+
+TxnStatus MvccStorage::ResolveLock(const std::string& key, uint64_t startTs,
+                                   TxnRecordState decision, uint64_t commitTs) {
+  PreparedMvccWrite prepared = PrepareResolveLock(key, startTs, decision, commitTs);
+  if (prepared.status == TxnStatus::AlreadyCommitted) return TxnStatus::Ok;
+  if (prepared.status != TxnStatus::Ok) return prepared.status;
+  if (!prepared.HasChanges()) return TxnStatus::Ok;
+  return ApplyPrepared(key, prepared);
+}
+
 std::vector<std::pair<std::string, MvccLock>> MvccStorage::ExpiredLocks(uint64_t nowMs) {
   std::shared_lock<std::shared_mutex> lock(mutex_);
   std::vector<std::pair<std::string, MvccLock>> expired;
   for (const auto& item : locks_) {
-    if (item.second.createTimeMs + item.second.ttlMs <= nowMs) {
+    const bool isExpired = !item.second.legacyExpiry && item.second.expireAtPhysicalMs != 0 &&
+                           item.second.expireAtPhysicalMs <= nowMs;
+    if (isExpired) {
       expired.push_back(item);
     }
   }
@@ -713,7 +1018,9 @@ size_t MvccStorage::GarbageCollect(uint64_t safePointTs) {
 
     std::optional<uint64_t> keepCommitTs;
     for (auto it = versions.begin(); it != versions.end() && it->first < safePointTs; ++it) {
-      if (it->second.type != MvccWriteType::Rollback) keepCommitTs = it->first;
+      if (it->second.type == MvccWriteType::Put || it->second.type == MvccWriteType::Delete) {
+        keepCommitTs = it->first;
+      }
     }
 
     for (const auto& version : versions) {
@@ -753,6 +1060,11 @@ MvccStats MvccStorage::Stats() {
   std::shared_lock<std::shared_mutex> lock(mutex_);
   MvccStats stats;
   stats.lockCount = locks_.size();
+  for (const auto& lock : locks_) {
+    if (lock.second.isPessimistic) {
+      stats.pessimisticLockCount++;
+    }
+  }
   for (const auto& keyWrites : writes_) {
     stats.writeCount += keyWrites.second.size();
     stats.dataVersionCount += keyWrites.second.size();
@@ -761,6 +1073,15 @@ MvccStats MvccStorage::Stats() {
   stats.writeBatchCount = writeBatchCount_.load(std::memory_order_relaxed);
   stats.appliedRaftIndex = appliedRaftIndex_;
   return stats;
+}
+
+ProtocolCapabilities MvccStorage::Capabilities() {
+  ProtocolCapabilities caps;
+  caps.protocolVersion = 2;
+  caps.preparedCommandVersion = 2;
+  caps.lockFormatVersion = 1;
+  caps.hlcExpiry = true;
+  return caps;
 }
 
 uint64_t MvccStorage::MaxObservedTs() {

@@ -24,6 +24,8 @@ enum class TxnCommandType {
   Commit,
   Rollback,
   PessimisticLock,
+  CheckTxnStatus,
+  ResolveLock,
   GarbageCollect,
 };
 
@@ -54,8 +56,14 @@ struct TxnCommand {
   uint64_t startTs = 0;
   uint64_t commitTs = 0;
   uint64_t ttlMs = 0;
+  uint64_t forUpdateTs = 0;
+  uint64_t expireAtPhysicalMs = 0;
+  uint64_t currentPhysicalMs = 0;
   uint64_t safePointTs = 0;
+  TxnRecordState resolutionState = TxnRecordState::NotFound;
+  bool rollbackIfExpired = false;
   bool isDelete = false;
+  bool isLockOnly = false;
   std::chrono::steady_clock::time_point deadline;
 };
 
@@ -65,6 +73,10 @@ struct TxnScheduleResult {
   int raftIndex = -1;
   bool applied = false;
   bool responseTimedOut = false;
+  TxnStatus readStatus = TxnStatus::NotFound;
+  std::string value;
+  uint64_t valueCommitTs = 0;
+  TxnRecordStatus txnRecordStatus;
 };
 
 // Region-local storage and Raft operations used by the node-level scheduler.
@@ -77,6 +89,7 @@ class TxnRegionExecutor {
   virtual bool IsTxnLeader() = 0;
   virtual PreparedMvccWrite PrepareTxn(const TxnCommand& command) = 0;
   virtual bool ProposeTxn(const Op& op, int* raftIndex) = 0;
+  virtual std::vector<std::pair<std::string, MvccLock>> ExpiredLocks(uint64_t currentPhysicalMs) = 0;
 };
 
 // One latch table is shared by every RegionPeer on a physical node. Slots are
@@ -196,6 +209,7 @@ class NodeTxnScheduler : public std::enable_shared_from_this<NodeTxnScheduler> {
 
   void RegisterRegion(const std::shared_ptr<TxnRegionExecutor>& region);
   void OnRegionRemoved(int regionId);
+  std::vector<std::shared_ptr<TxnRegionExecutor>> Regions() const;
 
   // Safe for an RPC worker: this copies/owns the command and never waits for a
   // latch or Raft Apply. Completion can run on a scheduler or Region Apply
@@ -243,11 +257,13 @@ class NodeTxnScheduler : public std::enable_shared_from_this<NodeTxnScheduler> {
     std::chrono::steady_clock::time_point proposedAt;
     int raftIndex = -1;
     bool proposed = false;
+    PreparedMvccWrite preparedResponse;
   };
 
   static RequestKey MakeRequestKey(const TxnCommand& command);
   static TxnScheduleResult WrongLeaderResult(bool timedOut = false);
   static TxnScheduleResult StatusResult(TxnStatus status);
+  static TxnScheduleResult PreparedResult(const PreparedMvccWrite& prepared);
   static Op BuildOp(const TxnCommand& command, const PreparedMvccWrite* prepared);
 
   std::shared_ptr<TxnRegionExecutor> FindRegion(int regionId) const;

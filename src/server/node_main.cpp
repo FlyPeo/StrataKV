@@ -15,7 +15,7 @@ namespace {
 void PrintUsage(const char* program) {
   std::cerr << "Usage: " << program
             << " --node-id <id> --regions-config <regions.conf>"
-               " [--max-raft-state <bytes>]\n";
+               " [--max-raft-state <bytes>] [--tso-endpoints <endpoints>]\n";
 }
 
 bool ParseInt(const std::string& text, int* value) {
@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
   // A 1 MiB cap snapshots at 90% in RegionPeer and keeps long local runs bounded.
   int maxRaftState = 1024 * 1024;
   std::string regionsConfigPath;
+  std::string tsoEndpoints;
 
   for (int index = 1; index < argc; index += 2) {
     if (index + 1 >= argc) {
@@ -67,6 +68,8 @@ int main(int argc, char** argv) {
         std::cerr << "invalid --max-raft-state: " << value << '\n';
         return EXIT_FAILURE;
       }
+    } else if (option == "--tso-endpoints") {
+      tsoEndpoints = value;
     } else {
       std::cerr << "unknown option: " << option << '\n';
       PrintUsage(argv[0]);
@@ -81,7 +84,7 @@ int main(int argc, char** argv) {
 
   try {
     const RegionCatalog catalog = RegionCatalog::LoadFromConfig(regionsConfigPath);
-    NodeServer server(nodeId, maxRaftState, catalog);
+    NodeServer server(nodeId, maxRaftState, catalog, tsoEndpoints);
     server.Start();
     while (true) {
       std::this_thread::sleep_for(std::chrono::hours(24));

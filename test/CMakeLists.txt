@@ -16,6 +16,18 @@ add_dependencies(stratakv-test-tso stratakv-tso)
 add_test(NAME stratakv-test-tso COMMAND stratakv-test-tso)
 set_tests_properties(stratakv-test-tso PROPERTIES TIMEOUT 120)
 
+add_executable(stratakv-test-timestamp-oracle timestamp_oracle_check.cpp)
+target_link_libraries(stratakv-test-timestamp-oracle PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-timestamp-oracle COMMAND stratakv-test-timestamp-oracle)
+
+add_executable(stratakv-test-transaction-coordinator transaction_coordinator_check.cpp)
+target_link_libraries(stratakv-test-transaction-coordinator PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-transaction-coordinator COMMAND stratakv-test-transaction-coordinator)
+
+add_executable(stratakv-test-sdk-contract sdk_contract_check.cpp)
+target_link_libraries(stratakv-test-sdk-contract PRIVATE stratakv_sdk pthread)
+add_test(NAME stratakv-test-sdk-contract COMMAND stratakv-test-sdk-contract)
+
 add_executable(stratakv-test-txn-contention txn_contention_benchmark.cpp)
 target_link_libraries(stratakv-test-txn-contention PRIVATE stratakv_sdk pthread)
 

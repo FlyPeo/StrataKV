@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "kv_engine.h"
+#include "kv_server_rpc.pb.h"
 #include "mvcc_storage.h"
 #include "txn_scheduler.h"
 
@@ -70,6 +71,14 @@ void Require(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
 }
 
+std::string EncodeTestFields(const std::vector<std::string>& fields) {
+  std::string encoded;
+  for (const auto& field : fields) {
+    encoded += std::to_string(field.size()) + ":" + field;
+  }
+  return encoded;
+}
+
 std::shared_ptr<MvccStorage> NewStorage(std::shared_ptr<MemoryEngine>* engine = nullptr) {
   auto created = std::make_shared<MemoryEngine>();
   if (engine != nullptr) *engine = created;
@@ -96,6 +105,11 @@ class MockRegion final : public TxnRegionExecutor {
   PreparedMvccWrite PrepareTxn(const TxnCommand& command) override {
     switch (command.type) {
       case TxnCommandType::Prewrite:
+        if (command.isLockOnly) {
+          return storage_->PreparePrewriteLock(command.key, command.primaryKey,
+                                               command.startTs, command.ttlMs,
+                                               command.forUpdateTs);
+        }
         return storage_->PreparePrewrite(command.key, command.value, command.primaryKey,
                                          command.startTs, command.ttlMs, command.isDelete);
       case TxnCommandType::Commit:
@@ -104,7 +118,17 @@ class MockRegion final : public TxnRegionExecutor {
         return storage_->PrepareRollback(command.key, command.startTs);
       case TxnCommandType::PessimisticLock:
         return storage_->PreparePessimisticLock(command.key, command.primaryKey,
-                                                command.startTs, command.ttlMs);
+                                                command.startTs, command.ttlMs,
+                                                command.forUpdateTs,
+                                                command.expireAtPhysicalMs);
+      case TxnCommandType::CheckTxnStatus:
+        return storage_->PrepareCheckTxnStatus(command.key, command.startTs,
+                                               command.currentPhysicalMs,
+                                               command.rollbackIfExpired);
+      case TxnCommandType::ResolveLock:
+        return storage_->PrepareResolveLock(command.key, command.startTs,
+                                            command.resolutionState,
+                                            command.commitTs);
       case TxnCommandType::GarbageCollect:
         return {};
     }
@@ -146,6 +170,12 @@ class MockRegion final : public TxnRegionExecutor {
     }
     return op;
   }
+
+  std::vector<std::pair<std::string, MvccLock>> ExpiredLocks(uint64_t currentPhysicalMs) override {
+    return {};
+  }
+
+  void StepDown() { leader_.store(false); }
 
  private:
   int regionId_;
@@ -417,10 +447,336 @@ void CheckVersionAndApplyProgress() {
   auto recovered = std::make_shared<MvccStorage>(engine);
   Require(recovered->Stats().appliedRaftIndex == 77 && recovered->GetLock("progress-key").has_value(),
           "restart must recover both apply progress and MVCC metadata");
+  PreparedMvccWrite legacyDecoded;
+  Require(legacyDecoded.Parse(prepared.Serialize()) &&
+              legacyDecoded.commandVersion == PreparedMvccWrite::kLegacyCommandVersion,
+          "legacy prepared command must remain readable");
+  raftKVRpcProctoc::TxnAcquirePessimisticLockArgs oldRequest;
+  Require(oldRequest.protocolversion() == 0 && oldRequest.forupdatets() == 0 &&
+              oldRequest.remainingbudgetms() == 0,
+          "new protobuf fields must preserve old-message defaults");
   prepared.commandVersion = PreparedMvccWrite::kCommandVersion + 1;
   PreparedMvccWrite unsupported;
   Require(!unsupported.Parse(prepared.Serialize()), "unknown prepared command versions must be rejected");
-  std::cout << "PASS raft_apply_progress_atomic_batch\nPASS prepared_command_version_fence\n";
+  std::cout << "PASS raft_apply_progress_atomic_batch\nPASS prepared_command_version_fence\n"
+               "PASS protobuf_compatibility_defaults\n";
+}
+
+void CheckPessimisticLockEncodingRecovery() {
+  std::shared_ptr<MemoryEngine> engine;
+  auto storage = NewStorage(&engine);
+  auto prepared = storage->PreparePessimisticLock("new-lock", "primary", 500, 120000, 550, 123456);
+  Require(prepared.HasChanges() && storage->ApplyPrepared("new-lock", prepared) == TxnStatus::Ok,
+          "new pessimistic lock failed");
+  auto lock = storage->GetLock("new-lock");
+  Require(lock.has_value() && lock->forUpdateTs == 550 && lock->expireAtPhysicalMs == 123456 &&
+              !lock->legacyExpiry && lock->primaryKey == "primary",
+          "new pessimistic lock fields did not round-trip");
+
+  engine->Put("lock/legacy-lock",
+              EncodeTestFields({"legacy-primary", "600", "120000", "1000", "0", "1"}));
+  auto recovered = std::make_shared<MvccStorage>(engine);
+  lock = recovered->GetLock("new-lock");
+  Require(lock.has_value() && lock->forUpdateTs == 550 && lock->expireAtPhysicalMs == 123456,
+          "new pessimistic lock fields did not survive recovery");
+  auto legacy = recovered->GetLock("legacy-lock");
+  Require(legacy.has_value() && legacy->forUpdateTs == 600 && legacy->legacyExpiry &&
+              legacy->expireAtPhysicalMs == 0,
+          "legacy pessimistic lock compatibility defaults are wrong");
+  std::cout << "PASS pessimistic_lock_encoding_recovery\nPASS legacy_lock_compatibility\n";
+}
+
+void CheckPessimisticLockCurrentRead() {
+  auto storage = NewStorage();
+  Require(PreparedPrewrite(storage.get(), "present", "current", 100) == TxnStatus::Ok,
+          "seed prewrite failed");
+  auto seedCommit = storage->PrepareCommit("present", 100, 110);
+  Require(seedCommit.HasChanges() && storage->ApplyPrepared("present", seedCommit) == TxnStatus::Ok,
+          "seed commit failed");
+
+  auto present = storage->PreparePessimisticLock("present", "present", 120, 120000, 130, 10000);
+  Require(present.HasChanges() && present.readStatus == TxnStatus::Ok &&
+              present.readValue == "current" && present.readCommitTs == 110,
+          "locking read did not return current committed value");
+  Require(storage->ApplyPrepared("present", present) == TxnStatus::Ok,
+          "locking read lock apply failed");
+
+  auto repeated = storage->PreparePessimisticLock("present", "present", 120, 120000, 130, 10000);
+  Require(repeated.status == TxnStatus::Ok && !repeated.HasChanges() &&
+              repeated.readStatus == TxnStatus::Ok && repeated.readValue == "current",
+          "same-owner lock retry was not idempotent");
+
+  auto advanced = storage->PreparePessimisticLock("present", "present", 120, 120000, 150, 12000);
+  Require(advanced.HasChanges() && advanced.readValue == "current" &&
+              storage->ApplyPrepared("present", advanced) == TxnStatus::Ok,
+          "same-owner lock did not advance monotonically");
+  auto advancedLock = storage->GetLock("present");
+  Require(advancedLock.has_value() && advancedLock->forUpdateTs == 150 &&
+              advancedLock->expireAtPhysicalMs == 12000,
+          "advanced lock fields mismatch");
+
+  auto absent = storage->PreparePessimisticLock("absent", "absent", 200, 120000, 210, 20000);
+  Require(absent.HasChanges() && absent.readStatus == TxnStatus::NotFound,
+          "absent exact key was not lockable");
+  Require(storage->ApplyPrepared("absent", absent) == TxnStatus::Ok &&
+              storage->GetLock("absent").has_value(),
+          "absent exact key lock did not persist");
+
+  auto conflict = storage->PreparePessimisticLock("present", "other", 300, 120000, 310, 30000);
+  Require(conflict.status == TxnStatus::LockConflict,
+          "foreign pessimistic lock did not fail fast");
+
+  Require(PreparedPrewrite(storage.get(), "race", "newer", 400) == TxnStatus::Ok,
+          "race seed prewrite failed");
+  auto raceCommit = storage->PrepareCommit("race", 400, 450);
+  Require(raceCommit.HasChanges() && storage->ApplyPrepared("race", raceCommit) == TxnStatus::Ok,
+          "race seed commit failed");
+  auto stale = storage->PreparePessimisticLock("race", "race", 420, 120000, 440, 40000);
+  Require(stale.status == TxnStatus::WriteConflict,
+          "version newer than forUpdateTs did not win the lock race");
+  std::cout << "PASS pessimistic_lock_current_read\nPASS absent_key_lock\n"
+               "PASS pessimistic_lock_idempotency\nPASS for_update_version_race\n";
+}
+
+void CheckPessimisticPrewriteUpgrade() {
+  auto storage = NewStorage();
+  auto lock = storage->PreparePessimisticLock("upgrade", "primary", 500, 120000, 550, 50000);
+  Require(lock.HasChanges() && storage->ApplyPrepared("upgrade", lock) == TxnStatus::Ok,
+          "upgrade seed lock failed");
+
+  Require(storage->PreparePrewrite("upgrade", "value", "other-primary", 500, 120000, false, 550).status ==
+              TxnStatus::LockConflict,
+          "prewrite changed a fixed primary");
+  Require(storage->PreparePrewrite("upgrade", "value", "primary", 500, 120000, false, 540).status ==
+              TxnStatus::WriteConflict,
+          "prewrite accepted a stale forUpdateTs");
+
+  auto upgrade = storage->PreparePrewrite("upgrade", "value", "primary", 500, 120000, false, 550);
+  Require(upgrade.HasChanges() && storage->ApplyPrepared("upgrade", upgrade) == TxnStatus::Ok,
+          "owned pessimistic lock did not upgrade");
+  auto upgradedLock = storage->GetLock("upgrade");
+  Require(upgradedLock.has_value() && !upgradedLock->isPessimistic &&
+              upgradedLock->primaryKey == "primary" && upgradedLock->forUpdateTs == 550,
+          "upgraded Prewrite lock lost pessimistic metadata");
+  Require(storage->PreparePrewrite("upgrade", "value", "primary", 500, 120000, false, 550).status ==
+              TxnStatus::Ok,
+          "duplicate Prewrite after upgrade was not idempotent");
+
+  Require(storage->PrepareCommit("upgrade", 500, 550).status == TxnStatus::WriteConflict,
+          "commitTs equal to forUpdateTs was accepted");
+  auto commit = storage->PrepareCommit("upgrade", 500, 551);
+  Require(commit.HasChanges() && storage->ApplyPrepared("upgrade", commit) == TxnStatus::Ok,
+          "commit after forUpdateTs failed");
+
+  auto foreignLock = storage->PreparePessimisticLock("foreign", "foreign", 600, 120000, 610, 60000);
+  Require(foreignLock.HasChanges() && storage->ApplyPrepared("foreign", foreignLock) == TxnStatus::Ok,
+          "foreign seed lock failed");
+  Require(storage->PreparePrewrite("foreign", "bad", "foreign", 700, 120000, false, 710).status ==
+              TxnStatus::LockConflict,
+          "foreign owner lock was overwritten");
+  std::cout << "PASS pessimistic_prewrite_upgrade\nPASS fixed_primary_validation\n"
+               "PASS commit_after_for_update_ts\n";
+}
+
+void CheckTypedTxnStatusAndResolution() {
+  auto storage = NewStorage();
+  TxnRecordStatus status;
+  Require(storage->CheckTxnStatus("missing", 1, &status) == TxnStatus::Ok &&
+              status.state == TxnRecordState::NotFound,
+          "missing transaction status mismatch");
+
+  Require(PreparedPrewrite(storage.get(), "committed", "v", 100) == TxnStatus::Ok,
+          "committed seed prewrite failed");
+  auto committed = storage->PrepareCommit("committed", 100, 120);
+  Require(committed.HasChanges() && storage->ApplyPrepared("committed", committed) == TxnStatus::Ok,
+          "committed seed apply failed");
+  Require(storage->CheckTxnStatus("committed", 100, &status) == TxnStatus::Ok &&
+              status.state == TxnRecordState::Committed && status.commitTs == 120,
+          "committed transaction status mismatch");
+
+  auto rollback = storage->PrepareRollback("rolled-back", 200);
+  Require(rollback.HasChanges() && storage->ApplyPrepared("rolled-back", rollback) == TxnStatus::Ok,
+          "rollback seed apply failed");
+  Require(storage->CheckTxnStatus("rolled-back", 200, &status) == TxnStatus::Ok &&
+              status.state == TxnRecordState::RolledBack &&
+              !storage->FindCommitTs("rolled-back", 200).has_value(),
+          "rollback record was treated as a commit");
+
+  auto live = storage->PreparePessimisticLock("live", "live", 300, 120000, 310, 10000);
+  Require(live.HasChanges() && storage->ApplyPrepared("live", live) == TxnStatus::Ok,
+          "live lock seed failed");
+  Require(storage->CheckTxnStatus("live", 300, &status) == TxnStatus::Ok &&
+              status.state == TxnRecordState::Locked && status.lock.has_value(),
+          "locked transaction status mismatch");
+  auto notExpired = storage->PrepareCheckTxnStatus("live", 300, 9999, true);
+  Require(notExpired.status == TxnStatus::Ok && !notExpired.HasChanges() &&
+              notExpired.txnRecordStatus.state == TxnRecordState::Locked,
+          "live lock was rolled back before expiry");
+  auto expired = storage->PrepareCheckTxnStatus("live", 300, 10000, true);
+  Require(expired.HasChanges() &&
+              expired.txnRecordStatus.state == TxnRecordState::RolledBack &&
+              storage->ApplyPrepared("live", expired) == TxnStatus::Ok,
+          "expired lock was not atomically rolled back");
+  Require(storage->CheckTxnStatus("live", 300, &status) == TxnStatus::Ok &&
+              status.state == TxnRecordState::RolledBack,
+          "expired transaction did not persist rollback status");
+
+  Require(PreparedPrewrite(storage.get(), "secondary-commit", "v", 400) == TxnStatus::Ok,
+          "secondary commit prewrite failed");
+  auto resolveCommit =
+      storage->PrepareResolveLock("secondary-commit", 400, TxnRecordState::Committed, 450);
+  Require(resolveCommit.HasChanges() &&
+              storage->ApplyPrepared("secondary-commit", resolveCommit) == TxnStatus::Ok,
+          "committed resolution failed");
+  Require(storage->PrepareResolveLock("secondary-commit", 400, TxnRecordState::Committed, 450).status ==
+              TxnStatus::AlreadyCommitted,
+          "committed resolution retry was not idempotent");
+
+  Require(PreparedPrewrite(storage.get(), "secondary-rollback", "v", 500) == TxnStatus::Ok,
+          "secondary rollback prewrite failed");
+  auto resolveRollback =
+      storage->PrepareResolveLock("secondary-rollback", 500, TxnRecordState::RolledBack);
+  Require(resolveRollback.HasChanges() &&
+              storage->ApplyPrepared("secondary-rollback", resolveRollback) == TxnStatus::Ok,
+          "rollback resolution failed");
+  Require(storage->PrepareResolveLock("secondary-rollback", 500, TxnRecordState::RolledBack).status ==
+              TxnStatus::Ok,
+          "rollback resolution retry was not idempotent");
+  std::cout << "PASS typed_txn_status\nPASS rollback_not_commit\n"
+               "PASS expired_primary_atomic_rollback\nPASS idempotent_lock_resolution\n";
+}
+
+void CheckPessimisticSchedulerApplyResults() {
+  auto scheduler = std::make_shared<NodeTxnScheduler>(64, 2, 64, 64);
+  auto region = std::make_shared<MockRegion>(100);
+  scheduler->RegisterRegion(region);
+
+  TxnCommand lock;
+  lock.type = TxnCommandType::PessimisticLock;
+  lock.regionId = 100;
+  lock.key = "scheduler-lock";
+  lock.keys = {lock.key};
+  lock.primaryKey = lock.key;
+  lock.clientId = "pessimistic-client";
+  lock.requestId = 1;
+  lock.startTs = 800;
+  lock.forUpdateTs = 810;
+  lock.ttlMs = 120000;
+  lock.expireAtPhysicalMs = 90000;
+  lock.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool finished = false;
+  TxnScheduleResult lockResult;
+  scheduler->Schedule(lock, [&](const TxnScheduleResult& result) {
+    std::lock_guard<std::mutex> guard(mutex);
+    lockResult = result;
+    finished = true;
+    changed.notify_all();
+  });
+  Require(region->WaitForProposals(1), "pessimistic lock proposal missing");
+  {
+    std::lock_guard<std::mutex> guard(mutex);
+    Require(!finished, "pessimistic lock returned before Raft Apply");
+  }
+  scheduler->OnApplied(100, region->Apply(0, 1), 1);
+  {
+    std::unique_lock<std::mutex> guard(mutex);
+    Require(changed.wait_for(guard, std::chrono::seconds(1), [&] { return finished; }),
+            "pessimistic lock completion missing");
+  }
+  Require(lockResult.status == std::to_string(static_cast<int>(TxnStatus::Ok)) &&
+              lockResult.applied && lockResult.readStatus == TxnStatus::NotFound,
+          "pessimistic Apply result lost locking-read metadata");
+
+  TxnCommand check;
+  check.type = TxnCommandType::CheckTxnStatus;
+  check.regionId = 100;
+  check.key = lock.key;
+  check.keys = {check.key};
+  check.clientId = "pessimistic-client";
+  check.requestId = 2;
+  check.startTs = 800;
+  check.currentPhysicalMs = 80000;
+  check.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  bool checked = false;
+  TxnScheduleResult checkResult;
+  scheduler->Schedule(check, [&](const TxnScheduleResult& result) {
+    checkResult = result;
+    checked = true;
+  });
+  for (int attempt = 0; attempt < 100 && !checked; ++attempt)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  Require(checked && checkResult.txnRecordStatus.state == TxnRecordState::Locked,
+          "scheduler typed status result mismatch");
+
+  TxnCommand resolve;
+  resolve.type = TxnCommandType::ResolveLock;
+  resolve.regionId = 100;
+  resolve.key = lock.key;
+  resolve.keys = {resolve.key};
+  resolve.clientId = "pessimistic-client";
+  resolve.requestId = 3;
+  resolve.startTs = 800;
+  resolve.resolutionState = TxnRecordState::RolledBack;
+  resolve.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  bool resolved = false;
+  scheduler->Schedule(resolve, [&](const TxnScheduleResult& result) {
+    resolved = result.status == std::to_string(static_cast<int>(TxnStatus::Ok));
+  });
+  Require(region->WaitForProposals(2), "resolve proposal missing");
+  scheduler->OnApplied(100, region->Apply(1, 2), 2);
+  for (int attempt = 0; attempt < 100 && !resolved; ++attempt)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  Require(resolved, "resolve did not complete after Apply");
+  Require(resolved, "resolve did not complete after Apply");
+  std::cout << "PASS pessimistic_scheduler_apply_response\n"
+               "PASS scheduler_typed_status_and_resolve\n";
+}
+
+void CheckRegionRestartAndLeaderChange() {
+  auto scheduler = std::make_shared<NodeTxnScheduler>(64, 1, 16, 16);
+  auto region = std::make_shared<MockRegion>(100);
+  scheduler->RegisterRegion(region);
+
+  std::atomic<int> failed{0};
+  TxnCommand lock = PrewriteCommand(100, "pending-restart", "client", 1, 10);
+  lock.type = TxnCommandType::PessimisticLock;
+  lock.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+  scheduler->Schedule(lock, [&](const TxnScheduleResult& result) {
+    if (result.status == ErrWrongLeader || result.status == std::to_string(static_cast<int>(TxnStatus::Timeout))) failed.fetch_add(1);
+  });
+
+  Require(region->WaitForProposals(1), "proposal must reach region");
+  scheduler->OnRegionRemoved(100); // Simulate restart / leader change
+
+  auto newRegion = std::make_shared<MockRegion>(100);
+  scheduler->RegisterRegion(newRegion);
+
+  TxnCommand lock2 = PrewriteCommand(100, "pending-restart", "client", 2, 20);
+  lock2.type = TxnCommandType::PessimisticLock;
+  std::atomic<int> oks{0};
+  scheduler->Schedule(lock2, [&](const TxnScheduleResult& result) {
+    if (result.status == std::to_string(static_cast<int>(TxnStatus::Ok))) oks.fetch_add(1);
+  });
+
+  Require(newRegion->WaitForProposals(1), "new proposal must reach new region");
+  scheduler->OnApplied(100, newRegion->Apply(0, 1), 1);
+  for (int attempt = 0; attempt < 500 && oks.load() == 0; ++attempt)
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  Require(oks.load() == 1, "task must succeed after restart and timeout");
+}
+
+void CheckLegacyLockDowngrade() {
+  auto storage = NewStorage();
+  auto lock = storage->PreparePessimisticLock("downgrade", "primary", 500, 120000, 550, 50000);
+  Require(lock.HasChanges() && storage->ApplyPrepared("downgrade", lock) == TxnStatus::Ok,
+          "seed lock failed");
+
+  auto prewrite = storage->PreparePrewrite("downgrade", "value", "primary", 500, 120000, false, 0);
+  Require(prewrite.status == TxnStatus::WriteConflict,
+          "legacy prewrite without forUpdateTs must not downgrade a V2 lock");
 }
 
 }  // namespace
@@ -437,6 +793,13 @@ int main() {
     CheckOverloadCallbackCanReenterScheduler();
     CheckMvccTransitions();
     CheckVersionAndApplyProgress();
+    CheckPessimisticLockEncodingRecovery();
+    CheckPessimisticLockCurrentRead();
+    CheckPessimisticPrewriteUpgrade();
+    CheckTypedTxnStatusAndResolution();
+    CheckPessimisticSchedulerApplyResults();
+    CheckRegionRestartAndLeaderChange();
+    CheckLegacyLockDowngrade();
     std::cout << "TXN SCHEDULER CHECK PASS\n";
     return 0;
   } catch (const std::exception& error) {

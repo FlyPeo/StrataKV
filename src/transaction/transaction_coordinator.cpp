@@ -29,14 +29,76 @@ void Transaction::TrackPessimisticLock(const std::string& key) {
   }
 }
 
+void Transaction::TrackUncertainPessimisticLock(const std::string& key) {
+  if (std::find(uncertainPessimisticLocks_.begin(), uncertainPessimisticLocks_.end(), key) ==
+      uncertainPessimisticLocks_.end()) {
+    uncertainPessimisticLocks_.push_back(key);
+  }
+}
+
+void Transaction::ConfirmPessimisticLock(const std::string& key, uint64_t forUpdateTs) {
+  uncertainPessimisticLocks_.erase(
+      std::remove(uncertainPessimisticLocks_.begin(), uncertainPessimisticLocks_.end(), key),
+      uncertainPessimisticLocks_.end());
+  TrackPessimisticLock(key);
+  ObserveForUpdateTs(forUpdateTs);
+}
+
+void Transaction::ForgetPessimisticLock(const std::string& key) {
+  pessimisticLocks_.erase(std::remove(pessimisticLocks_.begin(), pessimisticLocks_.end(), key),
+                          pessimisticLocks_.end());
+  uncertainPessimisticLocks_.erase(
+      std::remove(uncertainPessimisticLocks_.begin(), uncertainPessimisticLocks_.end(), key),
+      uncertainPessimisticLocks_.end());
+}
+
+void Transaction::ClearPessimisticLocks() {
+  pessimisticLocks_.clear();
+  uncertainPessimisticLocks_.clear();
+}
+
 // 暴露事务收集到的 mutation 集合，供协调器执行预写和提交。
 const std::unordered_map<std::string, TxnMutation>& Transaction::Mutations() const { return mutations_; }
 
 // 暴露事务持有的悲观锁列表，供协调器在异常分支中清理。
 const std::vector<std::string>& Transaction::PessimisticLocks() const { return pessimisticLocks_; }
 
+const std::vector<std::string>& Transaction::UncertainPessimisticLocks() const {
+  return uncertainPessimisticLocks_;
+}
+
 // 返回事务的 primary key，用作两阶段提交里的首要落点。
 const std::string& Transaction::PrimaryKey() const { return primaryKey_; }
+
+std::string Transaction::ProposedPrimaryKey(const std::string& key) const {
+  return primaryKey_.empty() ? key : primaryKey_;
+}
+
+uint64_t Transaction::MaxForUpdateTs() const { return maxForUpdateTs_; }
+
+void Transaction::ObserveForUpdateTs(uint64_t forUpdateTs) {
+  maxForUpdateTs_ = std::max(maxForUpdateTs_, forUpdateTs);
+}
+
+TransactionState Transaction::State() const { return state_; }
+
+bool Transaction::IsActive() const { return state_ == TransactionState::Active; }
+
+void Transaction::MarkAbortOnly() {
+  if (state_ == TransactionState::Active) state_ = TransactionState::AbortOnly;
+}
+
+void Transaction::MarkCleanupPending() {
+  if (state_ == TransactionState::Active || state_ == TransactionState::AbortOnly) {
+    state_ = TransactionState::CleanupPending;
+  }
+}
+
+void Transaction::MarkResultUnknown() {
+  if (state_ != TransactionState::Finished) state_ = TransactionState::ResultUnknown;
+}
+
+void Transaction::MarkFinished() { state_ = TransactionState::Finished; }
 
 // 首次写入时确定 primary key，让整个事务在全局提交链路里有稳定锚点。
 void Transaction::EnsurePrimaryKey(const std::string& key) {

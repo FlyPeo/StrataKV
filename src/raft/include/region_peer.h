@@ -79,6 +79,7 @@ class RegionPeer : public TxnRegionExecutor {
   bool IsTxnLeader() override;
   PreparedMvccWrite PrepareTxn(const TxnCommand& command) override;
   bool ProposeTxn(const Op& op, int* raftIndex) override;
+  std::vector<std::pair<std::string, MvccLock>> ExpiredLocks(uint64_t currentPhysicalMs) override;
 
   void DprintfKVDB();
 
@@ -149,6 +150,16 @@ class RegionPeer : public TxnRegionExecutor {
 
   void TxnAcquirePessimisticLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs *request,
                                  ::raftKVRpcProctoc::TxnAcquirePessimisticLockReply *response, ::google::protobuf::Closure *done);
+
+  void TxnCheckStatus(google::protobuf::RpcController *controller,
+                      const ::raftKVRpcProctoc::TxnCheckStatusArgs *request,
+                      ::raftKVRpcProctoc::TxnCheckStatusReply *response,
+                      ::google::protobuf::Closure *done);
+
+  void TxnResolveLock(google::protobuf::RpcController *controller,
+                      const ::raftKVRpcProctoc::TxnResolveLockArgs *request,
+                      ::raftKVRpcProctoc::TxnResolveLockReply *response,
+                      ::google::protobuf::Closure *done);
 
   void TxnFindCommitTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnFindCommitTsArgs *request,
                        ::raftKVRpcProctoc::TxnFindCommitTsReply *response, ::google::protobuf::Closure *done);

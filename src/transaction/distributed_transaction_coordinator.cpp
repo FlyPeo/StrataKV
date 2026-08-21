@@ -2,12 +2,11 @@
 #include "distributed_transaction_coordinator.h"
 
 #include <algorithm>
-#include <chrono>
-#include <future>
 #include <iostream>
-#include <map>
-#include <thread>
+#include <limits>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "bounded_thread_pool.h"
@@ -16,34 +15,19 @@ namespace {
 constexpr size_t kRegionTaskWorkers = 8;
 constexpr size_t kRegionTaskQueueCapacity = 2048;
 
-// 生成当前时间的毫秒值，供锁过期扫描和恢复逻辑使用。
-uint64_t NowMs() {
-  using namespace std::chrono;
-  return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
-}
-
-// 判断事务中是否记录了某个 key 的 mutation，用于区分提交 key 和纯悲观锁 key。
 bool HasMutation(const Transaction& txn, const std::string& key) {
   return txn.Mutations().find(key) != txn.Mutations().end();
 }
 
-// 选择分布式提交里的 primary key，确保跨 shard 提交有一个稳定的锚点。
-std::string CommitPrimaryKey(const Transaction& txn) {
-  if (!txn.PrimaryKey().empty() && HasMutation(txn, txn.PrimaryKey())) {
-    return txn.PrimaryKey();
-  }
-  return txn.Mutations().begin()->first;
+bool IsCommitSuccess(TxnStatus status) {
+  return status == TxnStatus::Ok || status == TxnStatus::AlreadyCommitted;
 }
 
-struct PrewriteResult {
-  TxnStatus status = TxnStatus::Ok;
-  std::vector<std::string> prewrittenKeys;
-};
-
-struct SecondaryCommitFailure {
-  std::string key;
-  TxnStatus status = TxnStatus::StorageError;
-};
+uint64_t SaturatingAdd(uint64_t value, uint64_t delta) {
+  return value > std::numeric_limits<uint64_t>::max() - delta
+             ? std::numeric_limits<uint64_t>::max()
+             : value + delta;
+}
 
 const char* TxnStatusName(TxnStatus status) {
   switch (status) {
@@ -52,286 +36,437 @@ const char* TxnStatusName(TxnStatus status) {
     case TxnStatus::LockConflict: return "LockConflict";
     case TxnStatus::WriteConflict: return "WriteConflict";
     case TxnStatus::AlreadyCommitted: return "AlreadyCommitted";
+    case TxnStatus::Timeout: return "Timeout";
+    case TxnStatus::AbortOnly: return "AbortOnly";
+    case TxnStatus::CleanupPending: return "CleanupPending";
+    case TxnStatus::ResultUnknown: return "ResultUnknown";
     case TxnStatus::StorageError: return "StorageError";
   }
   return "Unknown";
 }
 
-void RetrySleep(std::chrono::milliseconds delay) {
-  std::this_thread::sleep_for(delay);
+std::vector<std::string> SortedUnique(std::vector<std::string> keys) {
+  std::sort(keys.begin(), keys.end());
+  keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+  return keys;
+}
+
+std::vector<std::string> CleanupKeys(const Transaction& txn) {
+  std::vector<std::string> keys;
+  keys.reserve(txn.Mutations().size() + txn.PessimisticLocks().size() +
+               txn.UncertainPessimisticLocks().size());
+  for (const auto& mutation : txn.Mutations()) keys.push_back(mutation.first);
+  keys.insert(keys.end(), txn.PessimisticLocks().begin(), txn.PessimisticLocks().end());
+  keys.insert(keys.end(), txn.UncertainPessimisticLocks().begin(),
+              txn.UncertainPessimisticLocks().end());
+  return SortedUnique(std::move(keys));
 }
 }  // namespace
 
-// 构造分布式事务协调器，建立 shard 路由、锁解析器和各 shard 的后台锁管理线程。
-DistributedTransactionCoordinator::DistributedTransactionCoordinator(std::shared_ptr<ShardRouter> router,
-                                                                     std::shared_ptr<TimestampOracle> tso)
+DistributedTransactionCoordinator::DistributedTransactionCoordinator(
+    std::shared_ptr<ShardRouter> router, std::shared_ptr<TimestampOracle> tso)
     : router_(std::move(router)),
       tso_(std::move(tso)),
-      regionExecutor_(std::make_unique<BoundedThreadPool>(kRegionTaskWorkers, kRegionTaskQueueCapacity)),
+      regionExecutor_(std::make_unique<BoundedThreadPool>(kRegionTaskWorkers,
+                                                          kRegionTaskQueueCapacity)),
       lockResolver_(std::make_shared<LockResolver>(router_)) {
   uint64_t maxObservedTs = 0;
+  bool clusterSupportsPessimistic = true;
   for (const auto& shard : router_->Shards()) {
     maxObservedTs = std::max(maxObservedTs, shard->MaxObservedTs());
-    lockManagers_.emplace_back(
-        new LockManager(shard, [resolver = lockResolver_](const std::string& key, const MvccLock& lock) {
-          resolver->ResolveLock(key, lock);
-        }));
-    lockManagers_.back()->Start();
-    dataGcManagers_.emplace_back(new DataGcManager(shard, tso_));
-    dataGcManagers_.back()->Start();
+    if (shard->Capabilities().protocolVersion < 2) {
+      clusterSupportsPessimistic = false;
+    }
   }
+  pessimisticEnabled_ = clusterSupportsPessimistic;
+  // Client-side steady-clock recovery and 10-second GC are not authoritative
+  // across processes. Keep them disabled until the Node-owned manager lands.
   tso_->Observe(maxObservedTs);
 }
 
-// 析构时停止所有 shard 的后台锁扫描线程，避免恢复逻辑在协调器退出后继续运行。
-DistributedTransactionCoordinator::~DistributedTransactionCoordinator() {
-  for (auto& manager : dataGcManagers_) {
-    manager->Stop();
-  }
-  for (auto& manager : lockManagers_) {
-    manager->Stop();
-  }
-}
+DistributedTransactionCoordinator::~DistributedTransactionCoordinator() = default;
 
-// 为分布式事务分配全局 startTs，开启其跨 shard 生命周期。
 Transaction DistributedTransactionCoordinator::Begin() { return Transaction(tso_->Next()); }
 
-// 按事务快照时间从对应 shard 读取数据；若读到锁冲突，会先触发锁解析再重试。
-TxnStatus DistributedTransactionCoordinator::Get(const Transaction& txn, const std::string& key, std::string* value) {
-  const TxnStatus status = router_->Route(key)->Get(key, txn.StartTs(), value);
-  if (status != TxnStatus::LockConflict) {
-    return status;
-  }
-
-  const auto lock = router_->Route(key)->GetLock(key);
-  if (!lock.has_value()) {
-    return status;
-  }
-  lockResolver_->ResolveLock(key, lock.value());
-  return router_->Route(key)->Get(key, txn.StartTs(), value);
+TxnStatus DistributedTransactionCoordinator::Validate(Transaction* txn,
+                                                       const TxnOptions& options) {
+  return CheckActiveAndDeadline(txn, options);
 }
 
-// 在指定 shard 上为事务申请悲观锁，让写冲突尽量前移到执行阶段。
-TxnStatus DistributedTransactionCoordinator::PessimisticLock(Transaction* txn, const std::string& key,
-                                                            const TxnOptions& options) {
-  if (txn == nullptr) {
+TxnStatus DistributedTransactionCoordinator::CheckActiveAndDeadline(
+    Transaction* txn, const TxnOptions& options, uint64_t* nowTs) {
+  if (txn == nullptr) return TxnStatus::StorageError;
+  switch (txn->State()) {
+    case TransactionState::Active: break;
+    case TransactionState::AbortOnly: return TxnStatus::AbortOnly;
+    case TransactionState::CleanupPending: return TxnStatus::CleanupPending;
+    case TransactionState::ResultUnknown: return TxnStatus::ResultUnknown;
+    case TransactionState::Finished: return TxnStatus::AbortOnly;
+  }
+  if (options.lockTtlMs <= options.transactionTimeoutMs || options.rpcBudgetMs == 0) {
     return TxnStatus::StorageError;
   }
-  txn->TrackPessimisticLock(key);
-  return router_->Route(key)->AcquirePessimisticLock(key, txn->PrimaryKey(), txn->StartTs(), options.lockTtlMs);
-}
 
-// 执行跨 shard 的两阶段提交流程：并发预写、提交 primary、再提交 secondary。
-TxnStatus DistributedTransactionCoordinator::Commit(const Transaction& txn, const TxnOptions& options) {
-  if (txn.Mutations().empty()) {
-    for (const auto& key : txn.PessimisticLocks()) {
-      router_->Route(key)->Rollback(key, txn.StartTs());
-    }
-    RecordRollbackRegions(txn.PessimisticLocks());
-    return TxnStatus::Ok;
-  }
-
-  const std::string primaryKey = CommitPrimaryKey(txn);
-  const std::vector<std::pair<std::string, TxnMutation>> mutations(txn.Mutations().begin(), txn.Mutations().end());
-  std::map<size_t, std::vector<std::pair<std::string, TxnMutation>>> mutationsByShard;
-  for (const auto& mutation : mutations) {
-    mutationsByShard[router_->ShardId(mutation.first)].push_back(mutation);
-  }
-
-  std::vector<std::vector<std::pair<std::string, TxnMutation>>> prewriteBatches;
-  for (const auto& shardMutations : mutationsByShard) {
-    prewriteBatches.push_back(shardMutations.second);
-  }
-  auto prewriteShard = [this, primaryKey, &txn, options](
-                           const std::vector<std::pair<std::string, TxnMutation>>& shardMutations) {
-    PrewriteResult result;
-    for (const auto& mutation : shardMutations) {
-      TxnStatus status = TxnStatus::Ok;
-      if (mutation.second.isDelete) {
-        status = router_->Route(mutation.first)->PrewriteDelete(mutation.first, primaryKey, txn.StartTs(),
-                                                                options.lockTtlMs);
-      } else {
-        status = router_->Route(mutation.first)->Prewrite(mutation.first, mutation.second.value, primaryKey,
-                                                          txn.StartTs(), options.lockTtlMs);
-      }
-      if (status != TxnStatus::Ok) {
-        result.status = status;
-        return result;
-      }
-      result.prewrittenKeys.push_back(mutation.first);
-    }
-    return result;
-  };
-
-  std::vector<PrewriteResult> prewriteResults(prewriteBatches.size());
-  std::vector<std::future<PrewriteResult>> prewriteFutures;
-  prewriteFutures.reserve(prewriteBatches.size());
-  for (const auto& batch : prewriteBatches) {
-    prewriteFutures.emplace_back(
-        regionExecutor_->Submit([prewriteShard, batch]() { return prewriteShard(batch); }));
-  }
-  for (size_t index = 0; index < prewriteFutures.size(); ++index) {
-    try {
-      prewriteResults[index] = prewriteFutures[index].get();
-    } catch (...) {
-      prewriteResults[index].status = TxnStatus::StorageError;
-    }
-  }
-
-  std::vector<std::string> prewritten;
-  TxnStatus firstError = TxnStatus::Ok;
-  for (const PrewriteResult& result : prewriteResults) {
-    if (result.status != TxnStatus::Ok && firstError == TxnStatus::Ok) {
-      firstError = result.status;
-    }
-    prewritten.insert(prewritten.end(), result.prewrittenKeys.begin(), result.prewrittenKeys.end());
-  }
-  if (firstError != TxnStatus::Ok) {
-    for (const auto& key : prewritten) {
-      router_->Route(key)->Rollback(key, txn.StartTs());
-    }
-    for (const auto& key : txn.PessimisticLocks()) {
-      router_->Route(key)->Rollback(key, txn.StartTs());
-    }
-    std::vector<std::string> rollbackKeys = prewritten;
-    rollbackKeys.insert(rollbackKeys.end(), txn.PessimisticLocks().begin(), txn.PessimisticLocks().end());
-    RecordRollbackRegions(rollbackKeys);
-    return firstError;
-  }
-
-  uint64_t commitTs = 0;
+  uint64_t current = 0;
   try {
-    commitTs = tso_->Next();
-  } catch (const std::exception&) {
-    for (const auto& key : prewritten) {
-      router_->Route(key)->Rollback(key, txn.StartTs());
-    }
-    for (const auto& key : txn.PessimisticLocks()) {
-      router_->Route(key)->Rollback(key, txn.StartTs());
-    }
-    std::vector<std::string> rollbackKeys = prewritten;
-    rollbackKeys.insert(rollbackKeys.end(), txn.PessimisticLocks().begin(), txn.PessimisticLocks().end());
-    RecordRollbackRegions(rollbackKeys);
+    current = tso_->Next();
+  } catch (...) {
     return TxnStatus::StorageError;
   }
-  TxnStatus primaryStatus = router_->Route(primaryKey)->Commit(primaryKey, txn.StartTs(), commitTs);
-  if (primaryStatus != TxnStatus::Ok && primaryStatus != TxnStatus::AlreadyCommitted) {
-    for (const auto& key : prewritten) {
-      router_->Route(key)->Rollback(key, txn.StartTs());
-    }
-    for (const auto& key : txn.PessimisticLocks()) {
-      if (!HasMutation(txn, key)) {
-        router_->Route(key)->Rollback(key, txn.StartTs());
-      }
-    }
-    std::vector<std::string> rollbackKeys = prewritten;
-    for (const auto& key : txn.PessimisticLocks()) {
-      if (!HasMutation(txn, key)) rollbackKeys.push_back(key);
-    }
-    RecordRollbackRegions(rollbackKeys);
-    return primaryStatus;
-  }
+  if (nowTs != nullptr) *nowTs = current;
 
-  std::map<size_t, std::vector<std::string>> secondaryKeysByShard;
-  for (const auto& key : prewritten) {
-    if (key == primaryKey) {
-      continue;
-    }
-    secondaryKeysByShard[router_->ShardId(key)].push_back(key);
-  }
-
-  std::vector<std::vector<std::string>> secondaryBatches;
-  for (const auto& shardKeys : secondaryKeysByShard) {
-    secondaryBatches.push_back(shardKeys.second);
-  }
-  auto commitSecondaries = [this, &txn, commitTs](const std::vector<std::string>& keys) {
-    std::vector<SecondaryCommitFailure> failures;
-    for (const auto& key : keys) {
-      TxnStatus status = TxnStatus::StorageError;
-      for (int attempt = 0; attempt < 3; ++attempt) {
-        status = router_->Route(key)->Commit(key, txn.StartTs(), commitTs);
-        if (status == TxnStatus::Ok || status == TxnStatus::AlreadyCommitted) {
-          break;
-        }
-        if (attempt < 2) {
-          RetrySleep(std::chrono::milliseconds(25 * (1 << attempt)));
-        }
-      }
-      if (status != TxnStatus::Ok && status != TxnStatus::AlreadyCommitted) {
-        failures.push_back({key, status});
-      }
-    }
-    return failures;
-  };
-
-  std::vector<std::vector<SecondaryCommitFailure>> secondaryResults(secondaryBatches.size());
-  std::vector<std::future<std::vector<SecondaryCommitFailure>>> secondaryFutures;
-  secondaryFutures.reserve(secondaryBatches.size());
-  for (const auto& batch : secondaryBatches) {
-    secondaryFutures.emplace_back(
-        regionExecutor_->Submit([commitSecondaries, batch]() { return commitSecondaries(batch); }));
-  }
-  for (size_t index = 0; index < secondaryFutures.size(); ++index) {
-    try {
-      secondaryResults[index] = secondaryFutures[index].get();
-    } catch (...) {
-      for (const auto& key : secondaryBatches[index]) {
-        secondaryResults[index].push_back({key, TxnStatus::StorageError});
-      }
-    }
-  }
-  for (const auto& result : secondaryResults) {
-    for (const auto& failure : result) {
-      // Primary 已经提交，因此事务在逻辑上已提交，不能再向客户端返回失败。
-      // 后台锁解析器会根据 primary 的 commitTs 继续收尾；这里保留明确状态，
-      // 避免把并不存在的“异步队列”写进日志并掩盖真正的失败原因。
-      std::cerr << "Secondary key commit remains pending after retries: key=" << failure.key
-                << " status=" << TxnStatusName(failure.status)
-                << "; lock resolver will finish it from the committed primary." << std::endl;
-    }
-  }
-  for (const auto& key : txn.PessimisticLocks()) {
-    if (!HasMutation(txn, key)) {
-      router_->Route(key)->Rollback(key, txn.StartTs());
-    }
+  const uint64_t startPhysical = HlcTimestamp::PhysicalMs(txn->StartTs());
+  const uint64_t currentPhysical = HlcTimestamp::PhysicalMs(current);
+  if (startPhysical != 0 &&
+      currentPhysical >= SaturatingAdd(startPhysical, options.transactionTimeoutMs)) {
+    txn->MarkAbortOnly();
+    return TxnStatus::Timeout;
   }
   return TxnStatus::Ok;
 }
 
-// 主动回滚一个分布式事务，把它在各个 shard 上留下的记录都清理掉。
-void DistributedTransactionCoordinator::Rollback(const Transaction& txn) {
-  std::vector<std::string> rollbackKeys;
-  for (const auto& mutation : txn.Mutations()) {
-    router_->Route(mutation.first)->Rollback(mutation.first, txn.StartTs());
-    rollbackKeys.push_back(mutation.first);
-  }
-  for (const auto& key : txn.PessimisticLocks()) {
-    if (txn.Mutations().find(key) == txn.Mutations().end()) {
-      router_->Route(key)->Rollback(key, txn.StartTs());
-      rollbackKeys.push_back(key);
-    }
-  }
-  RecordRollbackRegions(rollbackKeys);
+TxnStatus DistributedTransactionCoordinator::Get(Transaction* txn, const std::string& key,
+                                                  std::string* value,
+                                                  const TxnOptions& options) {
+  if (key.empty() || value == nullptr) return TxnStatus::StorageError;
+  const TxnStatus active = CheckActiveAndDeadline(txn, options);
+  if (active != TxnStatus::Ok) return active;
+  // 普通 Get 始终保持 startTs 快照语义，不能通过非原子旧探针猜测锁状态。
+  return router_->Route(key)->Get(key, txn->StartTs(), value);
 }
 
-void DistributedTransactionCoordinator::RecordRollbackRegions(const std::vector<std::string>& keys) {
+BatchLockingReadResult DistributedTransactionCoordinator::AcquireKeys(
+    Transaction* txn, const std::vector<std::string>& requestedKeys, bool returnValues,
+    const TxnOptions& options) {
+  BatchLockingReadResult batch;
+  if (txn == nullptr) return batch;
+  if (!pessimisticEnabled_) {
+    batch.status = TxnStatus::StorageError;
+    return batch;
+  }
+  std::vector<std::string> keys = SortedUnique(requestedKeys);
+  if (keys.empty()) {
+    batch.status = TxnStatus::Ok;
+    return batch;
+  }
+  if (std::any_of(keys.begin(), keys.end(), [](const std::string& key) { return key.empty(); })) {
+    batch.status = TxnStatus::StorageError;
+    return batch;
+  }
+
+  uint64_t forUpdateTs = 0;
+  batch.status = CheckActiveAndDeadline(txn, options, &forUpdateTs);
+  if (batch.status != TxnStatus::Ok) return batch;
+  const uint64_t expireAt =
+      SaturatingAdd(HlcTimestamp::PhysicalMs(forUpdateTs), options.lockTtlMs);
+
+  for (const auto& key : keys) {
+    const std::string primary = txn->ProposedPrimaryKey(key);
+    txn->TrackUncertainPessimisticLock(key);
+    txn->ObserveForUpdateTs(forUpdateTs);
+    PessimisticLockResult result = router_->Route(key)->AcquirePessimisticLockForUpdate(
+        key, primary, txn->StartTs(), options.lockTtlMs, forUpdateTs, expireAt,
+        options.rpcBudgetMs);
+    if (result.status == TxnStatus::Ok && !result.applied) {
+      result.status = TxnStatus::ResultUnknown;
+    }
+    if (result.status == TxnStatus::Ok) {
+      txn->ConfirmPessimisticLock(key, forUpdateTs);
+      if (!returnValues) {
+        result.found = false;
+        result.value.clear();
+        result.valueCommitTs = 0;
+      }
+      batch.values.emplace_back(key, std::move(result));
+      continue;
+    }
+
+    if (result.status != TxnStatus::ResultUnknown && result.status != TxnStatus::Timeout &&
+        result.status != TxnStatus::StorageError) {
+      txn->ForgetPessimisticLock(key);
+    }
+    if (result.status == TxnStatus::Timeout) {
+      lockTimeouts_.fetch_add(1, std::memory_order_relaxed);
+    } else if (result.status == TxnStatus::LockConflict || result.status == TxnStatus::WriteConflict) {
+      lockConflicts_.fetch_add(1, std::memory_order_relaxed);
+    }
+    txn->MarkAbortOnly();
+    const TxnStatus failure = result.status;
+    batch.values.clear();
+    const TxnStatus cleanup = CleanupTransaction(txn);
+    if (cleanup != TxnStatus::Ok) {
+      txn->MarkCleanupPending();
+      batch.status = TxnStatus::CleanupPending;
+    } else {
+      batch.status = failure;
+    }
+    return batch;
+  }
+
+  batch.status = TxnStatus::Ok;
+  return batch;
+}
+
+PessimisticLockResult DistributedTransactionCoordinator::GetForUpdate(
+    Transaction* txn, const std::string& key, const TxnOptions& options) {
+  BatchLockingReadResult batch = AcquireKeys(txn, {key}, true, options);
+  if (batch.status != TxnStatus::Ok || batch.values.empty()) {
+    PessimisticLockResult result;
+    result.status = batch.status;
+    return result;
+  }
+  return std::move(batch.values.front().second);
+}
+
+BatchLockingReadResult DistributedTransactionCoordinator::BatchGetForUpdate(
+    Transaction* txn, const std::vector<std::string>& keys, const TxnOptions& options) {
+  BatchLockingReadResult acquired = AcquireKeys(txn, keys, true, options);
+  if (acquired.status != TxnStatus::Ok) return acquired;
+
+  std::unordered_map<std::string, PessimisticLockResult> byKey;
+  for (auto& item : acquired.values) byKey.emplace(item.first, std::move(item.second));
+  acquired.values.clear();
+  acquired.values.reserve(keys.size());
+  for (const auto& key : keys) {
+    const auto found = byKey.find(key);
+    if (found != byKey.end()) acquired.values.emplace_back(key, found->second);
+  }
+  return acquired;
+}
+
+TxnStatus DistributedTransactionCoordinator::LockKeys(Transaction* txn,
+                                                      const std::vector<std::string>& keys,
+                                                      const TxnOptions& options) {
+  return AcquireKeys(txn, keys, false, options).status;
+}
+
+TxnStatus DistributedTransactionCoordinator::PessimisticLock(Transaction* txn,
+                                                             const std::string& key,
+                                                             const TxnOptions& options) {
+  return LockKeys(txn, {key}, options);
+}
+
+TxnStatus DistributedTransactionCoordinator::CleanupTransaction(Transaction* txn) {
+  if (txn == nullptr) return TxnStatus::StorageError;
+  const std::vector<std::string> keys = CleanupKeys(*txn);
+  TxnStatus aggregate = TxnStatus::Ok;
+  for (const auto& key : keys) {
+    const TxnStatus status = router_->Route(key)->Rollback(key, txn->StartTs());
+    if (status == TxnStatus::Ok) {
+      txn->ForgetPessimisticLock(key);
+      continue;
+    }
+    if (status == TxnStatus::AlreadyCommitted) {
+      aggregate = TxnStatus::AlreadyCommitted;
+      continue;
+    }
+    aggregate = TxnStatus::CleanupPending;
+  }
+  RecordRollbackRegions(keys);
+  if (aggregate == TxnStatus::Ok) txn->ClearPessimisticLocks();
+  return aggregate;
+}
+
+TxnStatus DistributedTransactionCoordinator::QueryStatus(const Transaction& txn,
+                                                         TxnRecordStatus* status,
+                                                         const TxnOptions& options) {
+  if (status == nullptr || txn.PrimaryKey().empty()) return TxnStatus::StorageError;
+  uint64_t nowTs = 0;
+  try {
+    nowTs = tso_->Next();
+  } catch (...) {
+    return TxnStatus::StorageError;
+  }
+  return router_->Route(txn.PrimaryKey())
+      ->CheckTxnStatus(txn.PrimaryKey(), txn.StartTs(), HlcTimestamp::PhysicalMs(nowTs),
+                       false, options.rpcBudgetMs, status);
+}
+
+TxnStatus DistributedTransactionCoordinator::Commit(Transaction* txn,
+                                                    const TxnOptions& options) {
+  if (txn == nullptr) return TxnStatus::StorageError;
+  const TxnStatus active = CheckActiveAndDeadline(txn, options);
+  if (active != TxnStatus::Ok) return active;
+
+  if (txn->Mutations().empty()) {
+    const TxnStatus cleanup = CleanupTransaction(txn);
+    if (cleanup == TxnStatus::Ok) {
+      txn->MarkFinished();
+      return TxnStatus::Ok;
+    }
+    txn->MarkCleanupPending();
+    return TxnStatus::CleanupPending;
+  }
+
+  const std::string primaryKey = txn->PrimaryKey();
+  if (primaryKey.empty()) return TxnStatus::StorageError;
+  std::vector<std::string> mutationKeys;
+  mutationKeys.reserve(txn->Mutations().size());
+  for (const auto& mutation : txn->Mutations()) mutationKeys.push_back(mutation.first);
+  mutationKeys = SortedUnique(std::move(mutationKeys));
+
+  std::vector<std::string> prewritten;
+  TxnStatus prewriteStatus = TxnStatus::Ok;
+  if (!HasMutation(*txn, primaryKey)) {
+    prewriteStatus = router_->Route(primaryKey)->PrewriteLock(
+        primaryKey, primaryKey, txn->StartTs(), options.lockTtlMs,
+        txn->MaxForUpdateTs(), options.rpcBudgetMs);
+    if (prewriteStatus == TxnStatus::Ok) prewritten.push_back(primaryKey);
+  }
+  for (const auto& key : mutationKeys) {
+    if (prewriteStatus != TxnStatus::Ok) break;
+    const TxnMutation& mutation = txn->Mutations().at(key);
+    prewriteStatus = mutation.isDelete
+                         ? router_->Route(key)->PrewriteDelete(
+                               key, primaryKey, txn->StartTs(), options.lockTtlMs,
+                               txn->MaxForUpdateTs(), options.rpcBudgetMs)
+                         : router_->Route(key)->Prewrite(
+                               key, mutation.value, primaryKey, txn->StartTs(),
+                               options.lockTtlMs, txn->MaxForUpdateTs(), options.rpcBudgetMs);
+    if (prewriteStatus == TxnStatus::Ok) prewritten.push_back(key);
+  }
+  if (prewriteStatus != TxnStatus::Ok) {
+    txn->MarkAbortOnly();
+    const TxnStatus cleanup = CleanupTransaction(txn);
+    if (cleanup != TxnStatus::Ok) {
+      txn->MarkCleanupPending();
+      return TxnStatus::CleanupPending;
+    }
+    return prewriteStatus;
+  }
+
+  uint64_t commitTs = 0;
+  try {
+    do {
+      commitTs = tso_->Next();
+    } while (commitTs <= std::max(txn->StartTs(), txn->MaxForUpdateTs()));
+  } catch (...) {
+    txn->MarkAbortOnly();
+    const TxnStatus cleanup = CleanupTransaction(txn);
+    if (cleanup != TxnStatus::Ok) {
+      txn->MarkCleanupPending();
+      return TxnStatus::CleanupPending;
+    }
+    return TxnStatus::StorageError;
+  }
+
+  TxnStatus primaryStatus =
+      router_->Route(primaryKey)->Commit(primaryKey, txn->StartTs(), commitTs);
+  if (!IsCommitSuccess(primaryStatus)) {
+    TxnRecordStatus authoritative;
+    const TxnStatus query = QueryStatus(*txn, &authoritative, options);
+    if (query == TxnStatus::Ok && authoritative.state == TxnRecordState::Committed) {
+      commitTs = authoritative.commitTs;
+      primaryStatus = TxnStatus::Ok;
+    } else if (query == TxnStatus::Ok && authoritative.state == TxnRecordState::RolledBack) {
+      txn->MarkAbortOnly();
+      const TxnStatus cleanup = CleanupTransaction(txn);
+      if (cleanup != TxnStatus::Ok) {
+        txn->MarkCleanupPending();
+        return TxnStatus::CleanupPending;
+      }
+      return TxnStatus::WriteConflict;
+    } else {
+      txn->MarkResultUnknown();
+      return TxnStatus::ResultUnknown;
+    }
+  }
+
+  for (const auto& key : prewritten) {
+    if (key == primaryKey) continue;
+    const TxnStatus status = router_->Route(key)->Commit(key, txn->StartTs(), commitTs);
+    if (!IsCommitSuccess(status)) {
+      std::cerr << "Secondary key commit remains pending: key=" << key
+                << " status=" << TxnStatusName(status)
+                << "; committed Primary remains authoritative." << std::endl;
+    }
+  }
+  for (const auto& key : txn->PessimisticLocks()) {
+    if (key == primaryKey || HasMutation(*txn, key)) continue;
+    const TxnStatus release = router_->Route(key)->Rollback(key, txn->StartTs());
+    if (release != TxnStatus::Ok) {
+      std::cerr << "Pure pessimistic lock release remains pending: key=" << key
+                << " status=" << TxnStatusName(release) << std::endl;
+    }
+  }
+  txn->ClearPessimisticLocks();
+  txn->MarkFinished();
+  return TxnStatus::Ok;
+}
+
+TxnStatus DistributedTransactionCoordinator::Rollback(Transaction* txn,
+                                                      const TxnOptions& options) {
+  if (txn == nullptr) return TxnStatus::StorageError;
+  if (txn->State() == TransactionState::Finished) return TxnStatus::Ok;
+  if (txn->State() == TransactionState::ResultUnknown) {
+    TxnRecordStatus authoritative;
+    const TxnStatus query = QueryStatus(*txn, &authoritative, options);
+    if (query != TxnStatus::Ok ||
+        (authoritative.state != TxnRecordState::Committed &&
+         authoritative.state != TxnRecordState::RolledBack)) {
+      return TxnStatus::ResultUnknown;
+    }
+    const std::vector<std::string> keys = CleanupKeys(*txn);
+    TxnStatus resolved = TxnStatus::Ok;
+    for (const auto& key : keys) {
+      const TxnStatus status = router_->Route(key)->ResolveLock(
+          key, txn->StartTs(), authoritative.state, authoritative.commitTs);
+      if (status != TxnStatus::Ok) resolved = TxnStatus::CleanupPending;
+    }
+    if (resolved != TxnStatus::Ok) {
+      txn->MarkCleanupPending();
+      return resolved;
+    }
+    txn->ClearPessimisticLocks();
+    txn->MarkFinished();
+    return authoritative.state == TxnRecordState::Committed ? TxnStatus::AlreadyCommitted
+                                                             : TxnStatus::Ok;
+  }
+
+  const TxnStatus cleanup = CleanupTransaction(txn);
+  if (cleanup == TxnStatus::Ok) {
+    txn->MarkFinished();
+    return TxnStatus::Ok;
+  }
+  if (cleanup == TxnStatus::AlreadyCommitted) {
+    txn->MarkFinished();
+    return TxnStatus::AlreadyCommitted;
+  }
+  txn->MarkCleanupPending();
+  return TxnStatus::CleanupPending;
+}
+
+void DistributedTransactionCoordinator::RecordRollbackRegions(
+    const std::vector<std::string>& keys) {
   std::unordered_set<size_t> regions;
   for (const auto& key : keys) regions.insert(router_->ShardId(key));
   rollbackRegionCount_.fetch_add(regions.size(), std::memory_order_relaxed);
 }
 
 DistributedTxnMetrics DistributedTransactionCoordinator::Metrics() const {
-  return {rollbackRegionCount_.load(std::memory_order_relaxed)};
+  DistributedTxnMetrics metrics;
+  metrics.rollbackRegionCount = rollbackRegionCount_.load(std::memory_order_relaxed);
+  metrics.lockTimeouts = lockTimeouts_.load(std::memory_order_relaxed);
+  metrics.lockConflicts = lockConflicts_.load(std::memory_order_relaxed);
+  
+  for (const auto& shard : router_->Shards()) {
+    metrics.activeLocks += shard->Stats().pessimisticLockCount;
+  }
+  return metrics;
 }
 
-// 触发全局锁解析器扫描所有 shard 的过期锁，并推动它们进入提交或回滚。
-size_t DistributedTransactionCoordinator::ResolveExpiredLocks() { return lockResolver_->ResolveExpiredLocks(NowMs()); }
+size_t DistributedTransactionCoordinator::ResolveExpiredLocks() {
+  uint64_t nowTs = 0;
+  try {
+    nowTs = tso_->Next();
+  } catch (...) {
+    return 0;
+  }
+  return lockResolver_->ResolveExpiredLocks(HlcTimestamp::PhysicalMs(nowTs));
+}
 
-// 对所有 shard 做垃圾回收，清理 safe point 之前不再需要的版本记录。
 size_t DistributedTransactionCoordinator::GarbageCollect(uint64_t safePointTs) {
   size_t removed = 0;
-  for (const auto& shard : router_->Shards()) {
-    removed += shard->GarbageCollect(safePointTs);
-  }
+  for (const auto& shard : router_->Shards()) removed += shard->GarbageCollect(safePointTs);
   return removed;
 }

@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -31,9 +32,31 @@ void WriteAll(int fd, const std::string& data) {
 
 }  // namespace
 
-PersistentTimestampOracle::PersistentTimestampOracle(std::string statePath, uint64_t segmentSize)
-    : statePath_(std::move(statePath)), segmentSize_(segmentSize == 0 ? 1 : segmentSize) {
+uint64_t HlcTimestamp::PhysicalMs(uint64_t timestamp) { return timestamp >> kLogicalBits; }
+
+uint32_t HlcTimestamp::Logical(uint64_t timestamp) {
+  return static_cast<uint32_t>(timestamp & kLogicalMask);
+}
+
+uint64_t HlcTimestamp::Compose(uint64_t physicalMs, uint32_t logical) {
+  if (physicalMs > kMaxPhysicalMs) throw std::overflow_error("HLC physical time overflow");
+  if (logical > kLogicalMask) throw std::overflow_error("HLC logical time overflow");
+  return (physicalMs << kLogicalBits) | logical;
+}
+
+uint64_t HlcTimestamp::WallClockMs() {
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::system_clock::now().time_since_epoch())
+                                   .count());
+}
+
+PersistentTimestampOracle::PersistentTimestampOracle(std::string statePath, uint64_t segmentSize,
+                                                       Clock clock)
+    : statePath_(std::move(statePath)),
+      segmentSize_(segmentSize == 0 ? 1 : segmentSize),
+      clock_(std::move(clock)) {
   if (statePath_.empty()) throw std::invalid_argument("TSO state path is empty");
+  if (!clock_) throw std::invalid_argument("TSO clock is empty");
 
   const std::filesystem::path parent = std::filesystem::path(statePath_).parent_path();
   if (!parent.empty()) std::filesystem::create_directories(parent);
@@ -47,11 +70,17 @@ PersistentTimestampOracle::PersistentTimestampOracle(std::string statePath, uint
     throw std::runtime_error("TSO state is already owned by another process: " + statePath_);
   }
 
-  segmentLimit_ = ReadPersistedLimit();
+  const PersistedState persisted = ReadPersistedState();
+  segmentLimit_ = persisted.limit;
   if (segmentLimit_ == std::numeric_limits<uint64_t>::max()) {
     throw std::overflow_error("TSO timestamp space is exhausted");
   }
-  nextTs_ = segmentLimit_ + 1;
+  nextTs_ = std::max(segmentLimit_ + 1, HlcTimestamp::Compose(clock_(), 0));
+  if (persisted.legacy) {
+    // Publish the first HLC reservation before any migrated timestamp can be
+    // observed. A crash can only create a gap, never a repeated timestamp.
+    ReserveThroughLocked(nextTs_);
+  }
 }
 
 PersistentTimestampOracle::~PersistentTimestampOracle() {
@@ -60,16 +89,18 @@ PersistentTimestampOracle::~PersistentTimestampOracle() {
 
 uint64_t PersistentTimestampOracle::Next() {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (nextTs_ == std::numeric_limits<uint64_t>::max()) {
+  const uint64_t candidate = NextCandidateLocked();
+  if (candidate == std::numeric_limits<uint64_t>::max()) {
     throw std::overflow_error("TSO timestamp space is exhausted");
   }
-  ReserveThroughLocked(nextTs_);
-  return nextTs_++;
+  ReserveThroughLocked(candidate);
+  nextTs_ = candidate + 1;
+  return candidate;
 }
 
 uint64_t PersistentTimestampOracle::Peek() {
   std::lock_guard<std::mutex> lock(mutex_);
-  return nextTs_;
+  return NextCandidateLocked();
 }
 
 void PersistentTimestampOracle::Observe(uint64_t ts) {
@@ -82,13 +113,50 @@ void PersistentTimestampOracle::Observe(uint64_t ts) {
   nextTs_ = ts + 1;
 }
 
-uint64_t PersistentTimestampOracle::ReadPersistedLimit() const {
-  if (!std::filesystem::exists(statePath_)) return 0;
+PersistentTimestampOracle::PersistedState PersistentTimestampOracle::ReadPersistedState() const {
+  if (!std::filesystem::exists(statePath_)) return {};
 
   std::ifstream input(statePath_);
+  std::string first;
+  if (!(input >> first)) throw std::runtime_error("invalid TSO state file: " + statePath_);
+
+  PersistedState state;
+  state.exists = true;
+  if (first == "v2") {
+    if (!(input >> state.limit)) {
+      throw std::runtime_error("invalid TSO v2 state file: " + statePath_);
+    }
+    std::string trailing;
+    if (input >> trailing) {
+      throw std::runtime_error("trailing data in TSO v2 state file: " + statePath_);
+    }
+    return state;
+  }
+  if (!first.empty() && first.front() == 'v') {
+    throw std::runtime_error("unsupported TSO state version in: " + statePath_);
+  }
+
+  size_t consumed = 0;
   uint64_t limit = 0;
-  if (!(input >> limit)) throw std::runtime_error("invalid TSO state file: " + statePath_);
-  return limit;
+  try {
+    limit = std::stoull(first, &consumed);
+  } catch (const std::exception&) {
+    throw std::runtime_error("invalid legacy TSO state file: " + statePath_);
+  }
+  if (consumed != first.size()) {
+    throw std::runtime_error("invalid legacy TSO state file: " + statePath_);
+  }
+  std::string trailing;
+  if (input >> trailing) {
+    throw std::runtime_error("trailing data in legacy TSO state file: " + statePath_);
+  }
+  state.limit = limit;
+  state.legacy = true;
+  return state;
+}
+
+uint64_t PersistentTimestampOracle::NextCandidateLocked() const {
+  return std::max(nextTs_, HlcTimestamp::Compose(clock_(), 0));
 }
 
 void PersistentTimestampOracle::ReserveThroughLocked(uint64_t required) {
@@ -109,7 +177,7 @@ void PersistentTimestampOracle::PersistLimitLocked(uint64_t limit) {
   if (fd < 0) throw SystemError("open temporary TSO state");
 
   try {
-    WriteAll(fd, std::to_string(limit) + "\n");
+    WriteAll(fd, "v2 " + std::to_string(limit) + "\n");
     if (fsync(fd) != 0) throw SystemError("fsync temporary TSO state");
     if (close(fd) != 0) {
       fd = -1;

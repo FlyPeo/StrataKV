@@ -240,6 +240,18 @@ std::shared_ptr<TxnRegionExecutor> NodeTxnScheduler::FindRegion(int regionId) co
   return found == regions_.end() ? nullptr : found->second.lock();
 }
 
+std::vector<std::shared_ptr<TxnRegionExecutor>> NodeTxnScheduler::Regions() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<std::shared_ptr<TxnRegionExecutor>> result;
+  result.reserve(regions_.size());
+  for (const auto& pair : regions_) {
+    if (auto region = pair.second.lock()) {
+      result.push_back(region);
+    }
+  }
+  return result;
+}
+
 NodeTxnScheduler::RequestKey NodeTxnScheduler::MakeRequestKey(const TxnCommand& command) {
   return {command.regionId, command.clientId, command.requestId};
 }
@@ -257,6 +269,15 @@ TxnScheduleResult NodeTxnScheduler::StatusResult(TxnStatus status) {
   return result;
 }
 
+TxnScheduleResult NodeTxnScheduler::PreparedResult(const PreparedMvccWrite& prepared) {
+  TxnScheduleResult result = StatusResult(prepared.status);
+  result.readStatus = prepared.readStatus;
+  result.value = prepared.readValue;
+  result.valueCommitTs = prepared.readCommitTs;
+  result.txnRecordStatus = prepared.txnRecordStatus;
+  return result;
+}
+
 Op NodeTxnScheduler::BuildOp(const TxnCommand& command, const PreparedMvccWrite* prepared) {
   Op op;
   switch (command.type) {
@@ -264,6 +285,8 @@ Op NodeTxnScheduler::BuildOp(const TxnCommand& command, const PreparedMvccWrite*
     case TxnCommandType::Commit: op.Operation = "TxnPreparedCommit"; break;
     case TxnCommandType::Rollback: op.Operation = "TxnPreparedRollback"; break;
     case TxnCommandType::PessimisticLock: op.Operation = "TxnPreparedPessimisticLock"; break;
+    case TxnCommandType::CheckTxnStatus: op.Operation = "TxnPreparedCheckStatus"; break;
+    case TxnCommandType::ResolveLock: op.Operation = "TxnPreparedResolveLock"; break;
     case TxnCommandType::GarbageCollect: op.Operation = "TxnGarbageCollect"; break;
   }
   op.Key = command.key;
@@ -395,6 +418,11 @@ void NodeTxnScheduler::Execute(uint64_t commandId) {
   if (needsPrepare) {
     const auto prepareStarted = std::chrono::steady_clock::now();
     prepared = region->PrepareTxn(task->command);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const auto found = tasks_.find(commandId);
+      if (found != tasks_.end()) found->second->preparedResponse = prepared;
+    }
     const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now() - prepareStarted)
                             .count();
@@ -403,11 +431,11 @@ void NodeTxnScheduler::Execute(uint64_t commandId) {
       if (prepared.status == TxnStatus::LockConflict || prepared.status == TxnStatus::WriteConflict) {
         prepareConflicts_.fetch_add(1, std::memory_order_relaxed);
       }
-      FinishBeforeProposal(commandId, StatusResult(prepared.status));
+      FinishBeforeProposal(commandId, PreparedResult(prepared));
       return;
     }
     if (!prepared.HasChanges()) {
-      FinishBeforeProposal(commandId, StatusResult(prepared.status));
+      FinishBeforeProposal(commandId, PreparedResult(prepared));
       return;
     }
   }
@@ -480,6 +508,10 @@ void NodeTxnScheduler::OnApplied(int regionId, const Op& appliedOp, int raftInde
     result.status = appliedOp.Status;
     result.raftIndex = raftIndex;
     result.applied = true;
+    result.readStatus = task->preparedResponse.readStatus;
+    result.value = task->preparedResponse.readValue;
+    result.valueCommitTs = task->preparedResponse.readCommitTs;
+    result.txnRecordStatus = task->preparedResponse.txnRecordStatus;
     if (task->command.type == TxnCommandType::GarbageCollect) {
       try {
         result.removedCount = static_cast<uint64_t>(std::stoull(appliedOp.Status));

@@ -21,16 +21,33 @@ class RaftMvccStorage : public MvccStorage {
 
   TxnStatus Get(const std::string& key, uint64_t readTs, std::string* value) override;
   TxnStatus Prewrite(const std::string& key, const std::string& value, const std::string& primaryKey, uint64_t startTs,
-                     uint64_t ttlMs) override;
-  TxnStatus PrewriteDelete(const std::string& key, const std::string& primaryKey, uint64_t startTs, uint64_t ttlMs) override;
+                     uint64_t ttlMs, uint64_t forUpdateTs = 0,
+                     uint64_t remainingBudgetMs = 0) override;
+  TxnStatus PrewriteDelete(const std::string& key, const std::string& primaryKey, uint64_t startTs,
+                           uint64_t ttlMs, uint64_t forUpdateTs = 0,
+                           uint64_t remainingBudgetMs = 0) override;
+  TxnStatus PrewriteLock(const std::string& key, const std::string& primaryKey,
+                         uint64_t startTs, uint64_t ttlMs, uint64_t forUpdateTs = 0,
+                         uint64_t remainingBudgetMs = 0) override;
   TxnStatus AcquirePessimisticLock(const std::string& key, const std::string& primaryKey, uint64_t startTs,
-                                   uint64_t ttlMs) override;
+                                   uint64_t ttlMs, uint64_t forUpdateTs = 0,
+                                   uint64_t expireAtPhysicalMs = 0) override;
+  PessimisticLockResult AcquirePessimisticLockForUpdate(
+      const std::string& key, const std::string& primaryKey, uint64_t startTs,
+      uint64_t ttlMs, uint64_t forUpdateTs, uint64_t expireAtPhysicalMs,
+      uint64_t remainingBudgetMs = 0) override;
   TxnStatus Commit(const std::string& key, uint64_t startTs, uint64_t commitTs) override;
   TxnStatus Rollback(const std::string& key, uint64_t startTs) override;
   std::optional<MvccLock> GetLock(const std::string& key) override;
   std::optional<uint64_t> FindCommitTs(const std::string& key, uint64_t startTs) override;
+  TxnStatus CheckTxnStatus(const std::string& primaryKey, uint64_t startTs,
+                           uint64_t currentPhysicalMs, bool rollbackIfExpired,
+                           uint64_t remainingBudgetMs, TxnRecordStatus* status) override;
+  TxnStatus ResolveLock(const std::string& key, uint64_t startTs,
+                        TxnRecordState decision, uint64_t commitTs = 0) override;
   std::vector<std::pair<std::string, MvccLock>> ExpiredLocks(uint64_t nowMs) override;
   size_t GarbageCollect(uint64_t safePointTs) override;
+  ProtocolCapabilities Capabilities() override;
   MvccStats Stats() override;
   uint64_t MaxObservedTs() override;
 
