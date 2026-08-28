@@ -54,6 +54,7 @@ StrataKV 当前不使用 Docker、Compose、Kubernetes 或 Helm。
 | 依赖 | CMake/链接名称 | 项目中的用途 | 获取方式 |
 | --- | --- | --- | --- |
 | Pulsar | `Pulsar::pulsar` | Fiber、调度器、epoll、Timer 和 Hook I/O | Git submodule：`src/pulsar` |
+| Boost.Context | `Boost::context` | Pulsar Fiber 的原生 `fcontext` 上下文切换 | `libboost-context-dev` |
 | Protobuf | `find_package(Protobuf REQUIRED)`、`${Protobuf_LIBRARIES}` | Raft/KV RPC 消息、Service、Stub 和反射分发 | `libprotobuf-dev`；修改 `.proto` 时还需要 `protoc` |
 | RocksDB | `rocksdb` | 唯一的本地 KV 持久化引擎、WriteBatch 和前缀扫描 | `librocksdb-dev` |
 | Boost.Serialization | `boost_serialization` | Raft 状态、快照和 RocksDB 快照数据的序列化 | `libboost-serialization-dev` |
@@ -61,8 +62,9 @@ StrataKV 当前不使用 Docker、Compose、Kubernetes 或 Helm。
 | POSIX Threads | `pthread` | 节点、Gateway、SDK 和测试的多线程执行 | Linux 系统线程库 |
 | Dynamic Loader | `dl` | Pulsar 使用 `dlsym` 解析被 Hook 的原始系统调用 | Linux `libdl` |
 
-Pulsar 是仓库内的子模块，其自身不再引入其他第三方 C++ 库。C++ 标准库、
-Linux socket/epoll、文件系统和进程接口属于系统能力，不是额外仓库依赖。
+Pulsar 是仓库内的子模块，直接依赖 Boost.Context；默认使用原生 `fcontext`，
+不会配置 `BOOST_USE_UCONTEXT`。C++ 标准库、Linux socket/epoll、文件系统和
+进程接口属于系统能力，不是额外仓库依赖。
 
 Pulsar 在 StrataKV 中的边界是“可选 Gateway HTTP 网络运行时”。
 它不承载 SDK、2PC、同步 RPC、Raft 或 RocksDB 执行；默认 Gateway
@@ -78,8 +80,8 @@ Pulsar 在 StrataKV 中的边界是“可选 Gateway HTTP 网络运行时”。
 | iproute2 (`ss`) | 排障可选 | 检查端口占用 |
 | GDB | 调试可选 | 线程、堆栈和崩溃分析 |
 
-当前 CMake 只编码了 CMake 3.22 和 C++17 要求，没有为 RocksDB、Muduo、
-Boost 设置项目自定义的最低版本；README 因此不声明未经验证的版本下限。
+当前 CMake 要求 Boost.Context 1.61 或更新版本；没有为 RocksDB、Muduo
+设置项目自定义的最低版本，README 因此不声明未经验证的版本下限。
 
 Ubuntu 24.04 可先安装发行版依赖：
 
@@ -94,6 +96,7 @@ sudo apt install -y \
   protobuf-compiler \
   libprotobuf-dev \
   librocksdb-dev \
+  libboost-context-dev \
   libboost-serialization-dev
 ```
 
@@ -449,7 +452,7 @@ Leader 故障后多数派自动选主。该控制层只负责全局时间戳，�
 ctest --test-dir build --output-on-failure
 ```
 
-当前 CTest 自动执行 Pulsar Fiber 同步、有界线程池、事务调度，以及 TSO 多客户端并发、
+当前 CTest 自动执行 Pulsar Fiber 切换/reset/异常边界、Fiber 同步、有界线程池、事务调度，以及 TSO 多客户端并发、
 少数派拒绝、Leader 切换和全控制层重启测试。集群测试
 不会自动注册到 CTest，避免在普通构建过程中启动服务和写入持久化数据。
 
@@ -503,7 +506,8 @@ bash deploy/stratakv-fiber-benchmark
 
 该脚本会构建 Release 目标并把环境信息和原始结果写入
 `test-results/fiber/<run-id>/`。性能结果必须连同机器、构建类型、负载参数和
-原始输出一起解释。
+原始输出一起解释。2026-08-28 的 ucontext 迁移前基线与 Boost.Context/fcontext
+迁移后对比见 `docs/性能报告/2026-08-28-Boost.Context迁移.md`。
 
 ## 8. 清理规则
 

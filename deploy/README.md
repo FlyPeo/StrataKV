@@ -3,6 +3,10 @@
 StrataKV 只使用 Linux/WSL 本地进程部署。部署脚本会启动三个
 `stratakv-node`、三个 `stratakv-tso` 控制层成员和一个 `stratakv-gateway`，不需要容器运行时。
 
+构建 Fiber 运行时需要 Boost.Context（Ubuntu/WSL 安装
+`libboost-context-dev`）。默认后端是原生 `fcontext`，未启用
+`BOOST_USE_UCONTEXT`。
+
 ## 启动
 
 在项目根目录执行：

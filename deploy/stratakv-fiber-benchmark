@@ -2,12 +2,16 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-result_dir="${1:-${project_dir}/test-results/fiber/ai-resume-20260801}"
+run_id="$(date +%Y%m%d-%H%M%S)-boost-context"
+result_dir="${1:-${project_dir}/test-results/fiber/${run_id}}"
 benchmark="${project_dir}/bin/stratakv-test-fiber-benchmark"
 
 mkdir -p "${result_dir}"
 
-cmake -S "${project_dir}" -B "${project_dir}/build" -DCMAKE_BUILD_TYPE=Release
+cmake -S "${project_dir}" -B "${project_dir}/build" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DSTRATAKV_ENABLE_ASAN=OFF \
+  -DPULSAR_FIBER_GUARD_PAGES=OFF
 cmake --build "${project_dir}/build" --target stratakv-test-fiber-benchmark stratakv-test-fiber-sync -j2
 
 {
@@ -17,6 +21,11 @@ cmake --build "${project_dir}/build" --target stratakv-test-fiber-benchmark stra
   free -h
   c++ --version
   cmake --version
+  dpkg-query -W -f='${Package} ${Version}\n' libboost-context-dev 2>/dev/null || true
+  git -C "${project_dir}" rev-parse HEAD
+  git -C "${project_dir}" status --short
+  git -C "${project_dir}/src/pulsar" rev-parse HEAD
+  git -C "${project_dir}/src/pulsar" status --short
   sha256sum "${benchmark}" "${project_dir}/bin/stratakv-test-fiber-sync"
 } >"${result_dir}/environment.txt"
 
@@ -32,10 +41,21 @@ run_case() {
   done
 }
 
-# Boost.Context-style microbenchmark: Release, warm-up in the executable,
-# steady clock overhead correction, and a single pinned logical CPU.
+# Warm every code path once before collecting five measured rounds.
+"${benchmark}" --case context --iterations 500000 --cpu 0 >/dev/null
+"${benchmark}" --case lifecycle --count 1000 --cpu 0 >/dev/null
+"${benchmark}" --case scheduler --count 10000 --threads 1 --cpu 0 >/dev/null
+"${benchmark}" --case scheduler --count 10000 --threads 4 >/dev/null
+"${benchmark}" --case timer --count 1000 --threads 1 --delay-ms 50 --cpu 0 >/dev/null
+"${benchmark}" --case hook-sleep --count 1000 --threads 1 --delay-ms 10 --cpu 0 >/dev/null
+"${benchmark}" --case hook-echo --count 100 --threads 1 --payload-bytes 64 --round-trips 10 >/dev/null
+"${benchmark}" --case sync --count 100 --threads 4 --delay-ms 1 >/dev/null
+"${benchmark}" --case sync --count 1000 --threads 4 --delay-ms 0 >/dev/null
+
+# Boost.Context/fcontext microbenchmark: Release, steady-clock overhead
+# correction, 128 KiB stacks and a single pinned CPU where applicable.
 run_case context 5 "${benchmark}" --case context --iterations 5000000 --cpu 0
-run_case lifecycle 3 "${benchmark}" --case lifecycle --count 10000 --cpu 0
+run_case lifecycle 5 "${benchmark}" --case lifecycle --count 10000 --cpu 0
 
 # One-worker single-CPU baseline and a four-worker scaling point.
 run_case scheduler-w1 5 taskset -c 0 "${benchmark}" --case scheduler --count 100000 --threads 1
@@ -49,8 +69,8 @@ run_case hook-sleep 5 "${benchmark}" --case hook-sleep --count 10000 --threads 1
 run_case hook-echo 5 taskset -c 0-1 "${benchmark}" --case hook-echo --count 1000 --threads 1 --payload-bytes 64 --round-trips 10
 
 # Wake-all correctness/throughput plus serialized mutex handoff pressure.
-run_case sync 3 taskset -c 0-3 "${benchmark}" --case sync --count 1000 --threads 4 --delay-ms 1
-run_case sync-heavy 3 taskset -c 0-3 "${benchmark}" --case sync --count 10000 --threads 4 --delay-ms 0
+run_case sync 5 taskset -c 0-3 "${benchmark}" --case sync --count 1000 --threads 4 --delay-ms 1
+run_case sync-heavy 5 taskset -c 0-3 "${benchmark}" --case sync --count 10000 --threads 4 --delay-ms 0
 
 if rg -n 'correctness=FAIL|\[assert by\]|timed out|stratakv-test-fiber-benchmark:' "${result_dir}"/*.txt; then
   echo "[fiber-benchmark] FAIL; an assertion, timeout, or correctness failure was recorded" >&2
