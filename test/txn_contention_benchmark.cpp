@@ -21,6 +21,7 @@ struct Options {
   int transactions = 1000;
   int hotKeyCount = 0;
   int hotPercent = 100;
+  int keysPerRegion = 1;
   std::string workload = "optimistic-contention";
 };
 
@@ -45,11 +46,12 @@ Options Parse(int argc, char** argv) {
     else if (option == "--transactions") options.transactions = Number(value);
     else if (option == "--hot-key-count") options.hotKeyCount = Number(value);
     else if (option == "--hot-percent") options.hotPercent = Number(value);
+    else if (option == "--keys-per-region") options.keysPerRegion = Number(value);
     else if (option == "--workload") options.workload = value;
     else throw std::invalid_argument("unknown option " + option);
   }
   if (options.regions.empty() || options.tsoHost.empty() || options.tsoPort <= 0 || options.tsoPort > 65535 ||
-      options.workers <= 0 || options.transactions <= 0) {
+      options.workers <= 0 || options.transactions <= 0 || options.keysPerRegion <= 0) {
     throw std::invalid_argument("--regions-config, valid TSO endpoint, positive --workers and --transactions are required");
   }
   if (options.hotPercent > 100) throw std::invalid_argument("--hot-percent must be at most 100");
@@ -71,7 +73,14 @@ long long Average(const std::vector<long long>& values) {
 
 std::vector<std::string> SlotKeys(const Options& options, int slot) {
   const std::string suffix = ":contention:" + options.runId + ":" + std::to_string(slot);
-  return {"a" + suffix, "h" + suffix, "p" + suffix};
+  std::vector<std::string> keys;
+  keys.reserve(static_cast<size_t>(options.keysPerRegion) * 3);
+  for (const char prefix : {'a', 'h', 'p'}) {
+    for (int index = 0; index < options.keysPerRegion; ++index) {
+      keys.push_back(std::string(1, prefix) + suffix + ":" + std::to_string(index));
+    }
+  }
+  return keys;
 }
 
 std::vector<std::string> Keys(const Options& options, int index) {
@@ -91,6 +100,7 @@ int main(int argc, char** argv) {
     std::atomic<int> committed{0};
     std::atomic<int> conflicts{0};
     std::atomic<int> unavailable{0};
+    std::atomic<bool> reportedFailure{false};
     std::mutex latencyMutex;
     std::vector<long long> latencies;
     latencies.reserve(options.transactions);
@@ -102,7 +112,7 @@ int main(int argc, char** argv) {
           const int index = next.fetch_add(1);
           if (index >= options.transactions) return;
           const auto started = std::chrono::steady_clock::now();
-          auto txn = client->Begin(3000);
+          auto txn = client->Begin(120000);
           const auto keys = Keys(options, index);
           const std::string value = "value-" + options.runId + "-" + std::to_string(index);
           
@@ -123,7 +133,13 @@ int main(int argc, char** argv) {
           if (result.ok()) committed.fetch_add(1);
           else if (result.status == stratakv::Status::kLockConflict ||
                    result.status == stratakv::Status::kWriteConflict) conflicts.fetch_add(1);
-          else unavailable.fetch_add(1);
+          else {
+            unavailable.fetch_add(1);
+            if (!reportedFailure.exchange(true)) {
+              std::cerr << "first_unavailable_status=" << stratakv::StatusName(result.status)
+                        << " message=" << result.message << '\n';
+            }
+          }
           const long long latency = std::chrono::duration_cast<std::chrono::microseconds>(
                                         std::chrono::steady_clock::now() - started)
                                         .count();
@@ -140,19 +156,24 @@ int main(int argc, char** argv) {
     int atomicityFailures = 0;
     if (options.hotKeyCount > 0) {
       for (int slot = 0; slot < options.hotKeyCount; ++slot) {
-        auto txn = client->Begin(3000);
+        auto txn = client->Begin(120000);
         const auto keys = SlotKeys(options, slot);
-        const auto first = client->Get(txn, keys[0]);
-        const auto second = client->Get(txn, keys[1]);
-        const auto third = client->Get(txn, keys[2]);
+        std::vector<stratakv::Result> values;
+        values.reserve(keys.size());
+        for (const auto& key : keys) values.push_back(client->Get(txn, key));
         client->Rollback(txn);
-        if (!first.ok() || !second.ok() || !third.ok() || first.value != second.value || first.value != third.value) {
+        if (values.empty() || std::any_of(values.begin(), values.end(), [](const auto& value) { return !value.ok(); }) ||
+            std::any_of(values.begin() + 1, values.end(), [&values](const auto& value) {
+              return value.value != values.front().value;
+            })) {
           ++atomicityFailures;
         }
       }
     }
     const double seconds = std::max(0.001, elapsedMs / 1000.0);
     std::cout << "transactions_total=" << options.transactions << '\n'
+              << "keys_per_region=" << options.keysPerRegion << '\n'
+              << "keys_per_transaction=" << options.keysPerRegion * 3 << '\n'
               << "transactions_committed=" << committed.load() << '\n'
               << "transaction_conflicts=" << conflicts.load() << '\n'
               << "unavailable=" << unavailable.load() << '\n'

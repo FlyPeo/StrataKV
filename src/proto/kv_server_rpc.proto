@@ -94,6 +94,30 @@ message TxnPrewriteReply {
   bytes Err = 1;
 }
 
+message TxnBatchMutation {
+  bytes Key = 1;
+  bytes Value = 2;
+  bool IsDelete = 3;
+  bool IsLockOnly = 4;
+}
+
+message TxnBatchPrewriteArgs {
+  repeated TxnBatchMutation Mutations = 1;
+  bytes PrimaryKey = 2;
+  uint64 StartTs = 3;
+  uint64 TtlMs = 4;
+  bytes ClientId = 5;
+  int32 RequestId = 6;
+  int32 RegionId = 7;
+  uint64 MaxForUpdateTs = 8;
+  uint32 ProtocolVersion = 9;
+  uint64 RemainingBudgetMs = 10;
+}
+
+message TxnBatchPrewriteReply {
+  bytes Err = 1;
+}
+
 message TxnCommitArgs {
   bytes Key = 1;
   uint64 StartTs = 2;
@@ -107,6 +131,21 @@ message TxnCommitReply {
   bytes Err = 1;
 }
 
+message TxnBatchCommitArgs {
+  repeated bytes Keys = 1;
+  uint64 StartTs = 2;
+  uint64 CommitTs = 3;
+  bytes ClientId = 4;
+  int32 RequestId = 5;
+  int32 RegionId = 6;
+  uint32 ProtocolVersion = 7;
+  uint64 RemainingBudgetMs = 8;
+}
+
+message TxnBatchCommitReply {
+  bytes Err = 1;
+}
+
 message TxnRollbackArgs {
   bytes Key = 1;
   uint64 StartTs = 2;
@@ -116,6 +155,20 @@ message TxnRollbackArgs {
 }
 
 message TxnRollbackReply {
+  bytes Err = 1;
+}
+
+message TxnBatchRollbackArgs {
+  repeated bytes Keys = 1;
+  uint64 StartTs = 2;
+  bytes ClientId = 3;
+  int32 RequestId = 4;
+  int32 RegionId = 5;
+  uint32 ProtocolVersion = 6;
+  uint64 RemainingBudgetMs = 7;
+}
+
+message TxnBatchRollbackReply {
   bytes Err = 1;
 }
 
@@ -283,6 +336,16 @@ message PreparedMvccWriteCommand {
   repeated MvccModification Modifications = 5;
 }
 
+message PreparedMvccBatchItem {
+  bytes Key = 1;
+  PreparedMvccWriteCommand Prepared = 2;
+}
+
+message PreparedMvccBatchCommand {
+  uint32 Version = 1;
+  repeated PreparedMvccBatchItem Items = 2;
+}
+
 //只有raft节点之间才会涉及rpc通信
 service kvServerRpc
 {
@@ -292,8 +355,11 @@ service kvServerRpc
 
   rpc TxnGet(TxnGetArgs) returns (TxnGetReply);
   rpc TxnPrewrite(TxnPrewriteArgs) returns (TxnPrewriteReply);
+  rpc TxnBatchPrewrite(TxnBatchPrewriteArgs) returns (TxnBatchPrewriteReply);
   rpc TxnCommit(TxnCommitArgs) returns (TxnCommitReply);
+  rpc TxnBatchCommit(TxnBatchCommitArgs) returns (TxnBatchCommitReply);
   rpc TxnRollback(TxnRollbackArgs) returns (TxnRollbackReply);
+  rpc TxnBatchRollback(TxnBatchRollbackArgs) returns (TxnBatchRollbackReply);
   rpc TxnGetLock(TxnGetLockArgs) returns (TxnGetLockReply);
   rpc TxnAcquirePessimisticLock(TxnAcquirePessimisticLockArgs) returns (TxnAcquirePessimisticLockReply);
   rpc TxnCheckStatus(TxnCheckStatusArgs) returns (TxnCheckStatusReply);

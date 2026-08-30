@@ -53,7 +53,7 @@ StrataKV 当前不使用 Docker、Compose、Kubernetes 或 Helm。
 
 | 依赖 | CMake/链接名称 | 项目中的用途 | 获取方式 |
 | --- | --- | --- | --- |
-| Pulsar | `Pulsar::pulsar` | Fiber、调度器、epoll、Timer 和 Hook I/O | Git submodule：`src/pulsar` |
+| Pulsar | `Pulsar::pulsar` | Fiber、per-worker deque/work stealing 调度器、epoll、Timer 和 Hook I/O | Git submodule：`src/pulsar` |
 | Boost.Context | `Boost::context` | Pulsar Fiber 的原生 `fcontext` 上下文切换 | `libboost-context-dev` |
 | Protobuf | `find_package(Protobuf REQUIRED)`、`${Protobuf_LIBRARIES}` | Raft/KV RPC 消息、Service、Stub 和反射分发 | `libprotobuf-dev`；修改 `.proto` 时还需要 `protoc` |
 | RocksDB | `rocksdb` | 唯一的本地 KV 持久化引擎、WriteBatch 和前缀扫描 | `librocksdb-dev` |
@@ -138,8 +138,9 @@ cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
-构建产物输出到源码目录中的 `bin/` 和 `lib/`。当前 CTest 注册了
-Fiber 同步原语和有界线程池正确性测试；集群可靠性测试需要单独
+构建产物输出到源码目录中的 `bin/` 和 `lib/`。当前 CTest 注册了 9 项测试，
+覆盖 Fiber 上下文/同步、Scheduler work stealing 与线程亲和、有界线程池、事务
+调度、TSO、TimestampOracle、事务协调器和 SDK contract；集群可靠性测试需要单独
 运行，见第 7 节。
 
 ### 2.4 启动三节点本地集群
@@ -452,7 +453,7 @@ Leader 故障后多数派自动选主。该控制层只负责全局时间戳，�
 ctest --test-dir build --output-on-failure
 ```
 
-当前 CTest 自动执行 Pulsar Fiber 切换/reset/异常边界、Fiber 同步、有界线程池、事务调度，以及 TSO 多客户端并发、
+当前 CTest 自动执行 Pulsar Fiber 切换/reset/异常边界、Fiber 同步、Scheduler work stealing/线程亲和、有界线程池、事务调度，以及 TSO 多客户端并发、
 少数派拒绝、Leader 切换和全控制层重启测试。集群测试
 不会自动注册到 CTest，避免在普通构建过程中启动服务和写入持久化数据。
 
@@ -558,8 +559,8 @@ deploy/（deploy/runtime/ 除外）
 
 ## 11. 相关项目与许可
 
-- [Pulsar](https://github.com/FlyPeo/Pulsar)：用户态有栈协程、M:N 调度、
-  epoll 和 Hook I/O 运行时。
+- [Pulsar](https://github.com/FlyPeo/Pulsar)：用户态有栈协程、每 Worker deque、
+  work stealing、M:N 调度、epoll 和 Hook I/O 运行时。
 
 本仓库当前未附带开源许可证；在添加明确许可证前，不默认授予复制、修改或
 再分发权利。

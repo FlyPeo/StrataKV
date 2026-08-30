@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <future>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -61,6 +62,28 @@ std::vector<std::string> CleanupKeys(const Transaction& txn) {
               txn.UncertainPessimisticLocks().end());
   return SortedUnique(std::move(keys));
 }
+
+struct RegionKeyBatch {
+  int regionId = -1;
+  std::shared_ptr<MvccStorage> storage;
+  std::vector<std::string> keys;
+};
+
+std::vector<RegionKeyBatch> GroupKeysByRegion(const std::shared_ptr<ShardRouter>& router,
+                                               const std::vector<std::string>& keys) {
+  std::unordered_map<int, size_t> positions;
+  std::vector<RegionKeyBatch> batches;
+  for (const auto& key : SortedUnique(keys)) {
+    const int regionId = router->RegionId(key);
+    auto inserted = positions.emplace(regionId, batches.size());
+    if (inserted.second) batches.push_back({regionId, router->Route(key), {}});
+    batches[inserted.first->second].keys.push_back(key);
+  }
+  std::sort(batches.begin(), batches.end(), [](const RegionKeyBatch& lhs, const RegionKeyBatch& rhs) {
+    return lhs.regionId < rhs.regionId;
+  });
+  return batches;
+}
 }  // namespace
 
 DistributedTransactionCoordinator::DistributedTransactionCoordinator(
@@ -72,13 +95,16 @@ DistributedTransactionCoordinator::DistributedTransactionCoordinator(
       lockResolver_(std::make_shared<LockResolver>(router_)) {
   uint64_t maxObservedTs = 0;
   bool clusterSupportsPessimistic = true;
+  bool clusterSupportsBatch = true;
   for (const auto& shard : router_->Shards()) {
     maxObservedTs = std::max(maxObservedTs, shard->MaxObservedTs());
-    if (shard->Capabilities().protocolVersion < 2) {
+    const ProtocolCapabilities capabilities = shard->Capabilities();
+    if (capabilities.protocolVersion < kPessimisticTxnProtocolVersion)
       clusterSupportsPessimistic = false;
-    }
+    if (capabilities.protocolVersion < kBatchTxnProtocolVersion) clusterSupportsBatch = false;
   }
   pessimisticEnabled_ = clusterSupportsPessimistic;
+  batchEnabled_ = clusterSupportsBatch;
   // Client-side steady-clock recovery and 10-second GC are not authoritative
   // across processes. Keep them disabled until the Node-owned manager lands.
   tso_->Observe(maxObservedTs);
@@ -250,17 +276,38 @@ TxnStatus DistributedTransactionCoordinator::CleanupTransaction(Transaction* txn
   if (txn == nullptr) return TxnStatus::StorageError;
   const std::vector<std::string> keys = CleanupKeys(*txn);
   TxnStatus aggregate = TxnStatus::Ok;
-  for (const auto& key : keys) {
-    const TxnStatus status = router_->Route(key)->Rollback(key, txn->StartTs());
+  if (!batchEnabled_) {
+    for (const auto& key : keys) {
+      const TxnStatus status = router_->Route(key)->Rollback(key, txn->StartTs());
+      if (status == TxnStatus::Ok) {
+        txn->ForgetPessimisticLock(key);
+      } else if (status == TxnStatus::AlreadyCommitted) {
+        aggregate = TxnStatus::AlreadyCommitted;
+      } else {
+        aggregate = TxnStatus::CleanupPending;
+      }
+    }
+    RecordRollbackRegions(keys);
+    if (aggregate == TxnStatus::Ok) txn->ClearPessimisticLocks();
+    return aggregate;
+  }
+  const auto batches = GroupKeysByRegion(router_, keys);
+  std::vector<std::future<TxnStatus>> futures;
+  futures.reserve(batches.size());
+  for (const auto& batch : batches) {
+    futures.push_back(regionExecutor_->Submit([batch, startTs = txn->StartTs()]() {
+      return batch.storage->BatchRollback(batch.keys, startTs);
+    }));
+  }
+  for (size_t index = 0; index < batches.size(); ++index) {
+    const TxnStatus status = futures[index].get();
     if (status == TxnStatus::Ok) {
-      txn->ForgetPessimisticLock(key);
-      continue;
-    }
-    if (status == TxnStatus::AlreadyCommitted) {
+      for (const auto& key : batches[index].keys) txn->ForgetPessimisticLock(key);
+    } else if (status == TxnStatus::AlreadyCommitted) {
       aggregate = TxnStatus::AlreadyCommitted;
-      continue;
+    } else {
+      aggregate = TxnStatus::CleanupPending;
     }
-    aggregate = TxnStatus::CleanupPending;
   }
   RecordRollbackRegions(keys);
   if (aggregate == TxnStatus::Ok) txn->ClearPessimisticLocks();
@@ -307,23 +354,70 @@ TxnStatus DistributedTransactionCoordinator::Commit(Transaction* txn,
 
   std::vector<std::string> prewritten;
   TxnStatus prewriteStatus = TxnStatus::Ok;
-  if (!HasMutation(*txn, primaryKey)) {
-    prewriteStatus = router_->Route(primaryKey)->PrewriteLock(
-        primaryKey, primaryKey, txn->StartTs(), options.lockTtlMs,
-        txn->MaxForUpdateTs(), options.rpcBudgetMs);
-    if (prewriteStatus == TxnStatus::Ok) prewritten.push_back(primaryKey);
-  }
-  for (const auto& key : mutationKeys) {
-    if (prewriteStatus != TxnStatus::Ok) break;
-    const TxnMutation& mutation = txn->Mutations().at(key);
-    prewriteStatus = mutation.isDelete
-                         ? router_->Route(key)->PrewriteDelete(
-                               key, primaryKey, txn->StartTs(), options.lockTtlMs,
-                               txn->MaxForUpdateTs(), options.rpcBudgetMs)
-                         : router_->Route(key)->Prewrite(
-                               key, mutation.value, primaryKey, txn->StartTs(),
-                               options.lockTtlMs, txn->MaxForUpdateTs(), options.rpcBudgetMs);
-    if (prewriteStatus == TxnStatus::Ok) prewritten.push_back(key);
+  if (!batchEnabled_) {
+    if (!HasMutation(*txn, primaryKey)) {
+      prewriteStatus = router_->Route(primaryKey)->PrewriteLock(
+          primaryKey, primaryKey, txn->StartTs(), options.lockTtlMs,
+          txn->MaxForUpdateTs(), options.rpcBudgetMs);
+      if (prewriteStatus == TxnStatus::Ok) prewritten.push_back(primaryKey);
+    }
+    for (const auto& key : mutationKeys) {
+      if (prewriteStatus != TxnStatus::Ok) break;
+      const TxnMutation& mutation = txn->Mutations().at(key);
+      prewriteStatus = mutation.isDelete
+                           ? router_->Route(key)->PrewriteDelete(
+                                 key, primaryKey, txn->StartTs(), options.lockTtlMs,
+                                 txn->MaxForUpdateTs(), options.rpcBudgetMs)
+                           : router_->Route(key)->Prewrite(
+                                 key, mutation.value, primaryKey, txn->StartTs(),
+                                 options.lockTtlMs, txn->MaxForUpdateTs(), options.rpcBudgetMs);
+      if (prewriteStatus == TxnStatus::Ok) prewritten.push_back(key);
+    }
+  } else {
+    struct MutationBatch {
+      int regionId = -1;
+      std::shared_ptr<MvccStorage> storage;
+      std::vector<MvccMutation> mutations;
+    };
+    std::unordered_map<int, size_t> batchPositions;
+    std::vector<MutationBatch> mutationBatches;
+    const auto appendMutation = [&](MvccMutation mutation) {
+      const int regionId = router_->RegionId(mutation.key);
+      auto inserted = batchPositions.emplace(regionId, mutationBatches.size());
+      if (inserted.second) mutationBatches.push_back({regionId, router_->Route(mutation.key), {}});
+      mutationBatches[inserted.first->second].mutations.push_back(std::move(mutation));
+    };
+    if (!HasMutation(*txn, primaryKey)) appendMutation({primaryKey, "", false, true});
+    for (const auto& key : mutationKeys) {
+      const TxnMutation& mutation = txn->Mutations().at(key);
+      appendMutation({key, mutation.value, mutation.isDelete, false});
+    }
+    std::sort(mutationBatches.begin(), mutationBatches.end(),
+              [](const MutationBatch& lhs, const MutationBatch& rhs) {
+                return lhs.regionId < rhs.regionId;
+              });
+    std::vector<std::future<TxnStatus>> prewriteFutures;
+    prewriteFutures.reserve(mutationBatches.size());
+    for (auto& batch : mutationBatches) {
+      std::sort(batch.mutations.begin(), batch.mutations.end(),
+                [](const MvccMutation& lhs, const MvccMutation& rhs) { return lhs.key < rhs.key; });
+      prewriteFutures.push_back(regionExecutor_->Submit(
+          [storage = batch.storage, mutations = batch.mutations, primaryKey,
+           startTs = txn->StartTs(), ttlMs = options.lockTtlMs,
+           forUpdateTs = txn->MaxForUpdateTs(), budgetMs = options.rpcBudgetMs]() {
+            return storage->BatchPrewrite(mutations, primaryKey, startTs, ttlMs,
+                                          forUpdateTs, budgetMs);
+          }));
+    }
+    for (size_t index = 0; index < mutationBatches.size(); ++index) {
+      const TxnStatus status = prewriteFutures[index].get();
+      if (status == TxnStatus::Ok) {
+        for (const auto& mutation : mutationBatches[index].mutations)
+          prewritten.push_back(mutation.key);
+      } else if (prewriteStatus == TxnStatus::Ok) {
+        prewriteStatus = status;
+      }
+    }
   }
   if (prewriteStatus != TxnStatus::Ok) {
     txn->MarkAbortOnly();
@@ -372,21 +466,67 @@ TxnStatus DistributedTransactionCoordinator::Commit(Transaction* txn,
     }
   }
 
+  std::vector<std::string> secondaryKeys;
   for (const auto& key : prewritten) {
-    if (key == primaryKey) continue;
-    const TxnStatus status = router_->Route(key)->Commit(key, txn->StartTs(), commitTs);
-    if (!IsCommitSuccess(status)) {
-      std::cerr << "Secondary key commit remains pending: key=" << key
-                << " status=" << TxnStatusName(status)
-                << "; committed Primary remains authoritative." << std::endl;
+    if (key != primaryKey) secondaryKeys.push_back(key);
+  }
+  if (!batchEnabled_) {
+    for (const auto& key : secondaryKeys) {
+      const TxnStatus status = router_->Route(key)->Commit(key, txn->StartTs(), commitTs);
+      if (!IsCommitSuccess(status)) {
+        std::cerr << "Secondary key commit remains pending: key=" << key
+                  << " status=" << TxnStatusName(status)
+                  << "; committed Primary remains authoritative." << std::endl;
+      }
+    }
+  } else {
+    const auto secondaryBatches = GroupKeysByRegion(router_, secondaryKeys);
+    std::vector<std::future<TxnStatus>> secondaryFutures;
+    secondaryFutures.reserve(secondaryBatches.size());
+    for (const auto& batch : secondaryBatches) {
+      secondaryFutures.push_back(regionExecutor_->Submit(
+          [batch, startTs = txn->StartTs(), commitTs, budgetMs = options.rpcBudgetMs]() {
+            return batch.storage->BatchCommit(batch.keys, startTs, commitTs, budgetMs);
+          }));
+    }
+    for (size_t index = 0; index < secondaryBatches.size(); ++index) {
+      const TxnStatus status = secondaryFutures[index].get();
+      if (!IsCommitSuccess(status)) {
+        std::cerr << "Secondary Region commit remains pending: region="
+                  << secondaryBatches[index].regionId
+                  << " status=" << TxnStatusName(status)
+                  << "; committed Primary remains authoritative." << std::endl;
+      }
     }
   }
+  std::vector<std::string> purePessimisticLocks;
   for (const auto& key : txn->PessimisticLocks()) {
     if (key == primaryKey || HasMutation(*txn, key)) continue;
-    const TxnStatus release = router_->Route(key)->Rollback(key, txn->StartTs());
-    if (release != TxnStatus::Ok) {
-      std::cerr << "Pure pessimistic lock release remains pending: key=" << key
-                << " status=" << TxnStatusName(release) << std::endl;
+    purePessimisticLocks.push_back(key);
+  }
+  if (!batchEnabled_) {
+    for (const auto& key : purePessimisticLocks) {
+      const TxnStatus release = router_->Route(key)->Rollback(key, txn->StartTs());
+      if (release != TxnStatus::Ok) {
+        std::cerr << "Pure pessimistic lock release remains pending: key=" << key
+                  << " status=" << TxnStatusName(release) << std::endl;
+      }
+    }
+  } else {
+    const auto releaseBatches = GroupKeysByRegion(router_, purePessimisticLocks);
+    std::vector<std::future<TxnStatus>> releaseFutures;
+    for (const auto& batch : releaseBatches) {
+      releaseFutures.push_back(regionExecutor_->Submit([batch, startTs = txn->StartTs()]() {
+        return batch.storage->BatchRollback(batch.keys, startTs);
+      }));
+    }
+    for (size_t index = 0; index < releaseBatches.size(); ++index) {
+      const TxnStatus release = releaseFutures[index].get();
+      if (release != TxnStatus::Ok) {
+        std::cerr << "Pure pessimistic lock release remains pending: region="
+                  << releaseBatches[index].regionId
+                  << " status=" << TxnStatusName(release) << std::endl;
+      }
     }
   }
   txn->ClearPessimisticLocks();

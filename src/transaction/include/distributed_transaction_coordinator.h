@@ -62,6 +62,7 @@ class DistributedTransactionCoordinator {
   std::atomic<uint64_t> lockTimeouts_{0};
   std::atomic<uint64_t> lockConflicts_{0};
   bool pessimisticEnabled_ = false;
+  bool batchEnabled_ = false;
 
   void RecordRollbackRegions(const std::vector<std::string>& keys);
   TxnStatus CheckActiveAndDeadline(Transaction* txn, const TxnOptions& options,

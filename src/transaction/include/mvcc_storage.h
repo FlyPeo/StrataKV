@@ -13,7 +13,9 @@
 
 #include "kv_engine.h"
 
-constexpr uint32_t kTxnProtocolVersion = 2;
+constexpr uint32_t kPessimisticTxnProtocolVersion = 2;
+constexpr uint32_t kBatchTxnProtocolVersion = 3;
+constexpr uint32_t kTxnProtocolVersion = kBatchTxnProtocolVersion;
 constexpr uint32_t kMvccLockFormatVersion = 2;
 
 enum class TxnStatus {
@@ -118,6 +120,31 @@ struct PreparedMvccWrite {
   bool Parse(const std::string& encoded);
 };
 
+struct MvccMutation {
+  std::string key;
+  std::string value;
+  bool isDelete = false;
+  bool isLockOnly = false;
+};
+
+struct PreparedMvccBatchItem {
+  std::string key;
+  PreparedMvccWrite prepared;
+};
+
+// One deterministic Region command. Every item is validated before a single
+// engine WriteBatch atomically persists all mutations and appliedRaftIndex.
+struct PreparedMvccBatch {
+  static constexpr uint32_t kCommandVersion = 1;
+  uint32_t commandVersion = kCommandVersion;
+  TxnStatus status = TxnStatus::StorageError;
+  std::vector<PreparedMvccBatchItem> items;
+
+  bool HasChanges() const;
+  std::string Serialize() const;
+  bool Parse(const std::string& encoded);
+};
+
 class MvccStorage {
  public:
   explicit MvccStorage(std::shared_ptr<IKVEngine> engine);
@@ -133,6 +160,14 @@ class MvccStorage {
   virtual TxnStatus PrewriteLock(const std::string& key, const std::string& primaryKey,
                                  uint64_t startTs, uint64_t ttlMs, uint64_t forUpdateTs = 0,
                                  uint64_t remainingBudgetMs = 0);
+  virtual TxnStatus BatchPrewrite(const std::vector<MvccMutation>& mutations,
+                                  const std::string& primaryKey, uint64_t startTs,
+                                  uint64_t ttlMs, uint64_t forUpdateTs = 0,
+                                  uint64_t remainingBudgetMs = 0);
+  virtual TxnStatus BatchCommit(const std::vector<std::string>& keys, uint64_t startTs,
+                                uint64_t commitTs, uint64_t remainingBudgetMs = 0);
+  virtual TxnStatus BatchRollback(const std::vector<std::string>& keys, uint64_t startTs,
+                                  uint64_t remainingBudgetMs = 0);
   // Read-only fast rejection used by a Region leader before proposing a
   // semantic Prewrite command.  Callers must still keep the authoritative
   // Apply-time check unless a scheduler latch protects the entire lifecycle.
@@ -154,11 +189,20 @@ class MvccStorage {
                                           bool rollbackIfExpired);
   PreparedMvccWrite PrepareResolveLock(const std::string& key, uint64_t startTs,
                                        TxnRecordState decision, uint64_t commitTs = 0);
+  PreparedMvccBatch PrepareBatchPrewrite(const std::vector<MvccMutation>& mutations,
+                                         const std::string& primaryKey, uint64_t startTs,
+                                         uint64_t ttlMs, uint64_t forUpdateTs = 0);
+  PreparedMvccBatch PrepareBatchCommit(const std::vector<std::string>& keys,
+                                       uint64_t startTs, uint64_t commitTs);
+  PreparedMvccBatch PrepareBatchRollback(const std::vector<std::string>& keys,
+                                         uint64_t startTs);
   // When appliedRaftIndex is non-zero it is persisted in the same WriteBatch
   // as the MVCC mutations, providing an atomic business-data/apply-progress
   // checkpoint. Unit tests and non-Raft callers may leave it at zero.
   TxnStatus ApplyPrepared(const std::string& key, const PreparedMvccWrite& prepared,
                           uint64_t appliedRaftIndex = 0);
+  TxnStatus ApplyPreparedBatch(const PreparedMvccBatch& prepared,
+                               uint64_t appliedRaftIndex = 0);
   virtual TxnStatus AcquirePessimisticLock(const std::string& key, const std::string& primaryKey, uint64_t startTs,
                                    uint64_t ttlMs, uint64_t forUpdateTs = 0,
                                    uint64_t expireAtPhysicalMs = 0);

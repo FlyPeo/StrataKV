@@ -213,6 +213,58 @@ bool PreparedMvccWrite::Parse(const std::string& encoded) {
   return true;
 }
 
+bool PreparedMvccBatch::HasChanges() const {
+  if (status != TxnStatus::Ok) return false;
+  return std::any_of(items.begin(), items.end(), [](const PreparedMvccBatchItem& item) {
+    return item.prepared.HasChanges();
+  });
+}
+
+std::string PreparedMvccBatch::Serialize() const {
+  raftKVRpcProctoc::PreparedMvccBatchCommand command;
+  command.set_version(commandVersion);
+  for (const auto& item : items) {
+    auto* encodedItem = command.add_items();
+    encodedItem->set_key(item.key);
+    const std::string encodedPrepared = item.prepared.Serialize();
+    if (encodedPrepared.empty() ||
+        !encodedItem->mutable_prepared()->ParseFromString(encodedPrepared)) {
+      return {};
+    }
+  }
+  std::string encoded;
+  return command.SerializeToString(&encoded) ? encoded : std::string{};
+}
+
+bool PreparedMvccBatch::Parse(const std::string& encoded) {
+  raftKVRpcProctoc::PreparedMvccBatchCommand command;
+  if (!command.ParseFromString(encoded) || command.version() != kCommandVersion ||
+      command.items_size() <= 0 || command.items_size() > 100000) {
+    return false;
+  }
+  commandVersion = command.version();
+  status = TxnStatus::Ok;
+  items.clear();
+  items.reserve(static_cast<size_t>(command.items_size()));
+  std::string previousKey;
+  for (const auto& encodedItem : command.items()) {
+    if (encodedItem.key().empty() || (!previousKey.empty() && encodedItem.key() <= previousKey)) {
+      items.clear();
+      return false;
+    }
+    PreparedMvccBatchItem item;
+    item.key = encodedItem.key();
+    if (!item.prepared.Parse(encodedItem.prepared().SerializeAsString()) ||
+        item.prepared.status != TxnStatus::Ok) {
+      items.clear();
+      return false;
+    }
+    previousKey = item.key;
+    items.push_back(std::move(item));
+  }
+  return true;
+}
+
 MvccStorage::MvccStorage(std::shared_ptr<IKVEngine> engine) : engine_(std::move(engine)) { RecoverMetadataFromEngine(); }
 
 TxnStatus MvccStorage::Get(const std::string& key, uint64_t readTs, std::string* value) {
@@ -706,6 +758,77 @@ void MvccStorage::ApplyMetadataMutationLocked(const KVBatchOp& op) {
   }
 }
 
+PreparedMvccBatch MvccStorage::PrepareBatchPrewrite(
+    const std::vector<MvccMutation>& mutations, const std::string& primaryKey,
+    uint64_t startTs, uint64_t ttlMs, uint64_t forUpdateTs) {
+  PreparedMvccBatch batch;
+  std::vector<MvccMutation> ordered = mutations;
+  std::sort(ordered.begin(), ordered.end(), [](const MvccMutation& lhs, const MvccMutation& rhs) {
+    return lhs.key < rhs.key;
+  });
+  if (ordered.empty()) return batch;
+  for (size_t index = 0; index < ordered.size(); ++index) {
+    if (ordered[index].key.empty() || (index != 0 && ordered[index - 1].key == ordered[index].key)) {
+      return batch;
+    }
+    PreparedMvccWrite prepared = ordered[index].isLockOnly
+                                     ? PreparePrewriteLock(ordered[index].key, primaryKey, startTs,
+                                                           ttlMs, forUpdateTs)
+                                     : PreparePrewrite(ordered[index].key, ordered[index].value,
+                                                       primaryKey, startTs, ttlMs,
+                                                       ordered[index].isDelete, forUpdateTs);
+    if (prepared.status != TxnStatus::Ok) {
+      batch.status = prepared.status;
+      batch.items.clear();
+      return batch;
+    }
+    batch.items.push_back({ordered[index].key, std::move(prepared)});
+  }
+  batch.status = TxnStatus::Ok;
+  return batch;
+}
+
+PreparedMvccBatch MvccStorage::PrepareBatchCommit(const std::vector<std::string>& keys,
+                                                   uint64_t startTs, uint64_t commitTs) {
+  PreparedMvccBatch batch;
+  std::vector<std::string> ordered = keys;
+  std::sort(ordered.begin(), ordered.end());
+  ordered.erase(std::unique(ordered.begin(), ordered.end()), ordered.end());
+  if (ordered.empty() || ordered.front().empty()) return batch;
+  for (const auto& key : ordered) {
+    PreparedMvccWrite prepared = PrepareCommit(key, startTs, commitTs);
+    if (prepared.status == TxnStatus::AlreadyCommitted) prepared.status = TxnStatus::Ok;
+    if (prepared.status != TxnStatus::Ok) {
+      batch.status = prepared.status;
+      batch.items.clear();
+      return batch;
+    }
+    batch.items.push_back({key, std::move(prepared)});
+  }
+  batch.status = TxnStatus::Ok;
+  return batch;
+}
+
+PreparedMvccBatch MvccStorage::PrepareBatchRollback(const std::vector<std::string>& keys,
+                                                     uint64_t startTs) {
+  PreparedMvccBatch batch;
+  std::vector<std::string> ordered = keys;
+  std::sort(ordered.begin(), ordered.end());
+  ordered.erase(std::unique(ordered.begin(), ordered.end()), ordered.end());
+  if (ordered.empty() || ordered.front().empty()) return batch;
+  for (const auto& key : ordered) {
+    PreparedMvccWrite prepared = PrepareRollback(key, startTs);
+    if (prepared.status != TxnStatus::Ok) {
+      batch.status = prepared.status;
+      batch.items.clear();
+      return batch;
+    }
+    batch.items.push_back({key, std::move(prepared)});
+  }
+  batch.status = TxnStatus::Ok;
+  return batch;
+}
+
 TxnStatus MvccStorage::ApplyPrepared(const std::string& key, const PreparedMvccWrite& prepared,
                                      uint64_t appliedRaftIndex) {
   if ((prepared.commandVersion != PreparedMvccWrite::kLegacyCommandVersion &&
@@ -715,15 +838,14 @@ TxnStatus MvccStorage::ApplyPrepared(const std::string& key, const PreparedMvccW
     return TxnStatus::StorageError;
   }
   std::unique_lock<std::shared_mutex> lock(mutex_);
+  // Replaying an entry already included in the atomic data/progress batch is
+  // idempotent. A revision mismatch for a newer entry is not: advancing only
+  // the progress marker would permanently skip a committed state transition.
+  if (appliedRaftIndex != 0 && appliedRaftIndex <= appliedRaftIndex_) {
+    return TxnStatus::Ok;
+  }
   if (CurrentRevisionLocked(key) != prepared.expectedRevision) {
-    if (appliedRaftIndex != 0) {
-      const std::vector<KVBatchOp> progress{{KVBatchOpType::Put, "meta/mvcc_applied_raft_index",
-                                            std::to_string(appliedRaftIndex)}};
-      if (!engine_->WriteBatch(progress)) return TxnStatus::StorageError;
-      writeBatchCount_.fetch_add(1, std::memory_order_relaxed);
-      appliedRaftIndex_ = appliedRaftIndex;
-    }
-    return TxnStatus::WriteConflict;
+    return TxnStatus::StorageError;
   }
   std::vector<KVBatchOp> batch = prepared.modifications;
   if (appliedRaftIndex != 0) {
@@ -741,6 +863,74 @@ TxnStatus MvccStorage::ApplyPrepared(const std::string& key, const PreparedMvccW
   }
   if (appliedRaftIndex != 0) appliedRaftIndex_ = appliedRaftIndex;
   return TxnStatus::Ok;
+}
+
+TxnStatus MvccStorage::ApplyPreparedBatch(const PreparedMvccBatch& prepared,
+                                          uint64_t appliedRaftIndex) {
+  if (prepared.commandVersion != PreparedMvccBatch::kCommandVersion ||
+      prepared.status != TxnStatus::Ok || prepared.items.empty()) {
+    return TxnStatus::StorageError;
+  }
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+  if (appliedRaftIndex != 0 && appliedRaftIndex <= appliedRaftIndex_) return TxnStatus::Ok;
+
+  std::vector<KVBatchOp> modifications;
+  std::string previousKey;
+  for (const auto& item : prepared.items) {
+    if (item.key.empty() || (!previousKey.empty() && item.key <= previousKey) ||
+        item.prepared.status != TxnStatus::Ok) {
+      return TxnStatus::StorageError;
+    }
+    previousKey = item.key;
+    if (item.prepared.modifications.empty()) continue;
+    if (item.prepared.newRevision != item.prepared.expectedRevision + 1 ||
+        CurrentRevisionLocked(item.key) != item.prepared.expectedRevision) {
+      return TxnStatus::StorageError;
+    }
+    modifications.insert(modifications.end(), item.prepared.modifications.begin(),
+                         item.prepared.modifications.end());
+  }
+  if (appliedRaftIndex != 0) {
+    modifications.push_back({KVBatchOpType::Put, "meta/mvcc_applied_raft_index",
+                             std::to_string(appliedRaftIndex)});
+  }
+  if (modifications.empty() || !engine_->WriteBatch(modifications)) return TxnStatus::StorageError;
+  writeBatchCount_.fetch_add(1, std::memory_order_relaxed);
+  for (const auto& item : prepared.items) {
+    for (const auto& modification : item.prepared.modifications) {
+      ApplyMetadataMutationLocked(modification);
+    }
+    if (!item.prepared.modifications.empty() &&
+        CurrentRevisionLocked(item.key) != item.prepared.newRevision) {
+      return TxnStatus::StorageError;
+    }
+  }
+  if (appliedRaftIndex != 0) appliedRaftIndex_ = appliedRaftIndex;
+  return TxnStatus::Ok;
+}
+
+TxnStatus MvccStorage::BatchPrewrite(const std::vector<MvccMutation>& mutations,
+                                     const std::string& primaryKey, uint64_t startTs,
+                                     uint64_t ttlMs, uint64_t forUpdateTs,
+                                     uint64_t) {
+  PreparedMvccBatch prepared =
+      PrepareBatchPrewrite(mutations, primaryKey, startTs, ttlMs, forUpdateTs);
+  if (prepared.status != TxnStatus::Ok || !prepared.HasChanges()) return prepared.status;
+  return ApplyPreparedBatch(prepared);
+}
+
+TxnStatus MvccStorage::BatchCommit(const std::vector<std::string>& keys, uint64_t startTs,
+                                   uint64_t commitTs, uint64_t) {
+  PreparedMvccBatch prepared = PrepareBatchCommit(keys, startTs, commitTs);
+  if (prepared.status != TxnStatus::Ok || !prepared.HasChanges()) return prepared.status;
+  return ApplyPreparedBatch(prepared);
+}
+
+TxnStatus MvccStorage::BatchRollback(const std::vector<std::string>& keys, uint64_t startTs,
+                                     uint64_t) {
+  PreparedMvccBatch prepared = PrepareBatchRollback(keys, startTs);
+  if (prepared.status != TxnStatus::Ok || !prepared.HasChanges()) return prepared.status;
+  return ApplyPreparedBatch(prepared);
 }
 
 TxnStatus MvccStorage::AcquirePessimisticLock(const std::string& key, const std::string& primaryKey, uint64_t startTs,
@@ -1077,7 +1267,7 @@ MvccStats MvccStorage::Stats() {
 
 ProtocolCapabilities MvccStorage::Capabilities() {
   ProtocolCapabilities caps;
-  caps.protocolVersion = 2;
+  caps.protocolVersion = kTxnProtocolVersion;
   caps.preparedCommandVersion = 2;
   caps.lockFormatVersion = 1;
   caps.hlcExpiry = true;

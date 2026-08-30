@@ -31,10 +31,16 @@ class KvServiceDispatcher final : public raftKVRpcProctoc::kvServerRpc {
               raftKVRpcProctoc::TxnGetReply*, google::protobuf::Closure*) override;
   void TxnPrewrite(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnPrewriteArgs*,
                    raftKVRpcProctoc::TxnPrewriteReply*, google::protobuf::Closure*) override;
+  void TxnBatchPrewrite(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnBatchPrewriteArgs*,
+                        raftKVRpcProctoc::TxnBatchPrewriteReply*, google::protobuf::Closure*) override;
   void TxnCommit(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnCommitArgs*,
                  raftKVRpcProctoc::TxnCommitReply*, google::protobuf::Closure*) override;
+  void TxnBatchCommit(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnBatchCommitArgs*,
+                      raftKVRpcProctoc::TxnBatchCommitReply*, google::protobuf::Closure*) override;
   void TxnRollback(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnRollbackArgs*,
                    raftKVRpcProctoc::TxnRollbackReply*, google::protobuf::Closure*) override;
+  void TxnBatchRollback(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnBatchRollbackArgs*,
+                        raftKVRpcProctoc::TxnBatchRollbackReply*, google::protobuf::Closure*) override;
   void TxnGetLock(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnGetLockArgs*,
                   raftKVRpcProctoc::TxnGetLockReply*, google::protobuf::Closure*) override;
   void TxnAcquirePessimisticLock(google::protobuf::RpcController*,

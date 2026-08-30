@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 #include "apply_msg.h"
 #include "persister.h"
@@ -33,12 +34,27 @@ constexpr int Normal = 3;
 
 class Raft : public raftRpcProctoc::raftRpc {
  public:
+  enum class ReadIndexStatus { Ok, NotLeader, Timeout };
+
+  struct ReadIndexResult {
+    ReadIndexStatus status = ReadIndexStatus::NotLeader;
+    int term = -1;
+    int readIndex = -1;
+    uint64_t context = 0;
+    bool ok() const { return status == ReadIndexStatus::Ok; }
+  };
+
   struct NodeStatus {
     int term;
     bool isLeader;
     int commitIndex;
     int lastApplied;
     int lastLogIndex;
+    uint64_t readIndexRequests;
+    uint64_t readIndexRounds;
+    uint64_t readIndexCompleted;
+    uint64_t appendEntriesSent;
+    uint64_t persistCount;
   };
 
  private:
@@ -88,10 +104,33 @@ class Raft : public raftRpcProctoc::raftRpc {
     ReplicationTaskType type = ReplicationTaskType::AppendEntries;
     std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> appendEntriesArgs;
     std::shared_ptr<raftRpcProctoc::AppendEntriesReply> appendEntriesReply;
-    std::shared_ptr<int> appendNums;
   };
 
   std::vector<std::shared_ptr<LockQueue<ReplicationTask>>> m_replicationQueues;
+
+  struct ReadWaiter {
+    std::chrono::steady_clock::time_point deadline;
+    bool completed = false;
+    ReadIndexResult result;
+  };
+
+  struct ReadRound {
+    uint64_t context = 0;
+    int term = -1;
+    int readIndex = -1;
+    std::unordered_set<int> acknowledgedPeers;
+    std::vector<std::shared_ptr<ReadWaiter>> waiters;
+  };
+
+  uint64_t m_nextReadContext = 0;
+  std::vector<std::shared_ptr<ReadWaiter>> m_pendingReadWaiters;
+  std::shared_ptr<ReadRound> m_activeReadRound;
+  std::condition_variable m_readCond;
+  uint64_t m_readIndexRequests = 0;
+  uint64_t m_readIndexRounds = 0;
+  uint64_t m_readIndexCompleted = 0;
+  std::atomic<uint64_t> m_appendEntriesSent{0};
+  std::atomic<uint64_t> m_persistCount{0};
 
   // 协程
   std::unique_ptr<pulsar::IOManager> m_ioManager = nullptr;
@@ -135,7 +174,7 @@ class Raft : public raftRpcProctoc::raftRpc {
   bool sendRequestVote(int server, std::shared_ptr<raftRpcProctoc::RequestVoteArgs> args,
                        std::shared_ptr<raftRpcProctoc::RequestVoteReply> reply, std::shared_ptr<int> votedNum);
   bool sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> args,
-                         std::shared_ptr<raftRpcProctoc::AppendEntriesReply> reply, std::shared_ptr<int> appendNums);
+                         std::shared_ptr<raftRpcProctoc::AppendEntriesReply> reply);
 
   // rf.applyChan <- msg //不拿锁执行  可以单独创建一个线程执行，但是为了同意使用std:thread
   // ，避免使用pthread_create，因此专门写一个函数来执行
@@ -144,6 +183,8 @@ class Raft : public raftRpcProctoc::raftRpc {
   std::string persistData();
 
   void Start(Op command, int *newLogIndex, int *newLogTerm, bool *isLeader);
+  ReadIndexResult ReadIndex(std::chrono::steady_clock::time_point deadline);
+  bool IsLeaderInTerm(int term);
 
   // Snapshot the service says it has created a snapshot that has
   // all info up to and including index. this means the
@@ -170,6 +211,11 @@ class Raft : public raftRpcProctoc::raftRpc {
             std::shared_ptr<LockQueue<ApplyMsg>> applyCh);
 
  private:
+  bool hasCommittedEntryInCurrentTermLocked();
+  void completeReadRoundIfQuorumLocked();
+  void abortReadIndexLocked(ReadIndexStatus status);
+  void removeReadWaiterLocked(const std::shared_ptr<ReadWaiter>& waiter);
+
   // for persist
 
   class BoostPersistRaftNode {

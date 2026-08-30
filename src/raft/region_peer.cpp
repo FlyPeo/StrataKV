@@ -89,20 +89,20 @@ void RegionPeer::DprintfKVDB() {
   m_kvEngine->DebugPrint();
 }
 
-void RegionPeer::ExecuteAppendOpOnKVDB(Op op) {
+bool RegionPeer::ExecuteAppendOpOnKVDB(Op op) {
   // if op.IfDuplicate {   //get请求是可重复执行的，因此可以不用判复
   //	return
   // }
   {
     std::lock_guard<std::mutex> lg(m_mtx);
-    m_kvEngine->Append(op.Key, op.Value);
-
+    if (!m_kvEngine->Append(op.Key, op.Value)) return false;
     m_lastRequestId[op.ClientId] = op.RequestId;
   }
 
   //    DPrintf("[KVServerExeAPPEND-----]ClientId :%d ,RequestID :%d ,Key : %v, value : %v", op.ClientId, op.RequestId,
   //    op.Key, op.Value)
   DprintfKVDB();
+  return true;
 }
 
 void RegionPeer::ExecuteGetOpOnKVDB(Op op, std::string *value, bool *exist) {
@@ -126,101 +126,48 @@ void RegionPeer::ExecuteGetOpOnKVDB(Op op, std::string *value, bool *exist) {
   DprintfKVDB();
 }
 
-void RegionPeer::ExecutePutOpOnKVDB(Op op) {
+bool RegionPeer::ExecutePutOpOnKVDB(Op op) {
   {
     std::lock_guard<std::mutex> lg(m_mtx);
-    m_kvEngine->Put(op.Key, op.Value);
+    if (!m_kvEngine->Put(op.Key, op.Value)) return false;
     m_lastRequestId[op.ClientId] = op.RequestId;
   }
 
   //    DPrintf("[KVServerExePUT----]ClientId :%d ,RequestID :%d ,Key : %v, value : %v", op.ClientId, op.RequestId,
   //    op.Key, op.Value)
   DprintfKVDB();
+  return true;
 }
 
 // 处理来自clerk的Get RPC
 void RegionPeer::Get(const raftKVRpcProctoc::GetArgs *args, raftKVRpcProctoc::GetReply *reply) {
-  Op op;
-  op.Operation = "Get";
-  op.Key = args->key();
-  op.Value = "";
-  op.ClientId = args->clientid();
-  op.RequestId = args->requestid();
-
-  // Register the waiter before publishing the proposal. On a fast local
-  // cluster the entry can otherwise be applied between Start() and queue
-  // creation, permanently losing the completion notification.
-  std::string reqKey = op.ClientId + "_" + std::to_string(op.RequestId);
-  auto chForRaftIndex = AcquireWaitApplyQueue(reqKey);
-  int raftIndex = -1;
-  int _ = -1;
-  bool isLeader = false;
-  m_raftNode->Start(op, &raftIndex, &_,
-                    &isLeader);  // raftIndex：raft预计的logIndex
-                                 // ，虽然是预计，但是正确情况下是准确的，op的具体内容对raft来说 是隔离的
-
-  if (!isLeader) {
-    ReleaseWaitApplyQueue(reqKey, chForRaftIndex);
+  if (!OwnsKey(args->key())) {
+    reply->set_err(ErrWrongLeader);
+    return;
+  }
+  int term = -1;
+  if (!LinearizableReadBarrier(RequestDeadline(0), &term)) {
     reply->set_err(ErrWrongLeader);
     return;
   }
 
-  // timeout
-  Op raftCommitOp;
-
-  if (!chForRaftIndex->timeOutPop(CONSENSUS_TIMEOUT, &raftCommitOp)) {
-    //        DPrintf("[GET TIMEOUT!!!]From Client %d (Request %d) To Server %d, key %v, raftIndex %d", args.ClientId,
-    //        args.RequestId, kv.me, op.Key, raftIndex)
-    // todo 2023年06月01日
-    int _ = -1;
-    bool isLeader = false;
-    m_raftNode->GetState(&_, &isLeader);
-
-    if (ifRequestDuplicate(op.ClientId, op.RequestId) && isLeader) {
-      //如果超时，代表raft集群不保证已经commitIndex该日志，但是如果是已经提交过的get请求，是可以再执行的。
-      // 不会违反线性一致性
-      std::string value;
-      bool exist = false;
-      ExecuteGetOpOnKVDB(op, &value, &exist);
-      if (exist) {
-        reply->set_err(OK);
-        reply->set_value(value);
-      } else {
-        reply->set_err(ErrNoKey);
-        reply->set_value("");
-      }
-    } else {
-      reply->set_err(ErrWrongLeader);  //返回这个，其实就是让clerk换一个节点重试
-    }
-  } else {
-    // raft已经提交了该command（op），可以正式开始执行了
-    //         DPrintf("[WaitChanGetRaftApplyMessage<--]Server %d , get Command <-- Index:%d , ClientId %d, RequestId
-    //         %d, Opreation %v, Key :%v, Value :%v", kv.me, raftIndex, op.ClientId, op.RequestId, op.Operation, op.Key,
-    //         op.Value)
-    // todo 这里还要再次检验的原因：感觉不用检验，因为leader只要正确的提交了，那么这些肯定是符合的
-    if (raftCommitOp.ClientId == op.ClientId && raftCommitOp.RequestId == op.RequestId) {
-      std::string value;
-      bool exist = false;
-      ExecuteGetOpOnKVDB(op, &value, &exist);
-      if (exist) {
-        reply->set_err(OK);
-        reply->set_value(value);
-      } else {
-        reply->set_err(ErrNoKey);
-        reply->set_value("");
-      }
-    } else {
-      reply->set_err(ErrWrongLeader);
-      //            DPrintf("[GET ] 不满足：raftCommitOp.ClientId{%v} == op.ClientId{%v} && raftCommitOp.RequestId{%v}
-      //            == op.RequestId{%v}", raftCommitOp.ClientId, op.ClientId, raftCommitOp.RequestId, op.RequestId)
-    }
+  std::string value;
+  bool exists = false;
+  {
+    std::lock_guard<std::mutex> lock(m_mtx);
+    exists = m_kvEngine->Get(args->key(), &value);
   }
-  ReleaseWaitApplyQueue(reqKey, chForRaftIndex);
+  if (!m_raftNode->IsLeaderInTerm(term)) {
+    reply->set_err(ErrWrongLeader);
+    return;
+  }
+  reply->set_err(exists ? OK : ErrNoKey);
+  reply->set_value(exists ? value : "");
 }
 
-void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
+bool RegionPeer::GetCommandFromRaft(ApplyMsg message) {
   Op op;
-  op.parseFromString(message.Command);
+  if (!op.parseFromString(message.Command)) return false;
   std::string reqKey = op.ClientId + "_" + std::to_string(op.RequestId);
 
   DPrintf(
@@ -229,17 +176,18 @@ void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
       m_me, reqKey.c_str(), op.ClientId.c_str(), op.RequestId, op.Operation.c_str(), op.Key.c_str(),
       op.Value.c_str());
   if (message.CommandIndex <= m_lastSnapShotRaftLogIndex) {
-    return;
+    return true;
   }
 
+  bool applicationSucceeded = true;
   // State Machine (KVServer solute the duplicate problem)
   // duplicate command will not be exed
   if (!ifRequestDuplicate(op.ClientId, op.RequestId)) {
     // execute command
     if (op.Operation == "Put") {
-      ExecutePutOpOnKVDB(op);
+      applicationSucceeded = ExecutePutOpOnKVDB(op);
     } else if (op.Operation == "Append") {
-      ExecuteAppendOpOnKVDB(op);
+      applicationSucceeded = ExecuteAppendOpOnKVDB(op);
     } else if (op.Operation == "TxnGet") {
       // A transaction read uses the Raft log as a linearizability barrier.  Keep
       // the snapshot timestamp inside the replicated command and return the
@@ -255,12 +203,26 @@ void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
         op.Status = std::to_string(static_cast<int>(status));
         op.Value = std::move(value);
       }
+    } else if (op.Operation.rfind("TxnPreparedBatch", 0) == 0) {
+      PreparedMvccBatch prepared;
+      TxnStatus status = TxnStatus::StorageError;
+      if (prepared.Parse(op.Value)) {
+        status = m_mvccStorage->ApplyPreparedBatch(prepared, message.CommandIndex);
+      }
+      op.Status = std::to_string(static_cast<int>(status));
+      applicationSucceeded = status == TxnStatus::Ok;
+      m_txnRaftApplies.fetch_add(1, std::memory_order_relaxed);
+      if (applicationSucceeded) {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        m_lastRequestId[op.ClientId] = op.RequestId;
+      }
     } else if (op.Operation.rfind("TxnPrepared", 0) == 0) {
       PreparedMvccWrite prepared;
       TxnStatus status = TxnStatus::StorageError;
       if (prepared.Parse(op.Value)) {
         status = m_mvccStorage->ApplyPrepared(op.Key, prepared, message.CommandIndex);
       }
+      applicationSucceeded = status == TxnStatus::Ok;
       op.Status = std::to_string(static_cast<int>(status));
       m_txnRaftApplies.fetch_add(1, std::memory_order_relaxed);
       if (op.Operation == "TxnPreparedPrewrite" &&
@@ -273,13 +235,15 @@ void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
       }
     } else if (op.Operation == "TxnPrewrite") {
       TxnOpPayload payload;
-      payload.parseFromString(op.Value);
-      TxnStatus status;
-      if (payload.isDelete) {
+      TxnStatus status = TxnStatus::StorageError;
+      if (!payload.parseFromString(op.Value)) {
+        applicationSucceeded = false;
+      } else if (payload.isDelete) {
         status = m_mvccStorage->PrewriteDelete(op.Key, payload.primaryKey, payload.startTs, payload.ttlMs);
       } else {
         status = m_mvccStorage->Prewrite(op.Key, payload.value, payload.primaryKey, payload.startTs, payload.ttlMs);
       }
+      applicationSucceeded = status != TxnStatus::StorageError;
       op.Status = std::to_string(static_cast<int>(status));
       m_txnRaftApplies.fetch_add(1, std::memory_order_relaxed);
       if (status == TxnStatus::LockConflict || status == TxnStatus::WriteConflict) {
@@ -291,8 +255,10 @@ void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
       }
     } else if (op.Operation == "TxnCommit") {
       TxnOpPayload payload;
-      payload.parseFromString(op.Value);
-      TxnStatus status = m_mvccStorage->Commit(op.Key, payload.startTs, payload.commitTs);
+      const TxnStatus status = payload.parseFromString(op.Value)
+                                   ? m_mvccStorage->Commit(op.Key, payload.startTs, payload.commitTs)
+                                   : TxnStatus::StorageError;
+      applicationSucceeded = status != TxnStatus::StorageError;
       op.Status = std::to_string(static_cast<int>(status));
       {
         std::lock_guard<std::mutex> lg(m_mtx);
@@ -300,8 +266,10 @@ void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
       }
     } else if (op.Operation == "TxnRollback") {
       TxnOpPayload payload;
-      payload.parseFromString(op.Value);
-      TxnStatus status = m_mvccStorage->Rollback(op.Key, payload.startTs);
+      const TxnStatus status = payload.parseFromString(op.Value)
+                                   ? m_mvccStorage->Rollback(op.Key, payload.startTs)
+                                   : TxnStatus::StorageError;
+      applicationSucceeded = status != TxnStatus::StorageError;
       op.Status = std::to_string(static_cast<int>(status));
       {
         std::lock_guard<std::mutex> lg(m_mtx);
@@ -309,8 +277,11 @@ void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
       }
     } else if (op.Operation == "TxnAcquirePessimisticLock") {
       TxnOpPayload payload;
-      payload.parseFromString(op.Value);
-      TxnStatus status = m_mvccStorage->AcquirePessimisticLock(op.Key, payload.primaryKey, payload.startTs, payload.ttlMs);
+      const TxnStatus status = payload.parseFromString(op.Value)
+                                   ? m_mvccStorage->AcquirePessimisticLock(
+                                         op.Key, payload.primaryKey, payload.startTs, payload.ttlMs)
+                                   : TxnStatus::StorageError;
+      applicationSucceeded = status != TxnStatus::StorageError;
       op.Status = std::to_string(static_cast<int>(status));
       {
         std::lock_guard<std::mutex> lg(m_mtx);
@@ -318,13 +289,15 @@ void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
       }
     } else if (op.Operation == "TxnGarbageCollect") {
       TxnOpPayload payload;
-      payload.parseFromString(op.Value);
-      size_t count = m_mvccStorage->GarbageCollect(payload.startTs);
+      if (!payload.parseFromString(op.Value)) applicationSucceeded = false;
+      const size_t count = applicationSucceeded ? m_mvccStorage->GarbageCollect(payload.startTs) : 0;
       op.Status = std::to_string(count);
       {
         std::lock_guard<std::mutex> lg(m_mtx);
         m_lastRequestId[op.ClientId] = op.RequestId;
       }
+    } else if (op.Operation != "Get" && op.Operation != "RaftNoop") {
+      applicationSucceeded = false;
     }
   } else {
     if (op.Operation.rfind("TxnPrepared", 0) == 0) {
@@ -355,6 +328,7 @@ void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
       op.Status = std::to_string(count);
     }
   }
+  if (!applicationSucceeded) return false;
   //到这里kvDB已经制作了快照
   if (m_maxRaftState != -1) {
     IfNeedToSendSnapShotCommand(message.CommandIndex, 9);
@@ -369,6 +343,7 @@ void RegionPeer::GetCommandFromRaft(ApplyMsg message) {
   } else {
     SendMessageToWaitChan(op, reqKey);
   }
+  return true;
 }
 
 bool RegionPeer::ifRequestDuplicate(std::string ClientId, int RequestId) {
@@ -384,6 +359,10 @@ bool RegionPeer::ifRequestDuplicate(std::string ClientId, int RequestId) {
 // PutAppend在收到raft消息之後執行，具體函數裏面只判斷冪等性（是否重複）
 // get函數收到raft消息之後在，因爲get無論是否重複都可以再執行
 void RegionPeer::PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRpcProctoc::PutAppendReply *reply) {
+  if (!OwnsKey(args->key())) {
+    reply->set_err(ErrWrongLeader);
+    return;
+  }
   Op op;
   op.Operation = args->op();
   op.Key = args->key();
@@ -454,12 +433,61 @@ void RegionPeer::ReadRaftApplyCommandLoop() {
     // listen to every command applied by its raft ,delivery to relative RPC Handler
 
     if (message.CommandValid) {
-      GetCommandFromRaft(message);
+      if (!GetCommandFromRaft(message)) {
+        MarkStateMachineUnhealthy();
+        return;
+      }
+      AdvanceStateMachineApplied(message.CommandIndex);
+    }
+    if (message.ProposalRejected) {
+      Op rejected;
+      if (rejected.parseFromString(message.Command) && IsNodeScheduledTxn(rejected.Operation)) {
+        const auto scheduler = m_nodeTxnScheduler.lock();
+        if (scheduler) scheduler->OnProposalRejected(m_regionId, rejected);
+      }
     }
     if (message.SnapshotValid) {
       GetSnapShotFromRaft(message);
     }
   }
+}
+
+bool RegionPeer::LinearizableReadBarrier(std::chrono::steady_clock::time_point deadline,
+                                         int* confirmedTerm) {
+  const Raft::ReadIndexResult read = m_raftNode->ReadIndex(deadline);
+  if (!read.ok()) return false;
+
+  std::unique_lock<std::mutex> lock(m_applyProgressMutex);
+  while (m_stateMachineHealthy && m_stateMachineAppliedIndex < read.readIndex) {
+    const auto wakeAt = std::min(deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(10));
+    m_applyProgressCv.wait_until(lock, wakeAt);
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+    lock.unlock();
+    const bool sameLeader = m_raftNode->IsLeaderInTerm(read.term);
+    lock.lock();
+    if (!sameLeader) return false;
+  }
+  if (!m_stateMachineHealthy || m_stateMachineAppliedIndex < read.readIndex) return false;
+  lock.unlock();
+  if (!m_raftNode->IsLeaderInTerm(read.term)) return false;
+  if (confirmedTerm) *confirmedTerm = read.term;
+  return true;
+}
+
+void RegionPeer::AdvanceStateMachineApplied(int raftIndex) {
+  {
+    std::lock_guard<std::mutex> lock(m_applyProgressMutex);
+    m_stateMachineAppliedIndex = std::max(m_stateMachineAppliedIndex, raftIndex);
+  }
+  m_applyProgressCv.notify_all();
+}
+
+void RegionPeer::MarkStateMachineUnhealthy() {
+  {
+    std::lock_guard<std::mutex> lock(m_applyProgressMutex);
+    m_stateMachineHealthy = false;
+  }
+  m_applyProgressCv.notify_all();
 }
 
 // raft会与persist层交互，kvserver层也会，因为kvserver层开始的时候需要恢复kvdb的状态
@@ -543,12 +571,19 @@ void RegionPeer::IfNeedToSendSnapShotCommand(int raftIndex, int proportion) {
 }
 
 void RegionPeer::GetSnapShotFromRaft(ApplyMsg message) {
-  std::lock_guard<std::mutex> lg(m_mtx);
-
-  if (m_raftNode->CondInstallSnapshot(message.SnapshotTerm, message.SnapshotIndex, message.Snapshot)) {
+  try {
+    std::lock_guard<std::mutex> lg(m_mtx);
+    // Raft has already accepted, persisted and advanced to an InstallSnapshot
+    // before publishing this ApplyMsg. Calling CondInstallSnapshot again used
+    // to reject the same index and silently skip the RocksDB restore.
     ReadSnapShotToInstall(message.Snapshot);
     m_lastSnapShotRaftLogIndex = message.SnapshotIndex;
+  } catch (const std::exception& error) {
+    std::cerr << "failed to install Region " << m_regionId << " snapshot: " << error.what() << std::endl;
+    MarkStateMachineUnhealthy();
+    return;
   }
+  AdvanceStateMachineApplied(message.SnapshotIndex);
 }
 
 std::string RegionPeer::MakeSnapShot() {
@@ -572,9 +607,7 @@ void RegionPeer::Get(google::protobuf::RpcController *controller, const ::raftKV
 void RegionPeer::List(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::ListArgs *request,
                     ::raftKVRpcProctoc::ListReply *response, ::google::protobuf::Closure *done) {
   int term = -1;
-  bool isLeader = false;
-  m_raftNode->GetState(&term, &isLeader);
-  if (!isLeader && !request->allowfollowerread()) {
+  if (!request->allowfollowerread() && !LinearizableReadBarrier(RequestDeadline(0), &term)) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
@@ -589,6 +622,11 @@ void RegionPeer::List(google::protobuf::RpcController *controller, const ::raftK
     std::lock_guard<std::mutex> lock(m_mtx);
     items = m_kvEngine->ScanPrefix(request->prefix());
   }
+  if (!request->allowfollowerread() && !m_raftNode->IsLeaderInTerm(term)) {
+    response->set_err(ErrWrongLeader);
+    done->Run();
+    return;
+  }
 
   for (size_t index = 0; index < items.size() && index < limit; ++index) {
     auto* entry = response->add_entries();
@@ -600,11 +638,14 @@ void RegionPeer::List(google::protobuf::RpcController *controller, const ::raftK
 }
 
 RegionPeer::RegionPeer(int physicalNodeId, int regionId, int localPeerId, int maxraftstate,
+                       std::string regionStartKey, std::string regionEndKey,
                        std::vector<std::pair<std::string, short>> peerAddresses,
                        const std::shared_ptr<NodeTxnScheduler>& nodeTxnScheduler)
     : m_me(localPeerId),
       m_physicalNodeId(physicalNodeId),
       m_regionId(regionId),
+      m_regionStartKey(std::move(regionStartKey)),
+      m_regionEndKey(std::move(regionEndKey)),
       m_maxRaftState(maxraftstate),
       m_peerAddresses(std::move(peerAddresses)),
       m_nodeTxnScheduler(nodeTxnScheduler) {
@@ -623,6 +664,10 @@ RegionPeer::RegionPeer(int physicalNodeId, int regionId, int localPeerId, int ma
   applyChan = std::make_shared<LockQueue<ApplyMsg>>();
   m_raftNode = std::make_shared<Raft>();
   m_lastSnapShotRaftLogIndex = 0;
+}
+
+bool RegionPeer::OwnsKey(const std::string& key) const {
+  return key >= m_regionStartKey && (m_regionEndKey.empty() || key < m_regionEndKey);
 }
 
 bool RegionPeer::IsTxnLeader() {
@@ -647,6 +692,10 @@ PreparedMvccWrite RegionPeer::PrepareTxn(const TxnCommand& command) {
       return m_mvccStorage->PrepareCommit(command.key, command.startTs, command.commitTs);
     case TxnCommandType::Rollback:
       return m_mvccStorage->PrepareRollback(command.key, command.startTs);
+    case TxnCommandType::BatchPrewrite:
+    case TxnCommandType::BatchCommit:
+    case TxnCommandType::BatchRollback:
+      return {};
     case TxnCommandType::PessimisticLock:
       return m_mvccStorage->PreparePessimisticLock(command.key, command.primaryKey,
                                                    command.startTs, command.ttlMs,
@@ -664,6 +713,21 @@ PreparedMvccWrite RegionPeer::PrepareTxn(const TxnCommand& command) {
       return {};
   }
   return {};
+}
+
+PreparedMvccBatch RegionPeer::PrepareTxnBatch(const TxnCommand& command) {
+  switch (command.type) {
+    case TxnCommandType::BatchPrewrite:
+      return m_mvccStorage->PrepareBatchPrewrite(command.mutations, command.primaryKey,
+                                                 command.startTs, command.ttlMs,
+                                                 command.forUpdateTs);
+    case TxnCommandType::BatchCommit:
+      return m_mvccStorage->PrepareBatchCommit(command.keys, command.startTs, command.commitTs);
+    case TxnCommandType::BatchRollback:
+      return m_mvccStorage->PrepareBatchRollback(command.keys, command.startTs);
+    default:
+      return {};
+  }
 }
 
 bool RegionPeer::ProposeTxn(const Op& op, int* raftIndex) {
@@ -694,6 +758,9 @@ void RegionPeer::Start() {
   const auto snapshot = m_persister->ReadSnapshot();
   if (!snapshot.empty()) {
     ReadSnapShotToInstall(snapshot);
+    const auto status = m_raftNode->GetStatus();
+    m_lastSnapShotRaftLogIndex = status.lastApplied;
+    AdvanceStateMachineApplied(status.lastApplied);
   }
   std::thread statusWriter(&RegionPeer::WriteRaftStatusLoop, this);
   statusWriter.detach();
@@ -705,6 +772,13 @@ void RegionPeer::WriteRaftStatusLoop() {
   while (true) {
     const Raft::NodeStatus status = m_raftNode->GetStatus();
     const MvccStats mvccStats = m_mvccStorage->Stats();
+    int stateMachineAppliedIndex = 0;
+    bool stateMachineHealthy = false;
+    {
+      std::lock_guard<std::mutex> lock(m_applyProgressMutex);
+      stateMachineAppliedIndex = m_stateMachineAppliedIndex;
+      stateMachineHealthy = m_stateMachineHealthy;
+    }
     const auto nodeScheduler = m_nodeTxnScheduler.lock();
     const NodeTxnScheduler::Stats schedulerStats =
         nodeScheduler ? nodeScheduler->GetStats() : NodeTxnScheduler::Stats{};
@@ -717,6 +791,13 @@ void RegionPeer::WriteRaftStatusLoop() {
            << ",\"term\":" << status.term << ",\"isLeader\":"
            << (status.isLeader ? "true" : "false") << ",\"commitIndex\":" << status.commitIndex
            << ",\"lastApplied\":" << status.lastApplied << ",\"lastLogIndex\":" << status.lastLogIndex
+           << ",\"stateMachineAppliedIndex\":" << stateMachineAppliedIndex
+           << ",\"stateMachineHealthy\":" << (stateMachineHealthy ? "true" : "false")
+           << ",\"readIndexRequests\":" << status.readIndexRequests
+           << ",\"readIndexRounds\":" << status.readIndexRounds
+           << ",\"readIndexCompleted\":" << status.readIndexCompleted
+           << ",\"appendEntriesSent\":" << status.appendEntriesSent
+           << ",\"raftPersistCount\":" << status.persistCount
            << ",\"mvccLockCount\":" << mvccStats.lockCount << ",\"mvccWriteCount\":" << mvccStats.writeCount
            << ",\"mvccDataVersionCount\":" << mvccStats.dataVersionCount
            << ",\"mvccWriteBatchCount\":" << mvccStats.writeBatchCount
@@ -770,53 +851,44 @@ void RegionPeer::WriteRaftStatusLoop() {
 
 void RegionPeer::TxnGet(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetArgs *request,
                       ::raftKVRpcProctoc::TxnGetReply *response, ::google::protobuf::Closure *done) {
-  Op op;
-  op.Operation = "TxnGet";
-  op.Key = request->key();
-  op.ClientId = request->clientid();
-  op.RequestId = request->requestid();
-  TxnOpPayload payload;
-  payload.startTs = request->readts();
-  op.Value = payload.asString();
-
-  std::string reqKey = op.ClientId + "_" + std::to_string(op.RequestId);
-  auto chForRaftIndex = AcquireWaitApplyQueue(reqKey);
-  int raftIndex = -1;
-  int _ = -1;
-  bool isLeader = false;
-  m_raftNode->Start(op, &raftIndex, &_, &isLeader);
-
-  if (!isLeader) {
-    ReleaseWaitApplyQueue(reqKey, chForRaftIndex);
+  if (!OwnsKey(request->key())) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
+  int term = -1;
+  if (!LinearizableReadBarrier(RequestDeadline(0), &term)) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
 
-  Op raftCommitOp;
-  if (!chForRaftIndex->timeOutPop(CONSENSUS_TIMEOUT, &raftCommitOp)) {
+  std::string value;
+  const TxnStatus status = m_mvccStorage->Get(request->key(), request->readts(), &value);
+  if (!m_raftNode->IsLeaderInTerm(term)) {
     response->set_err(ErrWrongLeader);
   } else {
-    if (raftCommitOp.ClientId == op.ClientId && raftCommitOp.RequestId == op.RequestId) {
-      response->set_err(raftCommitOp.Status);
-      response->set_value(raftCommitOp.Value);
-    } else {
-      response->set_err(ErrWrongLeader);
-    }
+    response->set_err(std::to_string(static_cast<int>(status)));
+    response->set_value(value);
   }
-  ReleaseWaitApplyQueue(reqKey, chForRaftIndex);
   done->Run();
 }
 
 void RegionPeer::TxnPrewrite(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnPrewriteArgs *request,
                            ::raftKVRpcProctoc::TxnPrewriteReply *response, ::google::protobuf::Closure *done) {
+  if (!OwnsKey(request->key())) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
   const auto scheduler = m_nodeTxnScheduler.lock();
   if (!scheduler) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
-  if (request->maxforupdatets() != 0 && request->protocolversion() < kTxnProtocolVersion) {
+  if (request->maxforupdatets() != 0 &&
+      request->protocolversion() < kPessimisticTxnProtocolVersion) {
     response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
     done->Run();
     return;
@@ -842,8 +914,62 @@ void RegionPeer::TxnPrewrite(google::protobuf::RpcController *controller, const 
   });
 }
 
+void RegionPeer::TxnBatchPrewrite(google::protobuf::RpcController*,
+                                  const ::raftKVRpcProctoc::TxnBatchPrewriteArgs* request,
+                                  ::raftKVRpcProctoc::TxnBatchPrewriteReply* response,
+                                  ::google::protobuf::Closure* done) {
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  if (!scheduler || request->protocolversion() < kBatchTxnProtocolVersion ||
+      request->mutations_size() <= 0 || request->mutations_size() > 10000) {
+    response->set_err(scheduler ? std::to_string(static_cast<int>(TxnStatus::StorageError))
+                                : ErrWrongLeader);
+    done->Run();
+    return;
+  }
+  TxnCommand command;
+  command.type = TxnCommandType::BatchPrewrite;
+  command.regionId = m_regionId;
+  command.primaryKey = request->primarykey();
+  command.startTs = request->startts();
+  command.ttlMs = request->ttlms();
+  command.forUpdateTs = request->maxforupdatets();
+  command.clientId = request->clientid();
+  command.requestId = request->requestid();
+  command.deadline = RequestDeadline(request->remainingbudgetms());
+  command.mutations.reserve(static_cast<size_t>(request->mutations_size()));
+  for (const auto& mutation : request->mutations()) {
+    if (!OwnsKey(mutation.key())) {
+      response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+      done->Run();
+      return;
+    }
+    command.mutations.push_back(
+        {mutation.key(), mutation.value(), mutation.isdelete(), mutation.islockonly()});
+  }
+  std::sort(command.mutations.begin(), command.mutations.end(),
+            [](const MvccMutation& lhs, const MvccMutation& rhs) { return lhs.key < rhs.key; });
+  for (size_t index = 0; index < command.mutations.size(); ++index) {
+    if (command.mutations[index].key.empty() ||
+        (index != 0 && command.mutations[index - 1].key == command.mutations[index].key)) {
+      response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+      done->Run();
+      return;
+    }
+    command.keys.push_back(command.mutations[index].key);
+  }
+  scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
+    response->set_err(result.status);
+    done->Run();
+  });
+}
+
 void RegionPeer::TxnCommit(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnCommitArgs *request,
                          ::raftKVRpcProctoc::TxnCommitReply *response, ::google::protobuf::Closure *done) {
+  if (!OwnsKey(request->key())) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
   const auto scheduler = m_nodeTxnScheduler.lock();
   if (!scheduler) {
     response->set_err(ErrWrongLeader);
@@ -866,8 +992,49 @@ void RegionPeer::TxnCommit(google::protobuf::RpcController *controller, const ::
   });
 }
 
+void RegionPeer::TxnBatchCommit(google::protobuf::RpcController*,
+                                const ::raftKVRpcProctoc::TxnBatchCommitArgs* request,
+                                ::raftKVRpcProctoc::TxnBatchCommitReply* response,
+                                ::google::protobuf::Closure* done) {
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  if (!scheduler || request->protocolversion() < kBatchTxnProtocolVersion ||
+      request->keys_size() <= 0 || request->keys_size() > 10000) {
+    response->set_err(scheduler ? std::to_string(static_cast<int>(TxnStatus::StorageError))
+                                : ErrWrongLeader);
+    done->Run();
+    return;
+  }
+  TxnCommand command;
+  command.type = TxnCommandType::BatchCommit;
+  command.regionId = m_regionId;
+  command.keys.assign(request->keys().begin(), request->keys().end());
+  if (std::any_of(command.keys.begin(), command.keys.end(),
+                  [this](const std::string& key) { return key.empty() || !OwnsKey(key); })) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
+  std::sort(command.keys.begin(), command.keys.end());
+  command.keys.erase(std::unique(command.keys.begin(), command.keys.end()), command.keys.end());
+  command.key = command.keys.front();
+  command.startTs = request->startts();
+  command.commitTs = request->committs();
+  command.clientId = request->clientid();
+  command.requestId = request->requestid();
+  command.deadline = RequestDeadline(request->remainingbudgetms());
+  scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
+    response->set_err(result.status);
+    done->Run();
+  });
+}
+
 void RegionPeer::TxnRollback(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnRollbackArgs *request,
                            ::raftKVRpcProctoc::TxnRollbackReply *response, ::google::protobuf::Closure *done) {
+  if (!OwnsKey(request->key())) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
   const auto scheduler = m_nodeTxnScheduler.lock();
   if (!scheduler) {
     response->set_err(ErrWrongLeader);
@@ -889,17 +1056,60 @@ void RegionPeer::TxnRollback(google::protobuf::RpcController *controller, const 
   });
 }
 
+void RegionPeer::TxnBatchRollback(google::protobuf::RpcController*,
+                                  const ::raftKVRpcProctoc::TxnBatchRollbackArgs* request,
+                                  ::raftKVRpcProctoc::TxnBatchRollbackReply* response,
+                                  ::google::protobuf::Closure* done) {
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  if (!scheduler || request->protocolversion() < kBatchTxnProtocolVersion ||
+      request->keys_size() <= 0 || request->keys_size() > 10000) {
+    response->set_err(scheduler ? std::to_string(static_cast<int>(TxnStatus::StorageError))
+                                : ErrWrongLeader);
+    done->Run();
+    return;
+  }
+  TxnCommand command;
+  command.type = TxnCommandType::BatchRollback;
+  command.regionId = m_regionId;
+  command.keys.assign(request->keys().begin(), request->keys().end());
+  if (std::any_of(command.keys.begin(), command.keys.end(),
+                  [this](const std::string& key) { return key.empty() || !OwnsKey(key); })) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
+  std::sort(command.keys.begin(), command.keys.end());
+  command.keys.erase(std::unique(command.keys.begin(), command.keys.end()), command.keys.end());
+  command.key = command.keys.front();
+  command.startTs = request->startts();
+  command.clientId = request->clientid();
+  command.requestId = request->requestid();
+  command.deadline = RequestDeadline(request->remainingbudgetms());
+  scheduler->Schedule(std::move(command), [response, done](const TxnScheduleResult& result) {
+    response->set_err(result.status);
+    done->Run();
+  });
+}
+
 void RegionPeer::TxnGetLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetLockArgs *request,
                           ::raftKVRpcProctoc::TxnGetLockReply *response, ::google::protobuf::Closure *done) {
+  if (!OwnsKey(request->key())) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
   int term = -1;
-  bool isLeader = false;
-  m_raftNode->GetState(&term, &isLeader);
-  if (!isLeader) {
+  if (!LinearizableReadBarrier(RequestDeadline(0), &term)) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
   auto lockOpt = m_mvccStorage->GetLock(request->key());
+  if (!m_raftNode->IsLeaderInTerm(term)) {
+    response->set_err(ErrWrongLeader);
+    done->Run();
+    return;
+  }
   if (lockOpt) {
     FillLockReply(*lockOpt, response);
   } else {
@@ -911,13 +1121,18 @@ void RegionPeer::TxnGetLock(google::protobuf::RpcController *controller, const :
 
 void RegionPeer::TxnAcquirePessimisticLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs *request,
                                          ::raftKVRpcProctoc::TxnAcquirePessimisticLockReply *response, ::google::protobuf::Closure *done) {
+  if (!OwnsKey(request->key())) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
   const auto scheduler = m_nodeTxnScheduler.lock();
   if (!scheduler) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
-  if (request->protocolversion() < kTxnProtocolVersion) {
+  if (request->protocolversion() < kPessimisticTxnProtocolVersion) {
     response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
     done->Run();
     return;
@@ -949,8 +1164,13 @@ void RegionPeer::TxnCheckStatus(google::protobuf::RpcController*,
                                 const ::raftKVRpcProctoc::TxnCheckStatusArgs* request,
                                 ::raftKVRpcProctoc::TxnCheckStatusReply* response,
                                 ::google::protobuf::Closure* done) {
+  if (!OwnsKey(request->primarykey())) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
   const auto scheduler = m_nodeTxnScheduler.lock();
-  if (!scheduler || request->protocolversion() < kTxnProtocolVersion) {
+  if (!scheduler || request->protocolversion() < kPessimisticTxnProtocolVersion) {
     response->set_err(scheduler ? std::to_string(static_cast<int>(TxnStatus::StorageError))
                                 : ErrWrongLeader);
     done->Run();
@@ -983,8 +1203,13 @@ void RegionPeer::TxnResolveLock(google::protobuf::RpcController*,
                                 const ::raftKVRpcProctoc::TxnResolveLockArgs* request,
                                 ::raftKVRpcProctoc::TxnResolveLockReply* response,
                                 ::google::protobuf::Closure* done) {
+  if (!OwnsKey(request->key())) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
   const auto scheduler = m_nodeTxnScheduler.lock();
-  if (!scheduler || request->protocolversion() < kTxnProtocolVersion) {
+  if (!scheduler || request->protocolversion() < kPessimisticTxnProtocolVersion) {
     response->set_err(scheduler ? std::to_string(static_cast<int>(TxnStatus::StorageError))
                                 : ErrWrongLeader);
     done->Run();
@@ -1010,15 +1235,23 @@ void RegionPeer::TxnResolveLock(google::protobuf::RpcController*,
 
 void RegionPeer::TxnFindCommitTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnFindCommitTsArgs *request,
                                ::raftKVRpcProctoc::TxnFindCommitTsReply *response, ::google::protobuf::Closure *done) {
+  if (!OwnsKey(request->key())) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
   int term = -1;
-  bool isLeader = false;
-  m_raftNode->GetState(&term, &isLeader);
-  if (!isLeader) {
+  if (!LinearizableReadBarrier(RequestDeadline(0), &term)) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
   auto commitTsOpt = m_mvccStorage->FindCommitTs(request->key(), request->startts());
+  if (!m_raftNode->IsLeaderInTerm(term)) {
+    response->set_err(ErrWrongLeader);
+    done->Run();
+    return;
+  }
   if (commitTsOpt) {
     response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
     response->set_found(true);
@@ -1033,14 +1266,17 @@ void RegionPeer::TxnFindCommitTs(google::protobuf::RpcController *controller, co
 void RegionPeer::TxnExpiredLocks(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnExpiredLocksArgs *request,
                                ::raftKVRpcProctoc::TxnExpiredLocksReply *response, ::google::protobuf::Closure *done) {
   int term = -1;
-  bool isLeader = false;
-  m_raftNode->GetState(&term, &isLeader);
-  if (!isLeader) {
+  if (!LinearizableReadBarrier(RequestDeadline(0), &term)) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
   auto expired = m_mvccStorage->ExpiredLocks(request->nowms());
+  if (!m_raftNode->IsLeaderInTerm(term)) {
+    response->set_err(ErrWrongLeader);
+    done->Run();
+    return;
+  }
   response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
   for (const auto& pair : expired) {
     response->add_keys(pair.first);
@@ -1089,14 +1325,17 @@ void RegionPeer::TxnGarbageCollect(google::protobuf::RpcController *controller, 
 void RegionPeer::TxnMaxObservedTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnMaxObservedTsArgs *request,
                                 ::raftKVRpcProctoc::TxnMaxObservedTsReply *response, ::google::protobuf::Closure *done) {
   int term = -1;
-  bool isLeader = false;
-  m_raftNode->GetState(&term, &isLeader);
-  if (!isLeader) {
+  if (!LinearizableReadBarrier(RequestDeadline(0), &term)) {
     response->set_err(ErrWrongLeader);
     done->Run();
     return;
   }
   uint64_t maxTs = m_mvccStorage->MaxObservedTs();
+  if (!m_raftNode->IsLeaderInTerm(term)) {
+    response->set_err(ErrWrongLeader);
+    done->Run();
+    return;
+  }
   response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
   response->set_maxts(maxTs);
   done->Run();

@@ -29,6 +29,10 @@ class RaftMvccStorage : public MvccStorage {
   TxnStatus PrewriteLock(const std::string& key, const std::string& primaryKey,
                          uint64_t startTs, uint64_t ttlMs, uint64_t forUpdateTs = 0,
                          uint64_t remainingBudgetMs = 0) override;
+  TxnStatus BatchPrewrite(const std::vector<MvccMutation>& mutations,
+                          const std::string& primaryKey, uint64_t startTs,
+                          uint64_t ttlMs, uint64_t forUpdateTs = 0,
+                          uint64_t remainingBudgetMs = 0) override;
   TxnStatus AcquirePessimisticLock(const std::string& key, const std::string& primaryKey, uint64_t startTs,
                                    uint64_t ttlMs, uint64_t forUpdateTs = 0,
                                    uint64_t expireAtPhysicalMs = 0) override;
@@ -37,7 +41,11 @@ class RaftMvccStorage : public MvccStorage {
       uint64_t ttlMs, uint64_t forUpdateTs, uint64_t expireAtPhysicalMs,
       uint64_t remainingBudgetMs = 0) override;
   TxnStatus Commit(const std::string& key, uint64_t startTs, uint64_t commitTs) override;
+  TxnStatus BatchCommit(const std::vector<std::string>& keys, uint64_t startTs,
+                        uint64_t commitTs, uint64_t remainingBudgetMs = 0) override;
   TxnStatus Rollback(const std::string& key, uint64_t startTs) override;
+  TxnStatus BatchRollback(const std::vector<std::string>& keys, uint64_t startTs,
+                          uint64_t remainingBudgetMs = 0) override;
   std::optional<MvccLock> GetLock(const std::string& key) override;
   std::optional<uint64_t> FindCommitTs(const std::string& key, uint64_t startTs) override;
   TxnStatus CheckTxnStatus(const std::string& primaryKey, uint64_t startTs,

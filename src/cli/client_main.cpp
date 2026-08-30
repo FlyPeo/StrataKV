@@ -146,7 +146,9 @@ std::optional<std::string> JsonField(const std::string& body, const std::string&
 }
 
 std::string Begin(const Endpoint& endpoint) {
-  const std::string body = "{\"lockTtlMs\":3000}";
+  // Must remain greater than the coordinator's 60 s transaction deadline;
+  // otherwise every CLI mutation is rejected before it reaches storage.
+  const std::string body = "{\"lockTtlMs\":120000}";
   const Response response = Request(endpoint, "POST", "/v1/transactions", body);
   const auto id = JsonField(response.body, "id");
   if (response.status != 201 || !id) throw std::runtime_error("Begin failed: " + response.body);

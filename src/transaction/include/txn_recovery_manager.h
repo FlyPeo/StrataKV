@@ -38,6 +38,7 @@ class TxnRecoveryManager {
   std::shared_ptr<LockResolver> lockResolver_;
   std::chrono::milliseconds checkInterval_;
   std::atomic<bool> stopped_{true};
+  std::atomic<int> requestId_{0};
   std::thread worker_;
   std::mutex stateMutex_;
 };

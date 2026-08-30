@@ -10,6 +10,7 @@
 #include <boost/serialization/access.hpp>
 #include <boost/serialization/unordered_map.hpp>
 #include <atomic>
+#include <condition_variable>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -34,6 +35,8 @@ class RegionPeer : public TxnRegionExecutor {
   int m_me;
   int m_physicalNodeId = -1;
   int m_regionId = -1;
+  std::string m_regionStartKey;
+  std::string m_regionEndKey;
   std::shared_ptr<Raft> m_raftNode;
   std::shared_ptr<Persister> m_persister;
   std::shared_ptr<LockQueue<ApplyMsg> > applyChan;  // kvServer和raft节点的通信管道
@@ -55,6 +58,13 @@ class RegionPeer : public TxnRegionExecutor {
   std::atomic<uint64_t> m_prewriteApplyConflicts{0};
   std::atomic<uint64_t> m_txnRaftApplies{0};
 
+  // Raft::lastApplied means "delivered to applyChan". Linearizable reads must
+  // instead wait for this Region state machine (including RocksDB) to finish.
+  mutable std::mutex m_applyProgressMutex;
+  std::condition_variable m_applyProgressCv;
+  int m_stateMachineAppliedIndex = 0;
+  bool m_stateMachineHealthy = true;
+
   // last SnapShot point , raftIndex
   int m_lastSnapShotRaftLogIndex;
 
@@ -62,6 +72,7 @@ class RegionPeer : public TxnRegionExecutor {
   RegionPeer() = delete;
 
   RegionPeer(int physicalNodeId, int regionId, int localPeerId, int maxraftstate,
+             std::string regionStartKey, std::string regionEndKey,
              std::vector<std::pair<std::string, short>> peerAddresses,
              const std::shared_ptr<NodeTxnScheduler>& nodeTxnScheduler);
 
@@ -78,16 +89,17 @@ class RegionPeer : public TxnRegionExecutor {
   int TxnRegionId() const override { return m_regionId; }
   bool IsTxnLeader() override;
   PreparedMvccWrite PrepareTxn(const TxnCommand& command) override;
+  PreparedMvccBatch PrepareTxnBatch(const TxnCommand& command) override;
   bool ProposeTxn(const Op& op, int* raftIndex) override;
   std::vector<std::pair<std::string, MvccLock>> ExpiredLocks(uint64_t currentPhysicalMs) override;
 
   void DprintfKVDB();
 
-  void ExecuteAppendOpOnKVDB(Op op);
+  bool ExecuteAppendOpOnKVDB(Op op);
 
   void ExecuteGetOpOnKVDB(Op op, std::string *value, bool *exist);
 
-  void ExecutePutOpOnKVDB(Op op);
+  bool ExecutePutOpOnKVDB(Op op);
 
   void Get(const raftKVRpcProctoc::GetArgs *args,
            raftKVRpcProctoc::GetReply
@@ -96,7 +108,13 @@ class RegionPeer : public TxnRegionExecutor {
    * 從raft節點中獲取消息  （不要誤以爲是執行【GET】命令）
    * @param message
    */
-  void GetCommandFromRaft(ApplyMsg message);
+  bool GetCommandFromRaft(ApplyMsg message);
+
+  bool LinearizableReadBarrier(std::chrono::steady_clock::time_point deadline,
+                               int* confirmedTerm = nullptr);
+  void AdvanceStateMachineApplied(int raftIndex);
+  void MarkStateMachineUnhealthy();
+  bool OwnsKey(const std::string& key) const;
 
   bool ifRequestDuplicate(std::string ClientId, int RequestId);
 
@@ -138,12 +156,18 @@ class RegionPeer : public TxnRegionExecutor {
 
   void TxnPrewrite(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnPrewriteArgs *request,
                    ::raftKVRpcProctoc::TxnPrewriteReply *response, ::google::protobuf::Closure *done);
+  void TxnBatchPrewrite(google::protobuf::RpcController*, const ::raftKVRpcProctoc::TxnBatchPrewriteArgs*,
+                        ::raftKVRpcProctoc::TxnBatchPrewriteReply*, google::protobuf::Closure*);
 
   void TxnCommit(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnCommitArgs *request,
                  ::raftKVRpcProctoc::TxnCommitReply *response, ::google::protobuf::Closure *done);
+  void TxnBatchCommit(google::protobuf::RpcController*, const ::raftKVRpcProctoc::TxnBatchCommitArgs*,
+                      ::raftKVRpcProctoc::TxnBatchCommitReply*, google::protobuf::Closure*);
 
   void TxnRollback(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnRollbackArgs *request,
                    ::raftKVRpcProctoc::TxnRollbackReply *response, ::google::protobuf::Closure *done);
+  void TxnBatchRollback(google::protobuf::RpcController*, const ::raftKVRpcProctoc::TxnBatchRollbackArgs*,
+                        ::raftKVRpcProctoc::TxnBatchRollbackReply*, google::protobuf::Closure*);
 
   void TxnGetLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetLockArgs *request,
                   ::raftKVRpcProctoc::TxnGetLockReply *response, ::google::protobuf::Closure *done);

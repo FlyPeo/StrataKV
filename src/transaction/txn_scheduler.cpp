@@ -284,6 +284,9 @@ Op NodeTxnScheduler::BuildOp(const TxnCommand& command, const PreparedMvccWrite*
     case TxnCommandType::Prewrite: op.Operation = "TxnPreparedPrewrite"; break;
     case TxnCommandType::Commit: op.Operation = "TxnPreparedCommit"; break;
     case TxnCommandType::Rollback: op.Operation = "TxnPreparedRollback"; break;
+    case TxnCommandType::BatchPrewrite: op.Operation = "TxnPreparedBatchPrewrite"; break;
+    case TxnCommandType::BatchCommit: op.Operation = "TxnPreparedBatchCommit"; break;
+    case TxnCommandType::BatchRollback: op.Operation = "TxnPreparedBatchRollback"; break;
     case TxnCommandType::PessimisticLock: op.Operation = "TxnPreparedPessimisticLock"; break;
     case TxnCommandType::CheckTxnStatus: op.Operation = "TxnPreparedCheckStatus"; break;
     case TxnCommandType::ResolveLock: op.Operation = "TxnPreparedResolveLock"; break;
@@ -299,6 +302,22 @@ Op NodeTxnScheduler::BuildOp(const TxnCommand& command, const PreparedMvccWrite*
     payload.startTs = command.safePointTs;
     op.Value = payload.asString();
   }
+  return op;
+}
+
+Op NodeTxnScheduler::BuildBatchOp(const TxnCommand& command,
+                                  const PreparedMvccBatch& prepared) {
+  Op op;
+  switch (command.type) {
+    case TxnCommandType::BatchPrewrite: op.Operation = "TxnPreparedBatchPrewrite"; break;
+    case TxnCommandType::BatchCommit: op.Operation = "TxnPreparedBatchCommit"; break;
+    case TxnCommandType::BatchRollback: op.Operation = "TxnPreparedBatchRollback"; break;
+    default: return op;
+  }
+  op.Key = command.keys.empty() ? std::string{} : command.keys.front();
+  op.Value = prepared.Serialize();
+  op.ClientId = command.clientId;
+  op.RequestId = command.requestId;
   return op;
 }
 
@@ -414,28 +433,40 @@ void NodeTxnScheduler::Execute(uint64_t commandId) {
   }
 
   PreparedMvccWrite prepared;
+  PreparedMvccBatch preparedBatch;
+  const bool isBatch = task->command.type == TxnCommandType::BatchPrewrite ||
+                       task->command.type == TxnCommandType::BatchCommit ||
+                       task->command.type == TxnCommandType::BatchRollback;
   const bool needsPrepare = task->command.type != TxnCommandType::GarbageCollect;
   if (needsPrepare) {
     const auto prepareStarted = std::chrono::steady_clock::now();
-    prepared = region->PrepareTxn(task->command);
+    if (isBatch) {
+      preparedBatch = region->PrepareTxnBatch(task->command);
+    } else {
+      prepared = region->PrepareTxn(task->command);
+    }
     {
       std::lock_guard<std::mutex> lock(mutex_);
       const auto found = tasks_.find(commandId);
-      if (found != tasks_.end()) found->second->preparedResponse = prepared;
+      if (found != tasks_.end()) {
+        found->second->preparedResponse = prepared;
+        found->second->preparedBatch = preparedBatch;
+      }
     }
     const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now() - prepareStarted)
                             .count();
     if (micros > 0) prepareMicros_.fetch_add(static_cast<uint64_t>(micros), std::memory_order_relaxed);
-    if (prepared.status != TxnStatus::Ok) {
-      if (prepared.status == TxnStatus::LockConflict || prepared.status == TxnStatus::WriteConflict) {
+    const TxnStatus prepareStatus = isBatch ? preparedBatch.status : prepared.status;
+    if (prepareStatus != TxnStatus::Ok) {
+      if (prepareStatus == TxnStatus::LockConflict || prepareStatus == TxnStatus::WriteConflict) {
         prepareConflicts_.fetch_add(1, std::memory_order_relaxed);
       }
-      FinishBeforeProposal(commandId, PreparedResult(prepared));
+      FinishBeforeProposal(commandId, StatusResult(prepareStatus));
       return;
     }
-    if (!prepared.HasChanges()) {
-      FinishBeforeProposal(commandId, PreparedResult(prepared));
+    if ((isBatch && !preparedBatch.HasChanges()) || (!isBatch && !prepared.HasChanges())) {
+      FinishBeforeProposal(commandId, isBatch ? StatusResult(prepareStatus) : PreparedResult(prepared));
       return;
     }
   }
@@ -445,7 +476,12 @@ void NodeTxnScheduler::Execute(uint64_t commandId) {
     return;
   }
 
-  const Op op = BuildOp(task->command, needsPrepare ? &prepared : nullptr);
+  const Op op = isBatch ? BuildBatchOp(task->command, preparedBatch)
+                        : BuildOp(task->command, needsPrepare ? &prepared : nullptr);
+  if (op.Operation.empty() || op.Value.empty()) {
+    FinishBeforeProposal(commandId, StatusResult(TxnStatus::StorageError));
+    return;
+  }
   int raftIndex = -1;
   if (!region->ProposeTxn(op, &raftIndex)) {
     FinishBeforeProposal(commandId, WrongLeaderResult());
@@ -540,6 +576,18 @@ void NodeTxnScheduler::OnApplied(int regionId, const Op& appliedOp, int raftInde
   const std::vector<uint64_t> ready = latches_.Release(commandId);
   for (Completion& completion : completions) completion(result);
   DispatchAll(ready);
+}
+
+void NodeTxnScheduler::OnProposalRejected(int regionId, const Op& rejectedOp) {
+  const RequestKey requestKey{regionId, rejectedOp.ClientId, rejectedOp.RequestId};
+  uint64_t commandId = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto request = requests_.find(requestKey);
+    if (request == requests_.end()) return;
+    commandId = request->second;
+  }
+  FinishBeforeProposal(commandId, WrongLeaderResult());
 }
 
 void NodeTxnScheduler::DeadlineLoop() {

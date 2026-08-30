@@ -45,6 +45,7 @@ NodeServer::NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalo
 
     auto regionPeer = std::make_shared<RegionPeer>(
         nodeId_, assignment.region.regionId, static_cast<int>(assignment.peerIndex), maxRaftState,
+        assignment.region.startKey, assignment.region.endKey,
         std::move(addresses), txnScheduler_);
     txnScheduler_->RegisterRegion(regionPeer);
     peersByRegion_.emplace(assignment.region.regionId, regionPeer);
@@ -106,8 +107,11 @@ DISPATCH_KV(Get, GetArgs, GetReply)
 DISPATCH_KV(List, ListArgs, ListReply)
 DISPATCH_KV(TxnGet, TxnGetArgs, TxnGetReply)
 DISPATCH_KV(TxnPrewrite, TxnPrewriteArgs, TxnPrewriteReply)
+DISPATCH_KV(TxnBatchPrewrite, TxnBatchPrewriteArgs, TxnBatchPrewriteReply)
 DISPATCH_KV(TxnCommit, TxnCommitArgs, TxnCommitReply)
+DISPATCH_KV(TxnBatchCommit, TxnBatchCommitArgs, TxnBatchCommitReply)
 DISPATCH_KV(TxnRollback, TxnRollbackArgs, TxnRollbackReply)
+DISPATCH_KV(TxnBatchRollback, TxnBatchRollbackArgs, TxnBatchRollbackReply)
 DISPATCH_KV(TxnGetLock, TxnGetLockArgs, TxnGetLockReply)
 DISPATCH_KV(TxnAcquirePessimisticLock, TxnAcquirePessimisticLockArgs, TxnAcquirePessimisticLockReply)
 DISPATCH_KV(TxnCheckStatus, TxnCheckStatusArgs, TxnCheckStatusReply)

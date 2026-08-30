@@ -6,6 +6,7 @@ class ApplyMsg {
   bool CommandValid;
   std::string Command;
   int CommandIndex;
+  bool ProposalRejected;
   bool SnapshotValid;
   std::string Snapshot;
   int SnapshotTerm;
@@ -17,6 +18,7 @@ class ApplyMsg {
       : CommandValid(false),
         Command(),
         CommandIndex(-1),
+        ProposalRejected(false),
         SnapshotValid(false),
         SnapshotTerm(-1),
         SnapshotIndex(-1){

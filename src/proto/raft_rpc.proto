@@ -23,6 +23,9 @@ message AppendEntriesArgs  {
 	repeated LogEntry Entries  = 5;
 	int32 LeaderCommit  = 6;
 	int32 RegionId = 7;
+	// Non-zero only for a linearizable ReadIndex round. It is carried by
+	// AppendEntries and never creates a Raft log entry.
+	uint64 ReadContext = 8;
 }
 
 // AppendEntriesReply 论文中没有提及返回要设置哪些状态
@@ -31,6 +34,8 @@ message AppendEntriesReply {
 	bool Success      =2;
 	int32 UpdateNextIndex = 3;               //快速调整leader对应的nextIndex
 	int32 AppState        =4; // 用来标识节点（网络）状态
+	uint64 ReadContextAck = 5;
+	bool ReadContextAccepted = 6;
 }
 
 message RequestVoteArgs  {

@@ -85,6 +85,7 @@ void TxnRecoveryManager::ScanOnce() {
       command.keys = {key};
       command.startTs = lock.startTs;
       command.clientId = "TxnRecoveryManager";
+      command.requestId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
       
       if (status.state == PrimaryTxnState::Committed) {
         command.resolutionState = TxnRecordState::Committed;
@@ -117,9 +118,11 @@ void TxnRecoveryManager::AdvanceGc() {
   for (auto region : scheduler_->Regions()) {
     TxnCommand command;
     command.type = TxnCommandType::GarbageCollect;
+    command.latchMode = TxnLatchMode::RegionExclusive;
     command.regionId = region->TxnRegionId();
     command.safePointTs = safePointTs;
     command.clientId = "TxnRecoveryManager";
+    command.requestId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
     
     std::promise<void> p;
     scheduler_->Schedule(command, [&p](const TxnScheduleResult&) { p.set_value(); });

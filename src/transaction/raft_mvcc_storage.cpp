@@ -292,6 +292,50 @@ TxnStatus RaftMvccStorage::PrewriteLock(const std::string& key, const std::strin
   }
 }
 
+TxnStatus RaftMvccStorage::BatchPrewrite(const std::vector<MvccMutation>& mutations,
+                                         const std::string& primaryKey, uint64_t startTs,
+                                         uint64_t ttlMs, uint64_t forUpdateTs,
+                                         uint64_t remainingBudgetMs) {
+  if (mutations.empty()) return TxnStatus::StorageError;
+  MutationLane& lane = PickMutationLane();
+  std::lock_guard<std::mutex> mutationLock(lane.mutex);
+  const int reqId = ++lane.requestId;
+  int server = recentLeaderId_.load(std::memory_order_relaxed);
+  const RpcDeadline deadline = MakeRpcDeadline(remainingBudgetMs);
+  int attempt = 0;
+  while (true) {
+    raftKVRpcProctoc::TxnBatchPrewriteArgs args;
+    args.set_regionid(shardId_);
+    args.set_primarykey(primaryKey);
+    args.set_startts(startTs);
+    args.set_ttlms(ttlMs);
+    args.set_maxforupdatets(forUpdateTs);
+    args.set_protocolversion(kTxnProtocolVersion);
+    args.set_remainingbudgetms(RemainingRpcBudgetMs(deadline));
+    args.set_clientid(lane.clientId);
+    args.set_requestid(reqId);
+    for (const auto& mutation : mutations) {
+      auto* encoded = args.add_mutations();
+      encoded->set_key(mutation.key);
+      encoded->set_value(mutation.value);
+      encoded->set_isdelete(mutation.isDelete);
+      encoded->set_islockonly(mutation.isLockOnly);
+    }
+    raftKVRpcProctoc::TxnBatchPrewriteReply reply;
+    MprpcController controller;
+    stubs_[server]->TxnBatchPrewrite(&controller, &args, &reply, nullptr);
+    if (controller.Failed() || reply.err() == ErrWrongLeader) {
+      server = (server + 1) % stubs_.size();
+      if (RpcBudgetExpired(deadline)) return TxnStatus::ResultUnknown;
+      ExponentialBackoff(attempt);
+      if (attempt >= kMaxRpcAttempts) return TxnStatus::ResultUnknown;
+      continue;
+    }
+    recentLeaderId_.store(server, std::memory_order_relaxed);
+    return static_cast<TxnStatus>(std::stoi(reply.err()));
+  }
+}
+
 TxnStatus RaftMvccStorage::AcquirePessimisticLock(const std::string& key, const std::string& primaryKey,
                                                  uint64_t startTs, uint64_t ttlMs,
                                                  uint64_t forUpdateTs,
@@ -394,6 +438,40 @@ TxnStatus RaftMvccStorage::Commit(const std::string& key, uint64_t startTs, uint
   }
 }
 
+TxnStatus RaftMvccStorage::BatchCommit(const std::vector<std::string>& keys, uint64_t startTs,
+                                       uint64_t commitTs, uint64_t remainingBudgetMs) {
+  if (keys.empty()) return TxnStatus::StorageError;
+  MutationLane& lane = PickMutationLane();
+  std::lock_guard<std::mutex> mutationLock(lane.mutex);
+  const int reqId = ++lane.requestId;
+  int server = recentLeaderId_.load(std::memory_order_relaxed);
+  const RpcDeadline deadline = MakeRpcDeadline(remainingBudgetMs);
+  int attempt = 0;
+  while (true) {
+    raftKVRpcProctoc::TxnBatchCommitArgs args;
+    args.set_regionid(shardId_);
+    for (const auto& key : keys) args.add_keys(key);
+    args.set_startts(startTs);
+    args.set_committs(commitTs);
+    args.set_clientid(lane.clientId);
+    args.set_requestid(reqId);
+    args.set_protocolversion(kTxnProtocolVersion);
+    args.set_remainingbudgetms(RemainingRpcBudgetMs(deadline));
+    raftKVRpcProctoc::TxnBatchCommitReply reply;
+    MprpcController controller;
+    stubs_[server]->TxnBatchCommit(&controller, &args, &reply, nullptr);
+    if (controller.Failed() || reply.err() == ErrWrongLeader) {
+      server = (server + 1) % stubs_.size();
+      if (RpcBudgetExpired(deadline)) return TxnStatus::ResultUnknown;
+      ExponentialBackoff(attempt);
+      if (attempt >= kMaxRpcAttempts) return TxnStatus::ResultUnknown;
+      continue;
+    }
+    recentLeaderId_.store(server, std::memory_order_relaxed);
+    return static_cast<TxnStatus>(std::stoi(reply.err()));
+  }
+}
+
 TxnStatus RaftMvccStorage::Rollback(const std::string& key, uint64_t startTs) {
   MutationLane& lane = PickMutationLane();
   std::lock_guard<std::mutex> mutationLock(lane.mutex);
@@ -422,6 +500,39 @@ TxnStatus RaftMvccStorage::Rollback(const std::string& key, uint64_t startTs) {
       continue;
     }
 
+    recentLeaderId_.store(server, std::memory_order_relaxed);
+    return static_cast<TxnStatus>(std::stoi(reply.err()));
+  }
+}
+
+TxnStatus RaftMvccStorage::BatchRollback(const std::vector<std::string>& keys, uint64_t startTs,
+                                         uint64_t remainingBudgetMs) {
+  if (keys.empty()) return TxnStatus::StorageError;
+  MutationLane& lane = PickMutationLane();
+  std::lock_guard<std::mutex> mutationLock(lane.mutex);
+  const int reqId = ++lane.requestId;
+  int server = recentLeaderId_.load(std::memory_order_relaxed);
+  const RpcDeadline deadline = MakeRpcDeadline(remainingBudgetMs);
+  int attempt = 0;
+  while (true) {
+    raftKVRpcProctoc::TxnBatchRollbackArgs args;
+    args.set_regionid(shardId_);
+    for (const auto& key : keys) args.add_keys(key);
+    args.set_startts(startTs);
+    args.set_clientid(lane.clientId);
+    args.set_requestid(reqId);
+    args.set_protocolversion(kTxnProtocolVersion);
+    args.set_remainingbudgetms(RemainingRpcBudgetMs(deadline));
+    raftKVRpcProctoc::TxnBatchRollbackReply reply;
+    MprpcController controller;
+    stubs_[server]->TxnBatchRollback(&controller, &args, &reply, nullptr);
+    if (controller.Failed() || reply.err() == ErrWrongLeader) {
+      server = (server + 1) % stubs_.size();
+      if (RpcBudgetExpired(deadline)) return TxnStatus::ResultUnknown;
+      ExponentialBackoff(attempt);
+      if (attempt >= kMaxRpcAttempts) return TxnStatus::ResultUnknown;
+      continue;
+    }
     recentLeaderId_.store(server, std::memory_order_relaxed);
     return static_cast<TxnStatus>(std::stoi(reply.err()));
   }

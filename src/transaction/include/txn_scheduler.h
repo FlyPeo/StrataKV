@@ -23,6 +23,9 @@ enum class TxnCommandType {
   Prewrite,
   Commit,
   Rollback,
+  BatchPrewrite,
+  BatchCommit,
+  BatchRollback,
   PessimisticLock,
   CheckTxnStatus,
   ResolveLock,
@@ -48,6 +51,7 @@ struct TxnCommand {
   TxnLatchMode latchMode = TxnLatchMode::Keys;
   int regionId = -1;
   std::vector<std::string> keys;
+  std::vector<MvccMutation> mutations;
   std::string key;
   std::string value;
   std::string primaryKey;
@@ -88,6 +92,7 @@ class TxnRegionExecutor {
   virtual int TxnRegionId() const = 0;
   virtual bool IsTxnLeader() = 0;
   virtual PreparedMvccWrite PrepareTxn(const TxnCommand& command) = 0;
+  virtual PreparedMvccBatch PrepareTxnBatch(const TxnCommand&) { return {}; }
   virtual bool ProposeTxn(const Op& op, int* raftIndex) = 0;
   virtual std::vector<std::pair<std::string, MvccLock>> ExpiredLocks(uint64_t currentPhysicalMs) = 0;
 };
@@ -219,6 +224,7 @@ class NodeTxnScheduler : public std::enable_shared_from_this<NodeTxnScheduler> {
   // Called only after a committed Region log entry has been applied to MVCC /
   // RocksDB. This is the point at which the command's latch can be released.
   void OnApplied(int regionId, const Op& appliedOp, int raftIndex);
+  void OnProposalRejected(int regionId, const Op& rejectedOp);
 
   Stats GetStats() const;
   size_t LatchSlotCount() const { return latches_.SlotCount(); }
@@ -258,6 +264,7 @@ class NodeTxnScheduler : public std::enable_shared_from_this<NodeTxnScheduler> {
     int raftIndex = -1;
     bool proposed = false;
     PreparedMvccWrite preparedResponse;
+    PreparedMvccBatch preparedBatch;
   };
 
   static RequestKey MakeRequestKey(const TxnCommand& command);
@@ -265,6 +272,7 @@ class NodeTxnScheduler : public std::enable_shared_from_this<NodeTxnScheduler> {
   static TxnScheduleResult StatusResult(TxnStatus status);
   static TxnScheduleResult PreparedResult(const PreparedMvccWrite& prepared);
   static Op BuildOp(const TxnCommand& command, const PreparedMvccWrite* prepared);
+  static Op BuildBatchOp(const TxnCommand& command, const PreparedMvccBatch& prepared);
 
   std::shared_ptr<TxnRegionExecutor> FindRegion(int regionId) const;
   void Dispatch(uint64_t commandId);
