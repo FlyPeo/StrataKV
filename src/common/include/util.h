@@ -52,8 +52,7 @@ std::chrono::_V2::system_clock::time_point now();
 std::chrono::milliseconds getRandomizedElectionTimeout();
 void sleepNMilliseconds(int N);
 
-// ////////////////////////异步写日志的日志队列
-// read is blocking!!! LIKE  go chan
+// Thread-safe blocking queue shared by Raft and the Region state machine.
 template <typename T>
 class LockQueue {
  public:
@@ -179,12 +178,9 @@ struct TxnOpPayload {
   }
 };
 
-// 这个Op是kv传递给raft的command
+// Command envelope replicated through Raft.
 class Op {
  public:
-  // Your definitions here.
-  // Field names must start with capital letters,
-  // otherwise RPC will break.
   std::string Operation;  // "Get" "Put" "Append"
   std::string Key;
   std::string Value;
@@ -194,9 +190,7 @@ class Op {
   std::string Status;    // Transaction status returned from apply thread
 
  public:
-  // todo
-  //为了协调raftRPC中的command只设置成了string,这个的限制就是正常字符中不能包含|
-  //当当然后期可以换成更高级的序列化方法，比如protobuf
+  // Encode length-prefixed fields so command values may contain arbitrary bytes.
   std::string asString() const {
     std::string out;
     uint32_t len = Operation.size();

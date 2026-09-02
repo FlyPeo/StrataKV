@@ -1,7 +1,3 @@
-//
-// Created by swx on 23-5-30.
-//
-
 #ifndef STRATAKV_RAFT_PERSISTER_H
 #define STRATAKV_RAFT_PERSISTER_H
 #include <fstream>

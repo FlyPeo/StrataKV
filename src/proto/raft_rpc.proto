@@ -46,11 +46,8 @@ message RequestVoteArgs  {
 	int32 RegionId = 5;
 }
 
-// RequestVoteReply
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
+// Result of a RequestVote RPC.
 message RequestVoteReply  {
-	// Your data here (2A).
 	int32 Term        =1;
 	bool VoteGranted  =2;
 	int32 VoteState   =3;

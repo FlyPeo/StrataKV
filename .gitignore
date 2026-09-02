@@ -3,6 +3,7 @@
 !/.gitignore
 !/.gitmodules
 !/README.md
+!/THIRD_PARTY_NOTICES.md
 !/CMakeLists.txt
 
 # OpenSpec project workflow and Codex skills.

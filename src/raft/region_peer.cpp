@@ -99,8 +99,6 @@ bool RegionPeer::ExecuteAppendOpOnKVDB(Op op) {
     m_lastRequestId[op.ClientId] = op.RequestId;
   }
 
-  //    DPrintf("[KVServerExeAPPEND-----]ClientId :%d ,RequestID :%d ,Key : %v, value : %v", op.ClientId, op.RequestId,
-  //    op.Key, op.Value)
   DprintfKVDB();
   return true;
 }
@@ -116,13 +114,6 @@ void RegionPeer::ExecuteGetOpOnKVDB(Op op, std::string *value, bool *exist) {
     m_lastRequestId[op.ClientId] = op.RequestId;
   }
 
-  if (*exist) {
-    //                DPrintf("[KVServerExeGET----]ClientId :%d ,RequestID :%d ,Key : %v, value :%v", op.ClientId,
-    //                op.RequestId, op.Key, value)
-  } else {
-    //        DPrintf("[KVServerExeGET----]ClientId :%d ,RequestID :%d ,Key : %v, But No KEY!!!!", op.ClientId,
-    //        op.RequestId, op.Key)
-  }
   DprintfKVDB();
 }
 
@@ -133,8 +124,6 @@ bool RegionPeer::ExecutePutOpOnKVDB(Op op) {
     m_lastRequestId[op.ClientId] = op.RequestId;
   }
 
-  //    DPrintf("[KVServerExePUT----]ClientId :%d ,RequestID :%d ,Key : %v, value : %v", op.ClientId, op.RequestId,
-  //    op.Key, op.Value)
   DprintfKVDB();
   return true;
 }
@@ -350,7 +339,6 @@ bool RegionPeer::ifRequestDuplicate(std::string ClientId, int RequestId) {
   std::lock_guard<std::mutex> lg(m_mtx);
   if (m_lastRequestId.find(ClientId) == m_lastRequestId.end()) {
     return false;
-    // todo :不存在这个client就创建
   }
   return RequestId <= m_lastRequestId[ClientId];
 }
@@ -500,19 +488,6 @@ void RegionPeer::ReadSnapShotToInstall(std::string snapshot) {
     return;
   }
   parseFromString(snapshot);
-
-  //    r := bytes.NewBuffer(snapshot)
-  //    d := labgob.NewDecoder(r)
-  //
-  //    var persist_kvdb map[string]string  //理应快照
-  //    var persist_lastRequestId map[int64]int //快照这个为了维护线性一致性
-  //
-  //    if d.Decode(&persist_kvdb) != nil || d.Decode(&persist_lastRequestId) != nil {
-  //                DPrintf("KVSERVER %d read persister got a problem!!!!!!!!!!",kv.me)
-  //        } else {
-  //        kv.kvDB = persist_kvdb
-  //        kv.lastRequestId = persist_lastRequestId
-  //    }
 }
 
 bool RegionPeer::SendMessageToWaitChan(const Op &op, const std::string& reqKey) {

@@ -1,7 +1,3 @@
-//
-// Created by swx on 23-12-28.
-//
-
 #include "raft_rpc_util.h"
 
 #include <mprpc_channel.h>

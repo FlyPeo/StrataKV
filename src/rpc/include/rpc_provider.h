@@ -9,15 +9,11 @@
 #include <unordered_map>
 #include "google/protobuf/service.h"
 
-// 框架提供的专门发布rpc服务的网络对象类
-// todo:现在rpc客户端变成了 长连接，因此rpc服务器这边最好提供一个定时器，用以断开很久没有请求的连接。
-// todo：为了配合这个，那么rpc客户端那边每次发送之前也需要真正的
+// Protobuf service registry and Muduo-based RPC listener.
 class RpcProvider {
  public:
-  // 这里是框架提供给外部使用的，可以发布rpc方法的函数接口
   void NotifyService(google::protobuf::Service *service);
 
-  // 启动rpc服务节点，开始提供rpc远程网络调用服务
   void Run(int nodeIndex, short port);
 
  private:

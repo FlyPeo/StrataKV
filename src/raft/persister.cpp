@@ -1,12 +1,9 @@
-//
-// Created by swx on 23-5-30.
-//
 #include "persister.h"
 #include <filesystem>
 #include <sstream>
 #include "util.h"
 
-// todo:会涉及反复打开文件的操作，没有考虑如果文件出现问题会怎么办？？
+// Serialize state and snapshot updates so readers never observe interleaved writes.
 void Persister::Save(const std::string raftstate, const std::string snapshot) {
   std::lock_guard<std::mutex> lg(m_mtx);
   clearRaftStateAndSnapshot();

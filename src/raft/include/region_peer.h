@@ -1,7 +1,3 @@
-//
-// Created by swx on 23-6-1.
-//
-
 #ifndef STRATAKV_RAFT_REGION_PEER_H
 #define STRATAKV_RAFT_REGION_PEER_H
 
@@ -43,15 +39,15 @@ class RegionPeer : public TxnRegionExecutor {
   std::vector<std::pair<std::string, short>> m_peerAddresses;
   int m_maxRaftState;                               // snapshot if log grows this big
 
-  // Your definitions here.
-  std::string m_serializedKVData;  // todo ： 序列化后的kv数据，理论上可以不用，但是目前没有找到特别好的替代方法
+  // Serialized state used while producing and restoring Region snapshots.
+  std::string m_serializedKVData;
   std::unique_ptr<IKVEngine> m_kvEngine;
   std::shared_ptr<MvccStorage> m_mvccStorage;
   std::weak_ptr<NodeTxnScheduler> m_nodeTxnScheduler;
 
   using WaitApplyQueue = std::shared_ptr<LockQueue<Op>>;
   std::unordered_map<std::string, WaitApplyQueue> waitApplyCh;
-  // reqKey -> chan  waitApplyCh是一个map，键是std::string，值 is Op类型的管道
+  // Maps a request key to the queue that receives its apply result.
 
   std::unordered_map<std::string, int> m_lastRequestId;  // clientid -> requestID  //一个kV服务器可能连接多个client
 
@@ -135,7 +131,7 @@ class RegionPeer : public TxnRegionExecutor {
   // 检查是否需要制作快照，需要的话就向raft之下制作快照
   void IfNeedToSendSnapShotCommand(int raftIndex, int proportion);
 
-  // Handler the SnapShot from kv.rf.applyCh
+  // Install a snapshot delivered through the Region apply queue.
   void GetSnapShotFromRaft(ApplyMsg message);
 
   std::string MakeSnapShot();

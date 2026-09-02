@@ -7,6 +7,14 @@ Primary-First 2PC，并提供 HTTP/JSON Gateway、命令行客户端和 C++ SDK�
 当前版本定位为 **Developer Edition**：适合 Linux/WSL 本地部署、功能演示、
 源码学习和故障测试，不应直接承载生产数据。
 
+## 来源与第三方代码
+
+项目不是从空目录开始的原创实现。Raft、RPC 和 Pulsar 均包含公开教学项目或
+开源项目的历史基线，当前仓库在此基础上继续实现事务、存储、运行时优化和
+工程验证。已知来源线索及仍需补齐的版本、许可证信息记录在
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)；在归属审计完成前，不应将
+相关基础模块描述为“完全从零实现”。
+
 ## 1. 架构与能力
 
 ```text

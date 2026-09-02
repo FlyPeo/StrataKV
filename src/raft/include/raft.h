@@ -21,7 +21,7 @@
 #include <pulsar/pulsar.h>
 #include "raft_rpc_util.h"
 #include "util.h"
-/// @brief //////////// 网络状态表示  todo：可以在rpc中删除该字段，实际生产中是用不到的.
+// Transport status used to distinguish an RPC failure from a Raft rejection.
 constexpr int Disconnected =
     0;  // 方便网络分区的时候debug，网络异常的时候为disconnected，只要网络正常就为AppNormal，防止matchIndex[]数组异常减小
 constexpr int AppNormal = 1;
@@ -82,8 +82,8 @@ class Raft : public raftRpcProctoc::raftRpc {
   // 身份
   Status m_status;
 
-  std::shared_ptr<LockQueue<ApplyMsg>> applyChan;  // client从这里取日志（2B），client与raft通信的接口
-  // ApplyMsgQueue chan ApplyMsg // raft内部使用的chan，applyChan是用于和服务层交互，最后好像没用上
+  // Delivers committed entries and snapshots to the Region state machine.
+  std::shared_ptr<LockQueue<ApplyMsg>> applyChan;
 
   // 选举超时
 
@@ -176,8 +176,7 @@ class Raft : public raftRpcProctoc::raftRpc {
   bool sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> args,
                          std::shared_ptr<raftRpcProctoc::AppendEntriesReply> reply);
 
-  // rf.applyChan <- msg //不拿锁执行  可以单独创建一个线程执行，但是为了同意使用std:thread
-  // ，避免使用pthread_create，因此专门写一个函数来执行
+  // Deliver an apply message without holding the Raft state mutex.
   void pushMsgToRegionPeer(ApplyMsg msg);
   void readPersist(std::string data);
   std::string persistData();
@@ -186,13 +185,7 @@ class Raft : public raftRpcProctoc::raftRpc {
   ReadIndexResult ReadIndex(std::chrono::steady_clock::time_point deadline);
   bool IsLeaderInTerm(int term);
 
-  // Snapshot the service says it has created a snapshot that has
-  // all info up to and including index. this means the
-  // service no longer needs the log through (and including)
-  // that index. Raft should now trim its log as much as possible.
-  // index代表是快照apply应用的index,而snapshot代表的是上层service传来的快照字节流，包括了Index之前的数据
-  // 这个函数的目的是把安装到快照里的日志抛弃，并安装快照数据，同时更新快照下标，属于peers自身主动更新，与leader发送快照不冲突
-  // 即服务层主动发起请求raft保存snapshot里面的数据，index是用来表示snapshot快照执行到了哪条命令
+  // Persist a service snapshot through index and compact the covered log prefix.
   void Snapshot(int index, std::string snapshot);
 
  public:

@@ -13,7 +13,6 @@ class ApplyMsg {
   int SnapshotIndex;
 
  public:
-  //两个valid最开始要赋予false！！
   ApplyMsg()
       : CommandValid(false),
         Command(),

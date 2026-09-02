@@ -10,6 +10,14 @@ add_executable(stratakv-test-scheduler-work-stealing ../src/pulsar/tests/schedul
 target_link_libraries(stratakv-test-scheduler-work-stealing PRIVATE Pulsar::pulsar pthread dl)
 add_test(NAME stratakv-test-scheduler-work-stealing COMMAND stratakv-test-scheduler-work-stealing)
 
+add_executable(stratakv-test-stack-pool ../src/pulsar/tests/stack_pool_check.cpp)
+target_link_libraries(stratakv-test-stack-pool PRIVATE Pulsar::pulsar pthread dl)
+add_test(NAME stratakv-test-stack-pool COMMAND stratakv-test-stack-pool)
+
+add_executable(stratakv-test-scheduler-cache ../src/pulsar/tests/scheduler_cache_check.cpp)
+target_link_libraries(stratakv-test-scheduler-cache PRIVATE Pulsar::pulsar pthread dl)
+add_test(NAME stratakv-test-scheduler-cache COMMAND stratakv-test-scheduler-cache)
+
 add_executable(stratakv-test-bounded-thread-pool bounded_thread_pool_check.cpp)
 target_link_libraries(stratakv-test-bounded-thread-pool PRIVATE pthread)
 add_test(NAME stratakv-test-bounded-thread-pool COMMAND stratakv-test-bounded-thread-pool)
@@ -54,6 +62,13 @@ target_link_libraries(stratakv-test-region-2pc-benchmark PRIVATE stratakv_core p
 # CTest because the case sizes and CPU-affinity policy belong to the caller.
 add_executable(stratakv-test-fiber-benchmark fiber_benchmark.cpp)
 target_link_libraries(stratakv-test-fiber-benchmark PRIVATE Pulsar::pulsar pthread dl)
+
+# Public-API half of the strict Pulsar/Photon context-switch A/B. The same
+# source can be compiled against Photon with STRATAKV_AB_PHOTON so both sides
+# share the loop, clock, warm-up, stack size and correctness checks.
+add_executable(stratakv-test-fiber-context-ab fiber_context_ab_benchmark.cpp)
+target_compile_definitions(stratakv-test-fiber-context-ab PRIVATE STRATAKV_AB_PULSAR=1)
+target_link_libraries(stratakv-test-fiber-context-ab PRIVATE Pulsar::pulsar pthread dl)
 
 # Cluster reliability workload. This is intentionally not registered in CTest:
 # it requires a live multi-node Gateway deployment and performs persistent I/O.

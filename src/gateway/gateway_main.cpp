@@ -21,6 +21,7 @@
 
 #include <pulsar/fd_manager.hpp>
 #include <pulsar/iomanager.hpp>
+#include <pulsar/stack_allocator.hpp>
 #include <pulsar/sync.hpp>
 
 #include "bounded_thread_pool.h"
@@ -629,7 +630,8 @@ void PrintUsage(const char* program) {
             << " --regions-config <path> [--host 0.0.0.0] [--port 8080]"
                " [--tso-host 127.0.0.1] [--tso-port 26300]"
                " [--tso-endpoints host:port,host:port,...]"
-               " [--runtime thread|fiber] [--workers 4] [--request-workers 16]\n";
+               " [--runtime thread|fiber] [--workers 4] [--request-workers 16]"
+               " [--fiber-stack-cache-mib 0] [--fiber-cache-per-worker 1]\n";
 }
 
 }  // namespace
@@ -647,6 +649,8 @@ int main(int argc, char** argv) {
   int tsoPort = 26300;
   int runtimeWorkers = 4;
   int requestWorkers = 16;
+  int fiberStackCacheMiB = 0;
+  int fiberCachePerWorker = 1;
   for (int index = 1; index < argc; index += 2) {
     if (index + 1 >= argc) {
       PrintUsage(argv[0]);
@@ -668,6 +672,10 @@ int main(int argc, char** argv) {
       try { runtimeWorkers = std::stoi(value); } catch (const std::exception&) { runtimeWorkers = 0; }
     } else if (option == "--request-workers") {
       try { requestWorkers = std::stoi(value); } catch (const std::exception&) { requestWorkers = 0; }
+    } else if (option == "--fiber-stack-cache-mib") {
+      try { fiberStackCacheMiB = std::stoi(value); } catch (const std::exception&) { fiberStackCacheMiB = -1; }
+    } else if (option == "--fiber-cache-per-worker") {
+      try { fiberCachePerWorker = std::stoi(value); } catch (const std::exception&) { fiberCachePerWorker = -1; }
     } else {
       PrintUsage(argv[0]);
       return 2;
@@ -676,6 +684,9 @@ int main(int argc, char** argv) {
   if (regionConfigPath.empty() || tsoHost.empty() || port <= 0 || port > 65535 || tsoPort <= 0 || tsoPort > 65535 ||
       runtimeWorkers <= 0 || runtimeWorkers > 256 ||
       requestWorkers <= 0 || requestWorkers > 256 ||
+      fiberStackCacheMiB < 0 || fiberStackCacheMiB > 4096 ||
+      fiberCachePerWorker < 0 || fiberCachePerWorker > 4096 ||
+      (runtimeMode == "thread" && (fiberStackCacheMiB != 0 || fiberCachePerWorker != 1)) ||
       (runtimeMode != "fiber" && runtimeMode != "thread")) {
     PrintUsage(argv[0]);
     return 2;
@@ -707,6 +718,8 @@ int main(int argc, char** argv) {
               << JsonEscape(host) << "\",\"port\":" << port << ",\"runtime\":\"" << runtimeMode
               << "\",\"io_workers\":" << (runtimeMode == "fiber" ? runtimeWorkers : 0)
               << ",\"request_workers\":" << (runtimeMode == "fiber" ? requestWorkers : 0)
+              << ",\"fiber_stack_cache_mib\":" << (runtimeMode == "fiber" ? fiberStackCacheMiB : 0)
+              << ",\"fiber_cache_per_worker\":" << (runtimeMode == "fiber" ? fiberCachePerWorker : 0)
               << "}" << std::endl;
 
     if (runtimeMode == "thread") {
@@ -726,7 +739,15 @@ int main(int argc, char** argv) {
       close(listener);
       throw std::runtime_error("cannot register gateway listener with Pulsar");
     }
-    pulsar::IOManager runtime(static_cast<size_t>(runtimeWorkers), false, "stratakv-gateway");
+    pulsar::SchedulerReuseOptions reuseOptions;
+    reuseOptions.callbackFiberCachePerWorker = static_cast<size_t>(fiberCachePerWorker);
+    if (fiberStackCacheMiB > 0) {
+      pulsar::StackPoolOptions stackPoolOptions;
+      stackPoolOptions.maxCachedBytes = static_cast<size_t>(fiberStackCacheMiB) * 1024 * 1024;
+      reuseOptions.stackAllocator = pulsar::MakePooledStackAllocator(stackPoolOptions);
+    }
+    pulsar::IOManager runtime(static_cast<size_t>(runtimeWorkers), false, "stratakv-gateway",
+                              std::move(reuseOptions));
     runtime.scheduler([listener, &gateway, &runtime, requestPool = requestExecutor.get()]() {
       while (true) {
         const int client = accept(listener, nullptr, nullptr);
