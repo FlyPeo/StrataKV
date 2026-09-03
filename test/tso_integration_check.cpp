@@ -7,10 +7,12 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -21,6 +23,7 @@
 
 #include "mprpc_channel.h"
 #include "mprpc_controller.h"
+#include "raft_rpc.pb.h"
 #include "remote_timestamp_oracle.h"
 #include "tso_rpc.pb.h"
 
@@ -31,7 +34,7 @@ class TsoProcess {
   ~TsoProcess() { Stop(SIGKILL); }
 
   void Start(const std::string& executable, int nodeId, const std::string& peers,
-             const std::filesystem::path& dataDirectory) {
+             const std::filesystem::path& dataDirectory, uint64_t rangeSize) {
     if (pid_ > 0) throw std::logic_error("TSO process is already running");
     std::filesystem::create_directories(dataDirectory);
     const std::string nodeIdText = std::to_string(nodeId);
@@ -46,11 +49,16 @@ class TsoProcess {
         dup2(logFd, STDERR_FILENO);
         close(logFd);
       }
+      const std::string rangeSizeText = std::to_string(rangeSize);
       execl(executable.c_str(), executable.c_str(), "--node-id", nodeIdText.c_str(),
             "--peers", peers.c_str(), "--state-file", statePath.c_str(),
-            "--segment-size", "64", nullptr);
+            "--range-size", rangeSizeText.c_str(), nullptr);
       _exit(127);
     }
+  }
+
+  void Signal(int signal) {
+    if (pid_ <= 0 || kill(pid_, signal) != 0) throw std::runtime_error("signal TSO process failed");
   }
 
   void Stop(int signal) {
@@ -137,9 +145,44 @@ bool DirectNextSucceeds(const TsoEndpoint& endpoint) {
   return !controller.Failed() && response.err().empty() && !response.notleader() && response.timestamp() != 0;
 }
 
+raftRpcProctoc::RequestVoteReply DirectRequestVote(const TsoEndpoint& endpoint, int term) {
+  MprpcChannel channel(endpoint.host, static_cast<short>(endpoint.port), false);
+  raftRpcProctoc::raftRpc_Stub stub(&channel);
+  raftRpcProctoc::RequestVoteArgs request;
+  request.set_term(term);
+  request.set_candidateid(99);
+  request.set_lastlogindex(std::numeric_limits<int32_t>::max());
+  request.set_lastlogterm(std::numeric_limits<int32_t>::max());
+  raftRpcProctoc::RequestVoteReply response;
+  MprpcController controller;
+  stub.RequestVote(&controller, &request, &response, nullptr);
+  if (controller.Failed()) throw std::runtime_error("direct RequestVote RPC failed");
+  return response;
+}
+
+void WaitUntilFollower(const TsoEndpoint& endpoint) {
+  for (int attempt = 0; attempt < 160; ++attempt) {
+    const auto status = ReadStatus(endpoint);
+    if (status.has_value() && !status->isleader()) return;
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  }
+  throw std::runtime_error("resumed stale TSO leader did not step down");
+}
+
+bool HasSnapshot(const std::filesystem::path& testDirectory) {
+  for (int nodeId = 0; nodeId < 3; ++nodeId) {
+    const auto snapshot = testDirectory / ("node-" + std::to_string(nodeId)) / "run_data" /
+                          ("snapshotPersist_tso_control_node" + std::to_string(nodeId) + ".txt");
+    std::error_code error;
+    if (std::filesystem::file_size(snapshot, error) > 0 && !error) return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 int main() {
+  constexpr uint64_t kRangeSize = 64;
   char temporaryTemplate[] = "/tmp/stratakv-tso-consensus-test-XXXXXX";
   const char* temporaryDirectory = mkdtemp(temporaryTemplate);
   if (temporaryDirectory == nullptr) {
@@ -162,18 +205,25 @@ int main() {
     const std::string peers = EndpointText(endpoints);
     for (int index = 0; index < 3; ++index) {
       processes.push_back(std::make_unique<TsoProcess>());
-      processes.back()->Start(executable, index, peers, testDirectory / ("node-" + std::to_string(index)));
+      processes.back()->Start(executable, index, peers,
+                              testDirectory / ("node-" + std::to_string(index)), kRangeSize);
     }
 
     const int firstLeader = WaitForLeader(endpoints);
     const auto firstStatus = ReadStatus(endpoints[static_cast<size_t>(firstLeader)]);
-    if (!firstStatus.has_value() || firstStatus->protocolversion() < 2 ||
-        !firstStatus->hybridlogical()) {
-      throw std::runtime_error("TSO leader did not advertise HLC protocol v2");
+    if (!firstStatus.has_value() || firstStatus->protocolversion() < 3 ||
+        !firstStatus->hybridlogical() || firstStatus->rangesize() != kRangeSize) {
+      throw std::runtime_error("TSO leader did not advertise range-reservation protocol v3");
     }
     RemoteTimestampOracle failoverClient(endpoints);
     std::vector<uint64_t> timestamps;
-    timestamps.push_back(failoverClient.Next());
+    for (int index = 0; index < 2 * static_cast<int>(kRangeSize) + 3; ++index) {
+      const uint64_t timestamp = failoverClient.Next();
+      if (!timestamps.empty() && timestamp <= timestamps.back()) {
+        throw std::runtime_error("single-thread TSO allocation was not increasing");
+      }
+      timestamps.push_back(timestamp);
+    }
     if (HlcTimestamp::PhysicalMs(timestamps.back()) == 0) {
       throw std::runtime_error("TSO did not return a physical-plus-logical timestamp");
     }
@@ -209,48 +259,152 @@ int main() {
     }
     uint64_t maximum = timestamps.back();
 
+    const auto rangeStatus = ReadStatus(endpoints[static_cast<size_t>(firstLeader)]);
+    if (!rangeStatus.has_value() || rangeStatus->rangereservationcount() < 2 ||
+        rangeStatus->rangeproposalcount() >= timestamps.size() / 4 ||
+        rangeStatus->averagetimestampsperreservation() <= 4.0) {
+      throw std::runtime_error("TSO did not amortize allocations across committed ranges");
+    }
+
+    // A heartbeat-acknowledging follower must not grant a competing
+    // higher-term vote inside the 300 ms minimum election interval. This is
+    // the Raft-side half of the TSO's shorter 150 ms majority fence proof.
+    std::this_thread::sleep_for(std::chrono::milliseconds(160));
+    (void)failoverClient.Peek();
+    const auto fencedStatus = ReadStatus(endpoints[static_cast<size_t>(firstLeader)]);
+    if (!fencedStatus.has_value() || !fencedStatus->isleader()) {
+      throw std::runtime_error("cannot establish TSO fence for vote suppression test");
+    }
+    for (size_t index = 0; index < endpoints.size(); ++index) {
+      if (static_cast<int>(index) == firstLeader) continue;
+      const auto vote = DirectRequestVote(endpoints[index], fencedStatus->term() + 1);
+      if (vote.votegranted() || vote.term() != fencedStatus->term()) {
+        throw std::runtime_error("recent leader contact did not suppress a competing vote");
+      }
+    }
+
+    const uint64_t observed = std::max(
+        maximum + 1000, HlcTimestamp::Compose(HlcTimestamp::WallClockMs() + 10, 0));
+    failoverClient.Observe(observed);
+    const uint64_t afterObserve = failoverClient.Next();
+    if (afterObserve <= observed) throw std::runtime_error("Observe did not advance TSO");
+    maximum = afterObserve;
+
+    // Pause the active member to model a partitioned/stale leader. The new
+    // leader must skip the old member's entire committed-but-unused range.
+    const auto beforePartition = ReadStatus(endpoints[static_cast<size_t>(firstLeader)]);
+    if (!beforePartition.has_value() ||
+        beforePartition->activerangehighwater() < maximum) {
+      throw std::runtime_error("leader did not expose an active committed range");
+    }
+    const uint64_t partitionedRangeHighWater = beforePartition->activerangehighwater();
+    processes[static_cast<size_t>(firstLeader)]->Signal(SIGSTOP);
+    const int partitionLeader = WaitForLeader(endpoints, firstLeader);
+    const uint64_t afterPartition = failoverClient.Next();
+    if (afterPartition <= partitionedRangeHighWater) {
+      throw std::runtime_error("new leader reused the stale leader's committed range");
+    }
+    maximum = afterPartition;
+    processes[static_cast<size_t>(firstLeader)]->Signal(SIGCONT);
+    WaitUntilFollower(endpoints[static_cast<size_t>(firstLeader)]);
+    if (DirectNextSucceeds(endpoints[static_cast<size_t>(firstLeader)])) {
+      throw std::runtime_error("stale TSO leader allocated after rejoining");
+    }
+
     // Kill -9 the active leader. A new timestamp must be committed by the
-    // remaining majority without changing the endpoint list used by clients.
-    processes[static_cast<size_t>(firstLeader)]->Stop(SIGKILL);
-    const int secondLeader = WaitForLeader(endpoints, firstLeader);
+    // remaining majority and skip its committed-but-unused range.
+    const auto beforeCrash = ReadStatus(endpoints[static_cast<size_t>(partitionLeader)]);
+    if (!beforeCrash.has_value()) throw std::runtime_error("cannot read leader before crash");
+    const uint64_t crashedRangeHighWater = beforeCrash->activerangehighwater();
+    processes[static_cast<size_t>(partitionLeader)]->Stop(SIGKILL);
+    const int secondLeader = WaitForLeader(endpoints, partitionLeader);
     const uint64_t afterFailover = failoverClient.Next();
-    if (afterFailover <= maximum) throw std::runtime_error("timestamp regressed after leader failover");
+    if (afterFailover <= maximum || afterFailover <= crashedRangeHighWater) {
+      throw std::runtime_error("timestamp did not skip the crashed leader's committed range");
+    }
     maximum = afterFailover;
 
-    int stoppedFollower = -1;
-    for (int index = 0; index < 3; ++index) {
-      if (index != firstLeader && index != secondLeader) stoppedFollower = index;
+    // Restore a full quorum before exercising an accepted but uncommitted
+    // reservation. Observe(activeHighWater) empties the local range without a
+    // proposal; immediately removing both followers leaves the cached fence
+    // valid long enough for Start() to accept a proposal that cannot commit.
+    processes[static_cast<size_t>(partitionLeader)]->Start(
+        executable, partitionLeader, peers,
+        testDirectory / ("node-" + std::to_string(partitionLeader)), kRangeSize);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::this_thread::sleep_for(std::chrono::milliseconds(180));
+    (void)failoverClient.Peek();
+    const auto beforeMinority = ReadStatus(endpoints[static_cast<size_t>(secondLeader)]);
+    if (!beforeMinority.has_value() || !beforeMinority->isleader()) {
+      throw std::runtime_error("cannot prepare minority reservation test");
     }
-    processes[static_cast<size_t>(stoppedFollower)]->Stop(SIGKILL);
+    failoverClient.Observe(beforeMinority->activerangehighwater());
+    std::vector<int> stoppedFollowers;
+    for (int index = 0; index < 3; ++index) {
+      if (index != secondLeader) {
+        processes[static_cast<size_t>(index)]->Stop(SIGKILL);
+        stoppedFollowers.push_back(index);
+      }
+    }
     if (DirectNextSucceeds(endpoints[static_cast<size_t>(secondLeader)])) {
       throw std::runtime_error("single TSO member allocated without a majority");
     }
-    processes[static_cast<size_t>(stoppedFollower)]->Start(
-        executable, stoppedFollower, peers, testDirectory / ("node-" + std::to_string(stoppedFollower)));
+    const auto afterRejectedReservation = ReadStatus(endpoints[static_cast<size_t>(secondLeader)]);
+    if (!afterRejectedReservation.has_value() ||
+        afterRejectedReservation->highwater() != beforeMinority->highwater() ||
+        afterRejectedReservation->rangeproposalcount() <= beforeMinority->rangeproposalcount()) {
+      throw std::runtime_error("uncommitted range changed the committed high-water");
+    }
+    // The cached majority fence is now certainly expired. Keeping one active
+    // range would still not authorize this isolated member to allocate.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    if (DirectNextSucceeds(endpoints[static_cast<size_t>(secondLeader)])) {
+      throw std::runtime_error("expired TSO fence allowed minority allocation");
+    }
+
+    const int restoredFollower = stoppedFollowers.front();
+    processes[static_cast<size_t>(restoredFollower)]->Start(
+        executable, restoredFollower, peers,
+        testDirectory / ("node-" + std::to_string(restoredFollower)), kRangeSize);
     const uint64_t afterQuorumRestore = failoverClient.Next();
     if (afterQuorumRestore <= maximum) throw std::runtime_error("timestamp regressed after quorum restore");
     maximum = afterQuorumRestore;
 
-    // Rejoin the old leader, then crash-restart the entire control plane from
-    // its three independent persisted Raft and watermark directories.
-    processes[static_cast<size_t>(firstLeader)]->Start(
-        executable, firstLeader, peers, testDirectory / ("node-" + std::to_string(firstLeader)));
+    const int otherFollower = stoppedFollowers.back();
+    processes[static_cast<size_t>(otherFollower)]->Start(
+        executable, otherFollower, peers,
+        testDirectory / ("node-" + std::to_string(otherFollower)), kRangeSize);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    (void)secondLeader;
+
+    // Generate enough range entries to compact the TSO Raft log, then restart
+    // from the independent Raft/snapshot files of all three members.
+    for (int index = 0; index < 2500; ++index) maximum = failoverClient.Next();
+    for (int attempt = 0; attempt < 80 && !HasSnapshot(testDirectory); ++attempt) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    if (!HasSnapshot(testDirectory)) throw std::runtime_error("TSO snapshot was not created");
+    const int leaderBeforeRestart = WaitForLeader(endpoints);
+    const auto restartStatus = ReadStatus(endpoints[static_cast<size_t>(leaderBeforeRestart)]);
+    if (!restartStatus.has_value()) throw std::runtime_error("cannot read TSO before restart");
+    const uint64_t committedBeforeRestart = restartStatus->highwater();
     for (auto& process : processes) process->Stop(SIGKILL);
     for (int index = 0; index < 3; ++index) {
       processes[static_cast<size_t>(index)]->Start(
-          executable, index, peers, testDirectory / ("node-" + std::to_string(index)));
+          executable, index, peers, testDirectory / ("node-" + std::to_string(index)), kRangeSize);
     }
     WaitForLeader(endpoints);
     const uint64_t afterRestart = failoverClient.Next();
-    if (afterRestart <= maximum) throw std::runtime_error("timestamp regressed after cluster restart");
+    if (afterRestart <= maximum || afterRestart <= committedBeforeRestart) {
+      throw std::runtime_error("timestamp regressed after snapshot-backed cluster restart");
+    }
 
     for (auto& process : processes) process->Stop(SIGTERM);
     std::filesystem::remove_all(testDirectory);
     std::cout << "TSO consensus check passed: " << timestamps.size()
-              << " concurrent allocations were unique; leader failover advanced to " << afterFailover
-              << ", minority allocation was rejected, and full restart advanced to " << afterRestart << '\n';
+              << " allocations were unique across multiple ranges; Observe advanced to "
+              << afterObserve << ", stale/crashed leaders were fenced, minority reservations were"
+                 " rejected, and snapshot restart advanced to "
+              << afterRestart << '\n';
     return 0;
   } catch (const std::exception& error) {
     for (auto& process : processes) process->Stop(SIGKILL);

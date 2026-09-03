@@ -80,6 +80,7 @@ void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpc
   if (m_status == Leader) abortReadIndexLocked(ReadIndexStatus::NotLeader);
   m_status = Follower;
   m_lastResetElectionTime = now();
+  m_lastLeaderContactTime = m_lastResetElectionTime;
   if (args->readcontext() != 0) {
     reply->set_readcontextack(args->readcontext());
     reply->set_readcontextaccepted(true);
@@ -335,7 +336,7 @@ void Raft::electionTimeOutTicker() {
       continue;
     }
     std::chrono::duration<signed long int, std::ratio<1, 1000000000>> suitableSleepTime{};
-    std::chrono::system_clock::time_point wakeTime{};
+    std::chrono::steady_clock::time_point wakeTime{};
     {
       m_mtx.lock();
       wakeTime = now();
@@ -538,6 +539,7 @@ void Raft::InstallSnapshot(const raftRpcProctoc::InstallSnapshotRequest* args,
   if (m_status == Leader) abortReadIndexLocked(ReadIndexStatus::NotLeader);
   m_status = Follower;
   m_lastResetElectionTime = now();
+  m_lastLeaderContactTime = m_lastResetElectionTime;
   // Ignore snapshots already covered by local state.
   if (args->lastsnapshotincludeindex() <= m_lastSnapshotIncludeIndex) {
     return;
@@ -584,7 +586,7 @@ void Raft::leaderHearBeatTicker() {
     static std::atomic<int32_t> atomicCount = 0;//心跳次数
 
     std::chrono::duration<signed long int, std::ratio<1, 1000000000>> suitableSleepTime{};//合适的睡眠时间
-    std::chrono::system_clock::time_point wakeTime{};//唤醒时间点
+    std::chrono::steady_clock::time_point wakeTime{};//唤醒时间点
     //计算睡眠时间
     {
       std::lock_guard<std::mutex> lock(m_mtx);
@@ -710,6 +712,20 @@ void Raft::RequestVote(const raftRpcProctoc::RequestVoteArgs* args, raftRpcProct
   // Persist term and vote changes before releasing the state mutex.
   DEFER { persist(); };
   if (args->term() < m_currentTerm) {
+    reply->set_term(m_currentTerm);
+    reply->set_votestate(Expire);
+    reply->set_votegranted(false);
+    return;
+  }
+  if (args->term() > m_currentTerm &&
+      m_lastLeaderContactTime != std::chrono::steady_clock::time_point::min() &&
+      now() - m_lastLeaderContactTime <
+          std::chrono::milliseconds(minRandomizedElectionTime)) {
+    // A follower that just acknowledged the current leader must not
+    // immediately help a disconnected peer form a competing higher-term
+    // majority. Every two Raft majorities intersect, so retaining the current
+    // term until the minimum election timeout makes a shorter bounded leader
+    // lease safe. TSO deliberately uses only half of this interval (150 ms).
     reply->set_term(m_currentTerm);
     reply->set_votestate(Expire);
     reply->set_votegranted(false);
@@ -1088,7 +1104,12 @@ void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::sh
   m_lastSnapshotIncludeIndex = 0;
   m_lastSnapshotIncludeTerm = 0;
   m_lastResetElectionTime = now();
-  m_lastResetHearBeatTime = now();
+  // A restarted voter has forgotten any volatile leader-lease promise it made
+  // before the crash. Keep it from voting for one full minimum election
+  // interval after startup; this is conservative and closes the restart hole
+  // for the TSO's shorter 150 ms fence.
+  m_lastLeaderContactTime = m_lastResetElectionTime;
+  m_lastResetHearBeatTime = m_lastResetElectionTime;
 
   // initialize from state persisted before a crash
   readPersist(m_persister->ReadRaftState());

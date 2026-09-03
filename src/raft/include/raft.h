@@ -87,9 +87,13 @@ class Raft : public raftRpcProctoc::raftRpc {
 
   // 选举超时
 
-  std::chrono::_V2::system_clock::time_point m_lastResetElectionTime;
+  std::chrono::steady_clock::time_point m_lastResetElectionTime;
+  // Last valid AppendEntries/InstallSnapshot from the recognized leader.
+  // Followers use this separately from the election timer to avoid granting a
+  // competing higher-term vote inside an active leader-lease window.
+  std::chrono::steady_clock::time_point m_lastLeaderContactTime;
   // 心跳超时，用于leader
-  std::chrono::_V2::system_clock::time_point m_lastResetHearBeatTime;
+  std::chrono::steady_clock::time_point m_lastResetHearBeatTime;
 
   // 2D中用于传入快照点
   // 储存了快照中的最后一个日志的Index和Term

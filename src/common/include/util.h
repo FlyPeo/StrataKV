@@ -47,7 +47,7 @@ std::string format(const char* format_str, Args... args) {
     return std::string(buf.data(), buf.data() + size - 1);  // remove '\0'
 }
 
-std::chrono::_V2::system_clock::time_point now();
+std::chrono::steady_clock::time_point now();
 
 std::chrono::milliseconds getRandomizedElectionTimeout();
 void sleepNMilliseconds(int N);
@@ -80,7 +80,7 @@ class LockQueue {
     std::unique_lock<std::mutex> lock(m_mutex);
 
     // 获取当前时间点，并计算出超时时刻
-    auto now = std::chrono::system_clock::now();
+    auto now = std::chrono::steady_clock::now();
     auto timeout_time = now + std::chrono::milliseconds(timeout);
 
     // 在超时之前，不断检查队列是否为空

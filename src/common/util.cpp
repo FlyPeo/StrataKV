@@ -13,7 +13,10 @@ void myAssert(bool condition, std::string message) {
   }
 }
 
-std::chrono::_V2::system_clock::time_point now() { return std::chrono::high_resolution_clock::now(); }
+// Raft election/heartbeat and queue timeouts are elapsed-time decisions. A
+// wall-clock correction must never trigger an early election or extend a
+// leader lease, so all callers use the monotonic clock.
+std::chrono::steady_clock::time_point now() { return std::chrono::steady_clock::now(); }
 
 std::chrono::milliseconds getRandomizedElectionTimeout() {
   std::random_device rd;

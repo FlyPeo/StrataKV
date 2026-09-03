@@ -30,6 +30,14 @@ message TimestampStatusReply {
   uint64 HighWater = 4;
   uint32 ProtocolVersion = 5;
   bool HybridLogical = 6;
+  uint64 RangeProposalCount = 7;
+  uint64 RangeReservationCount = 8;
+  uint64 TimestampAllocationCount = 9;
+  uint64 RangeSize = 10;
+  uint64 NextTimestamp = 11;
+  uint64 ActiveRangeHighWater = 12;
+  bool FenceValid = 13;
+  double AverageTimestampsPerReservation = 14;
 }
 
 service timestampOracleRpc {

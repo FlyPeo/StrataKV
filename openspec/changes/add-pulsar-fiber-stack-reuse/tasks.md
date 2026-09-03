@@ -14,11 +14,11 @@
 - [ ] 2.3 用可注入失败 backend 覆盖首次分配失败、取得栈后 context 构造失败、freelist 元数据分配失败及 reset 重试，验证 `std::bad_alloc`/既有异常、活跃 Fiber 数和资源计数；验证：运行专用 fault 用例并在 ASan/UBSan 构建下零 leak/invalid access；不更改无关错误语义或脏文件。
 - [ ] 2.4 增加多线程 acquire/return/trim、创建线程与销毁线程不同、重复并发 resume 的压力单测；验证：固定迭代下 checksum/唯一 block 地址集合正确，并对不执行 Boost 栈切换的 allocator 并发用例运行 TSan 无 data race；只修改并发专用测试及必要同步代码。
 - [ ] 2.5 在 `PULSAR_FIBER_GUARD_PAGES=ON` 构建中增加首次栈和池命中后复用栈的 guard-page death test，以及驱逐/trim 完整 unmap 检查；验证：两个越界子进程均按预期因内存保护终止，正常路径在 ASan/UBSan 下通过；只修改 guard 测试、allocator 和 CMake 相关内容。
-- [ ] 2.6 为 callback Fiber 缓存覆盖正常完成、异常完成、一次/多次 yield、Timer/I/O/WaitQueue 持有、外部 `GetThis()` 别名、用户 Fiber、main/root/idle 排除、容量 0/1/N 与满池驱逐；验证：新增 `pulsar-scheduler-cache-check` 的对象 ID、执行次数、缓存指标和析构计数全部符合预期；仅编辑 Scheduler 专用测试及必要实现，保留其他测试文件已有内容。
+- [x] 2.6 为 callback Fiber 缓存覆盖正常完成、异常完成、一次/多次 yield、Timer/I/O/WaitQueue 持有、外部 `GetThis()` 别名、用户 Fiber、main/root/idle 排除、容量 0/1/N 与满池驱逐；验证：新增 `pulsar-scheduler-cache-check` 的对象 ID、执行次数、缓存指标和析构计数全部符合预期；仅编辑 Scheduler 专用测试及必要实现，保留其他测试文件已有内容。
 
 ## 3. Integration and Regression Tests
 
-- [ ] 3.1 在 IOManager 中用 socketpair/epoll、Timer、FiberMutex/FiberSemaphore/WaitQueue 组合验证挂起 Fiber 不被回收且恢复到原 worker；验证：`pulsar-sync-check` 与新增 reuse integration case 在多 worker 下重复运行 100 轮无串栈、超时或 checksum 错误；仅修改 Pulsar 集成测试与必要复用代码。
+- [x] 3.1 在 IOManager 中用 socketpair/epoll、Timer、FiberMutex/FiberSemaphore/WaitQueue 组合验证挂起 Fiber 不被回收且恢复到原 worker；验证：`pulsar-sync-check` 与新增 reuse integration case 在多 worker 下重复运行 100 轮无串栈、超时或 checksum 错误；仅修改 Pulsar 集成测试与必要复用代码。
 - [ ] 3.2 覆盖未绑定 callback 被窃取、yield 后绑定恢复、外部别名跨 Scheduler stop 存活、stop 排空每 worker cache、allocator 晚于 Fiber 析构等生命周期；验证：`pulsar-scheduler-work-stealing-check` 和专用 shutdown case 在 ASan/UBSan 下通过且最终缓存为零、allocation/free 配对；只编辑相关 Scheduler/IOManager 测试和实现。
 - [ ] 3.3 增加 Gateway 参数与 fiber socket 冒烟测试，对比 Direct+单槽、StackPool+单槽、StackPool+多槽的 HTTP 结果，并确认阻塞请求仍交给 bounded native request pool、过载仍返回 `503 GATEWAY_BUSY`；验证：运行新增 Gateway CTest/脚本并比较响应与现有 request-executor 指标；仅修改 Gateway 测试/接线，禁止把 SDK/2PC/同步 RPC 或存储路径迁入 Fiber。
 - [ ] 3.4 分别以 guard pages OFF/ON 构建 Pulsar，运行全部 `pulsar-*`、`stratakv-test-fiber-*` 和适用 Gateway 回归；验证：两套 `ctest --output-on-failure` 记录均全绿且默认 Direct+单槽输出与变更前一致；仅修复本 change 引入的失败，不清理或格式化无关脏文件。

@@ -18,6 +18,10 @@ add_executable(stratakv-test-scheduler-cache ../src/pulsar/tests/scheduler_cache
 target_link_libraries(stratakv-test-scheduler-cache PRIVATE Pulsar::pulsar pthread dl)
 add_test(NAME stratakv-test-scheduler-cache COMMAND stratakv-test-scheduler-cache)
 
+add_executable(stratakv-test-reuse-integration ../src/pulsar/tests/reuse_integration_check.cpp)
+target_link_libraries(stratakv-test-reuse-integration PRIVATE Pulsar::pulsar pthread dl)
+add_test(NAME stratakv-test-reuse-integration COMMAND stratakv-test-reuse-integration)
+
 add_executable(stratakv-test-bounded-thread-pool bounded_thread_pool_check.cpp)
 target_link_libraries(stratakv-test-bounded-thread-pool PRIVATE pthread)
 add_test(NAME stratakv-test-bounded-thread-pool COMMAND stratakv-test-bounded-thread-pool)
@@ -31,6 +35,12 @@ target_link_libraries(stratakv-test-tso PRIVATE stratakv_core pthread)
 add_dependencies(stratakv-test-tso stratakv-tso)
 add_test(NAME stratakv-test-tso COMMAND stratakv-test-tso)
 set_tests_properties(stratakv-test-tso PROPERTIES TIMEOUT 120)
+
+# Self-contained 3-member TSO A/B benchmark. It is intentionally not a CTest
+# because latency/throughput measurements are machine- and build-dependent.
+add_executable(stratakv-test-tso-range-benchmark tso_range_benchmark.cpp)
+target_link_libraries(stratakv-test-tso-range-benchmark PRIVATE stratakv_core pthread)
+add_dependencies(stratakv-test-tso-range-benchmark stratakv-tso)
 
 add_executable(stratakv-test-timestamp-oracle timestamp_oracle_check.cpp)
 target_link_libraries(stratakv-test-timestamp-oracle PRIVATE stratakv_core pthread)

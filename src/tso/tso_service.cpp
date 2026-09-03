@@ -50,5 +50,17 @@ void TsoService::Status(google::protobuf::RpcController*, const tsoRpcProtocol::
   response->set_highwater(oracle_->HighWater());
   response->set_protocolversion(TsoConsensusNode::kProtocolVersion);
   response->set_hybridlogical(true);
+  response->set_rangeproposalcount(oracle_->RangeProposalCount());
+  response->set_rangereservationcount(oracle_->RangeReservationCount());
+  response->set_timestampallocationcount(oracle_->TimestampAllocationCount());
+  response->set_rangesize(oracle_->RangeSize());
+  response->set_nexttimestamp(oracle_->NextTimestamp());
+  response->set_activerangehighwater(oracle_->ActiveRangeHighWater());
+  response->set_fencevalid(oracle_->HasValidFence());
+  const uint64_t reservations = oracle_->RangeReservationCount();
+  response->set_averagetimestampsperreservation(
+      reservations == 0 ? 0.0
+                        : static_cast<double>(oracle_->TimestampAllocationCount()) /
+                              static_cast<double>(reservations));
   done->Run();
 }

@@ -269,13 +269,14 @@ bash deploy/stratakv-server reset --project my-db
 | 程序 | 用途 |
 | --- | --- |
 | `bin/stratakv-node` | 数据节点，承载 Region、Raft 副本和 RocksDB |
-| `bin/stratakv-tso` | TSO 控制层成员，运行独立 Raft Group 并持久化预分配水位 |
+| `bin/stratakv-tso` | TSO 控制层成员，以 Raft 提交 high-water range 并在有效 fence 内发号 |
 | `bin/stratakv-gateway` | 面向业务的 HTTP/JSON 事务入口 |
 | `bin/stratakv-client` | 业务 CLI，支持单条命令和交互事务 |
 | `bin/stratakv-admin` | 直连内部 RPC 的开发与运维工具 |
 | `bin/stratakv-test-fiber-sync` | Pulsar 同步原语正确性测试 |
 | `bin/stratakv-test-bounded-thread-pool` | 有界线程池与过载背压正确性测试 |
 | `bin/stratakv-test-tso` | 多客户端全局时间戳与崩溃重启测试 |
+| `bin/stratakv-test-tso-range-benchmark` | range=1/4096 的三成员 TSO 同条件 A/B |
 | `bin/stratakv-test-fiber-benchmark` | Pulsar 性能与压力基准 |
 | `bin/stratakv-test-reliability` | 集群事务与持久化验证负载 |
 
@@ -342,6 +343,7 @@ cmake --build build --target stratakv_sdk
 cmake --build build --target stratakv-test-fiber-sync
 cmake --build build --target stratakv-test-bounded-thread-pool
 cmake --build build --target stratakv-test-tso
+cmake --build build --target stratakv-test-tso-range-benchmark
 cmake --build build --target stratakv-test-fiber-benchmark
 cmake --build build --target stratakv-test-reliability
 ```
@@ -433,8 +435,8 @@ deploy/runtime/<project>/
 ```
 
 `node-N/run_data/` 包含 RocksDB、Raft 状态和快照，不是构建缓存。
-`tso-N/tso.state` 保存各成员已预留的时间戳上界，`tso-N/run_data/` 保存控制层
-Raft 日志和快照；停止集群时必须与节点数据一起保留。
+`tso-N/tso.state` 只保存该成员的 crash-safe candidate floor；集群权威 high-water
+位于 `tso-N/run_data/` 的 Raft 日志和快照。停止集群时二者都必须与节点数据一起保留。
 
 当前 Raft 端口固定，因此同一台机器不能同时运行两套本地集群。修改
 `--gateway-port` 只会改变 Gateway 端口，不会改变 Raft 端口：
@@ -451,7 +453,9 @@ Raft 日志和快照；停止集群时必须与节点数据一起保留。
 `RpcProvider`；KV 与 Raft 请求通过协议中的 `RegionId` 分发到对应的轻量
 `RegionPeer`。Region Peer 仍分别维护 Raft、MVCC、快照和 RocksDB 数据目录。
 三个 `stratakv-tso` 进程组成独立的控制层 Raft Group，同一时刻只有 Leader 发号；
-Leader 故障后多数派自动选主。该控制层只负责全局时间戳，不参与 Region 路由或调度。
+Raft 一次提交一段 high-water range，Leader 在 150 ms 多数派 fence 有效且区间未耗尽
+时以原子递增发号。Leader 故障后新 Leader 跳过旧活动区间；失去 quorum 后即使本地
+仍有余额也停止服务。该控制层只负责全局时间戳，不参与 Region 路由或调度。
 
 ## 7. 测试与基准
 
@@ -461,8 +465,8 @@ Leader 故障后多数派自动选主。该控制层只负责全局时间戳，�
 ctest --test-dir build --output-on-failure
 ```
 
-当前 CTest 自动执行 Pulsar Fiber 切换/reset/异常边界、Fiber 同步、Scheduler work stealing/线程亲和、有界线程池、事务调度，以及 TSO 多客户端并发、
-少数派拒绝、Leader 切换和全控制层重启测试。集群测试
+当前 CTest 自动执行 Pulsar Fiber 切换/reset/异常边界、Fiber 同步、Scheduler work stealing/线程亲和、有界线程池、事务调度，以及 TSO 多 range 并发、
+Observe、stale/crashed Leader、未提交 reservation、少数派 fence、Snapshot 和全控制层重启测试。集群测试
 不会自动注册到 CTest，避免在普通构建过程中启动服务和写入持久化数据。
 
 ### 7.2 集群冒烟测试
@@ -505,7 +509,22 @@ result=PASS
 bash deploy/stratakv-reliability --help
 ```
 
-### 7.4 Pulsar 基准
+### 7.4 TSO range 基准
+
+```bash
+cmake --build build --target stratakv-test-tso-range-benchmark
+./bin/stratakv-test-tso-range-benchmark \
+  --requests 2048 --clients 8 --warmup 128 \
+  --baseline-range 1 --optimized-range 4096
+```
+
+该自包含基准为每组启动三个临时 TSO 进程，只改变 range size，并输出吞吐、
+P50/P95/P99、Raft proposal 数和实际 allocations/reservation。正式数据与边界见
+`docs/性能报告/2026-09-03-TSO-Range预留优化.md`。
+
+部署时可通过 `--tso-range-size N` 修改默认的 4096；一般只在 A/B 或诊断时调整。
+
+### 7.5 Pulsar 基准
 
 运行完整的多轮协程基准：
 

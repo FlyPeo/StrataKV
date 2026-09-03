@@ -30,8 +30,9 @@ class TimestampOracle {
   virtual void Observe(uint64_t ts) = 0;
 };
 
-// Single-process allocator used by stratakv-tso. Before timestamps from a new
-// segment become visible, the segment's upper bound is durably persisted.
+// Durable single-process allocator. TsoConsensusNode uses it only as a
+// per-member crash-safe candidate floor; the cluster-wide authoritative
+// high-water and publish decision belong to the TSO Raft state machine.
 class PersistentTimestampOracle final : public TimestampOracle {
  public:
   using Clock = std::function<uint64_t()>;

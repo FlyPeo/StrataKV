@@ -27,6 +27,7 @@ Options:
   --project NAME     Persistent deployment name. Default: stratakv-local.
   --gateway-port P   Local HTTP Gateway port. Default: 8080.
   --tso-port P       First of three TSO control-plane ports. Default: 26300.
+  --tso-range-size N Timestamp values reserved per TSO Raft proposal. Default: 4096.
   --gateway-runtime MODE
                      Gateway concurrency mode: thread or fiber. Default: thread.
   --gateway-workers N
@@ -54,6 +55,7 @@ replicas=3
 project=stratakv-local
 gateway_port=8080
 tso_port=26300
+tso_range_size=4096
 gateway_runtime=thread
 gateway_workers=4
 gateway_request_workers=16
@@ -69,6 +71,7 @@ while [ "$#" -gt 0 ]; do
     --project) project=${2:?--project requires a value}; shift 2 ;;
     --gateway-port) gateway_port=${2:?--gateway-port requires a value}; shift 2 ;;
     --tso-port) tso_port=${2:?--tso-port requires a value}; shift 2 ;;
+    --tso-range-size) tso_range_size=${2:?--tso-range-size requires a value}; shift 2 ;;
     --gateway-runtime) gateway_runtime=${2:?--gateway-runtime requires a value}; shift 2 ;;
     --gateway-workers) gateway_workers=${2:?--gateway-workers requires a value}; shift 2 ;;
     --gateway-request-workers) gateway_request_workers=${2:?--gateway-request-workers requires a value}; shift 2 ;;
@@ -102,6 +105,8 @@ load_settings() {
   gateway_port=$(sed -n 's/^gateway_port=//p' "$settings_file")
   saved_tso_port=$(sed -n 's/^tso_port=//p' "$settings_file")
   [ -z "$saved_tso_port" ] || tso_port=$saved_tso_port
+  saved_tso_range_size=$(sed -n 's/^tso_range_size=//p' "$settings_file")
+  [ -z "$saved_tso_range_size" ] || tso_range_size=$saved_tso_range_size
   saved_gateway_runtime=$(sed -n 's/^gateway_runtime=//p' "$settings_file")
   [ -z "$saved_gateway_runtime" ] || gateway_runtime=$saved_gateway_runtime
   saved_gateway_workers=$(sed -n 's/^gateway_workers=//p' "$settings_file")
@@ -122,6 +127,9 @@ validate_topology() {
     echo "--tso-port must be between 1 and 65535." >&2; exit 2;
   }
   [ "$tso_port" -le 65533 ] || { echo "--tso-port must leave room for three consecutive ports." >&2; exit 2; }
+  is_uint "$tso_range_size" && [ "$tso_range_size" -gt 0 ] || {
+    echo "--tso-range-size must be a positive integer." >&2; exit 2;
+  }
   tso_index=0
   while [ "$tso_index" -lt 3 ]; do
     candidate=$((tso_port + tso_index))
@@ -201,6 +209,7 @@ write_regions() {
     echo "replicas=3"
     echo "gateway_port=${gateway_port}"
     echo "tso_port=${tso_port}"
+    echo "tso_range_size=${tso_range_size}"
     echo "gateway_runtime=${gateway_runtime}"
     echo "gateway_workers=${gateway_workers}"
     echo "gateway_request_workers=${gateway_request_workers}"
@@ -252,7 +261,8 @@ start_tso_node() {
     setsid "$tso_bin" \
       --node-id "$node_id" \
       --peers "$(time_service_endpoints)" \
-      --state-file "${data_dir}/tso.state" >>"$log" 2>&1 </dev/null &
+      --state-file "${data_dir}/tso.state" \
+      --range-size "$tso_range_size" >>"$log" 2>&1 </dev/null &
     echo "$!" >"$(pid_file "$name")"
   )
 }

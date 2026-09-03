@@ -17,7 +17,7 @@ namespace {
 void PrintUsage(const char* program) {
   std::cerr << "Usage: " << program
             << " --node-id <index> --peers <host:port,...> --state-file <path>"
-               " [--segment-size 4096]\n";
+               " [--range-size 4096]\n";
 }
 
 bool ParseUnsigned(const std::string& value, uint64_t* parsed) {
@@ -55,7 +55,7 @@ std::vector<TsoConsensusNode::Endpoint> ParsePeers(const std::string& value) {
 
 int main(int argc, char** argv) {
   uint64_t nodeId = std::numeric_limits<uint64_t>::max();
-  uint64_t segmentSize = 4096;
+  uint64_t rangeSize = 4096;
   std::string peersText;
   std::string stateFile;
 
@@ -72,15 +72,17 @@ int main(int argc, char** argv) {
       peersText = value;
     } else if (option == "--state-file") {
       stateFile = value;
-    } else if (option == "--segment-size") {
-      if (!ParseUnsigned(value, &segmentSize)) segmentSize = 0;
+    } else if (option == "--range-size" || option == "--segment-size") {
+      // --segment-size is retained as a compatibility alias for existing
+      // deployments; the value now controls the Raft reservation range.
+      if (!ParseUnsigned(value, &rangeSize)) rangeSize = 0;
     } else {
       PrintUsage(argv[0]);
       return EXIT_FAILURE;
     }
   }
 
-  if (peersText.empty() || stateFile.empty() || segmentSize == 0) {
+  if (peersText.empty() || stateFile.empty() || rangeSize == 0) {
     PrintUsage(argv[0]);
     return EXIT_FAILURE;
   }
@@ -89,7 +91,8 @@ int main(int argc, char** argv) {
     const auto peers = ParsePeers(peersText);
     if (nodeId >= peers.size()) throw std::invalid_argument("invalid TSO node id");
 
-    auto oracle = std::make_shared<TsoConsensusNode>(static_cast<int>(nodeId), peers, stateFile, segmentSize);
+    auto oracle =
+        std::make_shared<TsoConsensusNode>(static_cast<int>(nodeId), peers, stateFile, rangeSize);
     TsoService service(oracle);
     RpcProvider provider;
     provider.NotifyService(&service);
