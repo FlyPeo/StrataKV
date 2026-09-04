@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "bounded_thread_pool.h"
+#include "txn_2pc_failpoint.h"
 
 namespace {
 constexpr size_t kRegionTaskWorkers = 8;
@@ -429,6 +430,10 @@ TxnStatus DistributedTransactionCoordinator::Commit(Transaction* txn,
     return prewriteStatus;
   }
 
+  stratakv::transaction::failpoint::MaybeTrigger(
+      stratakv::transaction::failpoint::FailpointLocation::AfterAllPrewriteBeforePrimaryCommit,
+      options.testProjectToken);
+
   uint64_t commitTs = 0;
   try {
     do {
@@ -465,6 +470,10 @@ TxnStatus DistributedTransactionCoordinator::Commit(Transaction* txn,
       return TxnStatus::ResultUnknown;
     }
   }
+
+  stratakv::transaction::failpoint::MaybeTrigger(
+      stratakv::transaction::failpoint::FailpointLocation::AfterPrimaryCommitBeforeSecondaries,
+      options.testProjectToken);
 
   std::vector<std::string> secondaryKeys;
   for (const auto& key : prewritten) {

@@ -512,7 +512,9 @@ Raft::NodeStatus Raft::GetStatus() {
                     getLastLogIndex(), m_readIndexRequests, m_readIndexRounds,
                     m_readIndexCompleted,
                     m_appendEntriesSent.load(std::memory_order_relaxed),
-                    m_persistCount.load(std::memory_order_relaxed)};
+                    m_persistCount.load(std::memory_order_relaxed),
+                    m_lastSnapshotIncludeIndex, static_cast<uint64_t>(m_logs.size()),
+                    static_cast<uint64_t>(m_persister ? m_persister->RaftStateSize() : 0)};
 }
 
 std::vector<raftRpcProctoc::LogEntry> Raft::GetLogEntries(size_t maxEntries) {
@@ -662,6 +664,22 @@ void Raft::replicationWorker(int server) {
     ReplicationTask task = m_replicationQueues[server]->Pop();
     if (task.type == ReplicationTaskType::Snapshot) {
       leaderSendSnapShot(server);
+      continue;
+    }
+    bool staleAfterCompaction = false;
+    bool needsSnapshot = false;
+    {
+      std::lock_guard<std::mutex> lock(m_mtx);
+      staleAfterCompaction = task.appendEntriesArgs &&
+                             task.appendEntriesArgs->prevlogindex() < m_lastSnapshotIncludeIndex;
+      needsSnapshot = staleAfterCompaction && m_status == Leader &&
+                      m_nextIndex[server] <= m_lastSnapshotIncludeIndex;
+    }
+    if (staleAfterCompaction) {
+      // AppendEntries tasks are built before entering the per-follower queue.
+      // Once their prefix has been compacted, discard those stale copies and
+      // install the authoritative snapshot instead of replaying removed logs.
+      if (needsSnapshot) leaderSendSnapShot(server);
       continue;
     }
     sendAppendEntries(server, task.appendEntriesArgs, task.appendEntriesReply);
@@ -825,6 +843,29 @@ int Raft::getLogTermFromLogIndex(int logIndex) {
 }
 
 int Raft::GetRaftStateSize() { return m_persister->RaftStateSize(); }
+
+RaftLogGcDecision Raft::EvaluateLogGc(int stateMachineAppliedIndex,
+                                      const RaftLogGcConfig& config) {
+  std::lock_guard<std::mutex> lock(m_mtx);
+  // InstallSnapshot advances the Raft boundary before the Region apply loop
+  // restores the state machine. Never create another snapshot in that window.
+  if (stateMachineAppliedIndex < m_lastSnapshotIncludeIndex) return {};
+  const int appliedIndex =
+      std::min({stateMachineAppliedIndex, m_lastApplied, m_commitIndex, getLastLogIndex()});
+  int replicatedIndex = appliedIndex;
+  if (m_status == Leader) {
+    for (size_t peer = 0; peer < m_matchIndex.size(); ++peer) {
+      if (static_cast<int>(peer) == m_me) continue;
+      replicatedIndex = std::min(replicatedIndex, m_matchIndex[peer]);
+    }
+  }
+
+  return EvaluateRaftLogGc(
+      config, RaftLogGcState{m_lastSnapshotIncludeIndex, appliedIndex, replicatedIndex,
+                             static_cast<uint64_t>(m_logs.size()),
+                             static_cast<uint64_t>(m_persister ? m_persister->RaftStateSize()
+                                                               : 0)});
+}
 
 // Convert a logical log index after the snapshot boundary to a vector offset.
 int Raft::getSlicesIndexFromLogIndex(int logIndex) {
@@ -1082,7 +1123,7 @@ void Raft::raftPollerTicker() {
 
 // Initialize persistent state and start the long-running Raft workers.
 void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
-                std::shared_ptr<LockQueue<ApplyMsg>> applyCh) {
+                std::shared_ptr<LockQueue<ApplyMsg>> applyCh, bool deferActivation) {
   m_peers = peers;
   m_persister = persister;
   m_me = me;
@@ -1121,11 +1162,17 @@ void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::sh
   DPrintf("[Init&ReInit] Sever %d, term %d, lastSnapshotIncludeIndex {%d} , lastSnapshotIncludeTerm {%d}", m_me,
           m_currentTerm, m_lastSnapshotIncludeIndex, m_lastSnapshotIncludeTerm);
 
-  // Publish the fully initialized state before inbound RPC handlers are
-  // allowed to touch it. The release/acquire pair also makes applyChan and
-  // restored persistent state visible to the RPC worker threads.
-  m_initialized.store(true, std::memory_order_release);
   m_mtx.unlock();
+
+  if (!deferActivation) Activate();
+}
+
+void Raft::Activate() {
+  bool expected = false;
+  if (!m_backgroundWorkersStarted.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel)) {
+    return;
+  }
 
   // Consensus liveness must not depend on all perpetual tickers sharing one
   // cooperative scheduler thread. Under sustained load a lost timer wake-up
@@ -1149,6 +1196,10 @@ void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::sh
 
   std::thread t3(&Raft::applierTicker, this);
   t3.detach();
+
+  // Publish only after every worker and the owning Region state machine are
+  // ready. RPC handlers use acquire loads before touching restored state.
+  m_initialized.store(true, std::memory_order_release);
 }
 
 std::string Raft::persistData() {
@@ -1234,7 +1285,7 @@ void Raft::readPersist(std::string data) {
   }
 }
 
-void Raft::Snapshot(int index, std::string snapshot) {
+bool Raft::Snapshot(int index, std::string snapshot) {
   std::lock_guard<std::mutex> lg(m_mtx);
 
   if (m_lastSnapshotIncludeIndex >= index || index > m_commitIndex) {
@@ -1242,7 +1293,7 @@ void Raft::Snapshot(int index, std::string snapshot) {
         "[func-Snapshot-rf{%d}] rejects replacing log with snapshotIndex %d as current snapshotIndex %d is larger or "
         "smaller ",
         m_me, index, m_lastSnapshotIncludeIndex);
-    return;
+    return false;
   }
   auto lastLogIndex = getLastLogIndex();  //为了检查snapshot前后日志是否一样，防止多截取或者少截取日志
 
@@ -1266,4 +1317,5 @@ void Raft::Snapshot(int index, std::string snapshot) {
   myAssert(m_logs.size() + m_lastSnapshotIncludeIndex == lastLogIndex,
            format("logCount{%zu} + snapshotIndex{%d} != lastLogIndex{%d}", m_logs.size(),
                   m_lastSnapshotIncludeIndex, lastLogIndex));
+  return true;
 }

@@ -89,7 +89,8 @@ class RaftServiceDispatcher final : public raftRpcProctoc::raftRpc {
 
 class NodeServer {
  public:
-  NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalog, const std::string& tsoEndpoints = "");
+  NodeServer(int nodeId, RaftLogGcConfig raftLogGcConfig, const RegionCatalog& catalog,
+             const std::string& tsoEndpoints = "");
   ~NodeServer();
   void Start();
   NodeTxnScheduler* TxnSchedulerForTest() const { return txnScheduler_.get(); }

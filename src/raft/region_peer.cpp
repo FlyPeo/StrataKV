@@ -318,12 +318,6 @@ bool RegionPeer::GetCommandFromRaft(ApplyMsg message) {
     }
   }
   if (!applicationSucceeded) return false;
-  //到这里kvDB已经制作了快照
-  if (m_maxRaftState != -1) {
-    IfNeedToSendSnapShotCommand(message.CommandIndex, 9);
-    //如果raft的log太大（大于指定的比例）就把制作快照
-  }
-
   // Transaction writes use the node-level pending-task table. Raw KV and the
   // current TxnGet read barrier keep the legacy per-Region wait channel.
   if (IsNodeScheduledTxn(op.Operation)) {
@@ -421,6 +415,7 @@ void RegionPeer::ReadRaftApplyCommandLoop() {
     // listen to every command applied by its raft ,delivery to relative RPC Handler
 
     if (message.CommandValid) {
+      std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
       if (!GetCommandFromRaft(message)) {
         MarkStateMachineUnhealthy();
         return;
@@ -435,6 +430,7 @@ void RegionPeer::ReadRaftApplyCommandLoop() {
       }
     }
     if (message.SnapshotValid) {
+      std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
       GetSnapShotFromRaft(message);
     }
   }
@@ -532,16 +528,48 @@ void RegionPeer::ReleaseWaitApplyQueue(const std::string& reqKey, const WaitAppl
   }
 }
 
-void RegionPeer::IfNeedToSendSnapShotCommand(int raftIndex, int proportion) {
-  if (m_maxRaftState == -1) {
-    return;
-  }
+void RegionPeer::RaftLogGcLoop() {
+  while (true) {
+    std::this_thread::sleep_for(m_raftLogGcConfig.tickInterval);
 
-  const double snapshotThreshold = m_maxRaftState * proportion / 10.0;
-  if (m_raftNode->GetRaftStateSize() > snapshotThreshold) {
-    // Send SnapShot Command
-    auto snapshot = MakeSnapShot();
-    m_raftNode->Snapshot(raftIndex, snapshot);
+    std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
+    int appliedIndex = 0;
+    bool healthy = false;
+    {
+      std::lock_guard<std::mutex> progressLock(m_applyProgressMutex);
+      appliedIndex = m_stateMachineAppliedIndex;
+      healthy = m_stateMachineHealthy;
+    }
+    if (!healthy) continue;
+
+    const RaftLogGcDecision decision =
+        m_raftNode->EvaluateLogGc(appliedIndex, m_raftLogGcConfig);
+    if (!decision.ShouldGc()) continue;
+
+    const auto gcStartedAt = std::chrono::steady_clock::now();
+    std::string snapshot = MakeSnapShot();
+    if (!m_raftNode->Snapshot(decision.compactIndex, std::move(snapshot))) continue;
+    const uint64_t gcDurationMicros = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - gcStartedAt)
+            .count());
+
+    m_lastSnapShotRaftLogIndex = decision.compactIndex;
+    m_raftLogGcRuns.fetch_add(1, std::memory_order_relaxed);
+    m_raftLogGcReclaimedEntries.fetch_add(decision.reclaimableCount,
+                                          std::memory_order_relaxed);
+    m_raftLogGcLastDurationMicros.store(gcDurationMicros, std::memory_order_relaxed);
+    m_raftLogGcTotalDurationMicros.fetch_add(gcDurationMicros, std::memory_order_relaxed);
+    uint64_t previousMax = m_raftLogGcMaxDurationMicros.load(std::memory_order_relaxed);
+    while (previousMax < gcDurationMicros &&
+           !m_raftLogGcMaxDurationMicros.compare_exchange_weak(
+               previousMax, gcDurationMicros, std::memory_order_relaxed)) {
+    }
+    if (decision.Forced()) {
+      m_raftLogGcForcedRuns.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      m_raftLogGcSoftRuns.fetch_add(1, std::memory_order_relaxed);
+    }
   }
 }
 
@@ -612,7 +640,8 @@ void RegionPeer::List(google::protobuf::RpcController *controller, const ::raftK
   done->Run();
 }
 
-RegionPeer::RegionPeer(int physicalNodeId, int regionId, int localPeerId, int maxraftstate,
+RegionPeer::RegionPeer(int physicalNodeId, int regionId, int localPeerId,
+                       RaftLogGcConfig raftLogGcConfig,
                        std::string regionStartKey, std::string regionEndKey,
                        std::vector<std::pair<std::string, short>> peerAddresses,
                        const std::shared_ptr<NodeTxnScheduler>& nodeTxnScheduler)
@@ -621,7 +650,7 @@ RegionPeer::RegionPeer(int physicalNodeId, int regionId, int localPeerId, int ma
       m_regionId(regionId),
       m_regionStartKey(std::move(regionStartKey)),
       m_regionEndKey(std::move(regionEndKey)),
-      m_maxRaftState(maxraftstate),
+      m_raftLogGcConfig(std::move(raftLogGcConfig)),
       m_peerAddresses(std::move(peerAddresses)),
       m_nodeTxnScheduler(nodeTxnScheduler) {
   if (localPeerId < 0 || localPeerId >= static_cast<int>(m_peerAddresses.size())) {
@@ -728,7 +757,10 @@ void RegionPeer::Start() {
     servers.push_back(std::make_shared<RaftRpcUtil>(m_peerAddresses[peerIndex].first,
                                                    m_peerAddresses[peerIndex].second, m_regionId));
   }
-  m_raftNode->init(std::move(servers), m_me, m_persister, applyChan);
+  // Keep inbound Raft RPCs fenced until local snapshot recovery and the
+  // Region apply loop are ready. Otherwise InstallSnapshot can race this
+  // recovery and a newer snapshot can be overwritten by stale local data.
+  m_raftNode->init(std::move(servers), m_me, m_persister, applyChan, true);
 
   const auto snapshot = m_persister->ReadSnapshot();
   if (!snapshot.empty()) {
@@ -741,6 +773,9 @@ void RegionPeer::Start() {
   statusWriter.detach();
   std::thread applyThread(&RegionPeer::ReadRaftApplyCommandLoop, this);
   applyThread.detach();
+  std::thread raftLogGcThread(&RegionPeer::RaftLogGcLoop, this);
+  raftLogGcThread.detach();
+  m_raftNode->Activate();
 }
 
 void RegionPeer::WriteRaftStatusLoop() {
@@ -773,6 +808,20 @@ void RegionPeer::WriteRaftStatusLoop() {
            << ",\"readIndexCompleted\":" << status.readIndexCompleted
            << ",\"appendEntriesSent\":" << status.appendEntriesSent
            << ",\"raftPersistCount\":" << status.persistCount
+           << ",\"lastSnapshotIndex\":" << status.lastSnapshotIndex
+           << ",\"raftLogEntryCount\":" << status.logEntryCount
+           << ",\"raftStateBytes\":" << status.raftStateBytes
+           << ",\"raftLogGcRuns\":" << m_raftLogGcRuns.load(std::memory_order_relaxed)
+           << ",\"raftLogGcSoftRuns\":" << m_raftLogGcSoftRuns.load(std::memory_order_relaxed)
+           << ",\"raftLogGcForcedRuns\":" << m_raftLogGcForcedRuns.load(std::memory_order_relaxed)
+           << ",\"raftLogGcReclaimedEntries\":"
+           << m_raftLogGcReclaimedEntries.load(std::memory_order_relaxed)
+           << ",\"raftLogGcLastDurationMicros\":"
+           << m_raftLogGcLastDurationMicros.load(std::memory_order_relaxed)
+           << ",\"raftLogGcTotalDurationMicros\":"
+           << m_raftLogGcTotalDurationMicros.load(std::memory_order_relaxed)
+           << ",\"raftLogGcMaxDurationMicros\":"
+           << m_raftLogGcMaxDurationMicros.load(std::memory_order_relaxed)
            << ",\"mvccLockCount\":" << mvccStats.lockCount << ",\"mvccWriteCount\":" << mvccStats.writeCount
            << ",\"mvccDataVersionCount\":" << mvccStats.dataVersionCount
            << ",\"mvccWriteBatchCount\":" << mvccStats.writeBatchCount

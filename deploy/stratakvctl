@@ -41,8 +41,9 @@ client() { bash "${deploy_dir}/stratakv-client" "$@" --project "$project"; }
 
 case "${1:-}" in
   init)
-    cmake -S "${deploy_dir}/.." -B "${deploy_dir}/../build" -DCMAKE_BUILD_TYPE=Release
-    cmake --build "${deploy_dir}/../build" -j"$(nproc)"
+    build_dir="${deploy_dir}/../build/stratakv/release"
+    cmake -S "${deploy_dir}/.." -B "$build_dir" -DCMAKE_BUILD_TYPE=Release
+    cmake --build "$build_dir" -j"$(nproc)"
     ;;
   up) server up --gateway-port "$gateway_port" --tso-port "$tso_port" ;;
   down) server down ;;

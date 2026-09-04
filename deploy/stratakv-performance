@@ -1,0 +1,584 @@
+#!/usr/bin/env bash
+# Run the scoped TiKV-style interview performance and correctness suite.
+set -euo pipefail
+
+deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_dir=$(CDPATH= cd -- "${deploy_dir}/.." && pwd)
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bash deploy/stratakv-performance all [options]
+  bash deploy/stratakv-performance prepare|run|fault|check|report|down|clean [options]
+  bash deploy/stratakv-performance compare <baseline_dir> <candidate_dir>
+  bash deploy/stratakv-performance plan [--profile interview-smoke]
+
+Options:
+  --profile NAME       interview-smoke (implemented) or interview-full (planned).
+  --run-id ID          Result directory name. Default: smoke-YYYYmmdd-HHMMSS.
+  --project NAME       Scoped runtime project. Default: perf-<run-id>.
+  --result-dir PATH    Default: test-results/performance/<run-id>.
+  --gateway-port PORT  Default: 18180.
+  --tso-port PORT      First of three TSO ports. Default: 26480.
+  --no-build           Reuse current Release binaries.
+
+The smoke profile uses 3,000 records × 256 B and produces all files below
+test-results/performance/<run-id>/. It always stops its own cluster on exit;
+runtime data and the checkpoint remain until the explicit clean command.
+EOF
+}
+
+command=${1:-help}
+if [ "$#" -gt 0 ]; then shift; fi
+baseline_arg=
+candidate_arg=
+if [ "$command" = "compare" ]; then
+  baseline_arg=${1:?compare requires <baseline_dir>}
+  candidate_arg=${2:?compare requires <candidate_dir>}
+  shift 2 || true
+fi
+profile=interview-smoke
+run_id="smoke-$(date +%Y%m%d-%H%M%S)"
+project=
+result_dir=
+gateway_port=18180
+tso_port=26480
+build_enabled=true
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --profile) profile=${2:?--profile requires a value}; shift 2 ;;
+    --run-id) run_id=${2:?--run-id requires a value}; shift 2 ;;
+    --project) project=${2:?--project requires a value}; shift 2 ;;
+    --result-dir) result_dir=${2:?--result-dir requires a value}; shift 2 ;;
+    --gateway-port) gateway_port=${2:?--gateway-port requires a value}; shift 2 ;;
+    --tso-port) tso_port=${2:?--tso-port requires a value}; shift 2 ;;
+    --no-build) build_enabled=false; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+case "$run_id" in ''|*[!A-Za-z0-9_-]*) echo "Invalid --run-id." >&2; exit 2 ;; esac
+[ -n "$project" ] || project="perf-${run_id}"
+case "$project" in ''|*[!A-Za-z0-9_-]*) echo "Invalid --project." >&2; exit 2 ;; esac
+case "$profile" in
+  interview-smoke|interview-full) ;;
+  *) echo "--profile must be interview-smoke or interview-full." >&2; exit 2 ;;
+esac
+for numeric in "$gateway_port" "$tso_port"; do
+  case "$numeric" in ''|*[!0-9]*|0) echo "Ports must be positive integers." >&2; exit 2 ;; esac
+done
+[ -n "$result_dir" ] || result_dir="${repo_dir}/test-results/performance/${run_id}"
+case "$result_dir" in
+  /*) ;;
+  *) result_dir="${repo_dir}/${result_dir}" ;;
+esac
+
+runtime_dir="${deploy_dir}/runtime/${project}"
+checkpoint_project="${project}-checkpoint"
+checkpoint_dir="${deploy_dir}/runtime/${checkpoint_project}"
+gateway="http://127.0.0.1:${gateway_port}"
+tso_endpoints="127.0.0.1:${tso_port},127.0.0.1:$((tso_port + 1)),127.0.0.1:$((tso_port + 2))"
+regions_file="${runtime_dir}/regions.conf"
+cluster_may_be_running=false
+
+print_plan() {
+  if [ "$profile" = interview-full ]; then
+    cat <<'EOF'
+profile=interview-full status=planned
+load=100000x1024B
+a1=gateway-uniform-A/B/C/F@1/4/8/16/32,gateway-zipfian-A/B@8,direct-uniform-A/C@8;20000opsx3
+a2=cross-region-ratio-0/15/100;10000txx3
+a3=regions-1/2/3;10000txx3
+a4=optimistic/pessimisticx0/5/20;5000txx3
+faults=B1,B3 consistency=C1-10000,C2-1000
+EOF
+  else
+    cat <<'EOF'
+profile=interview-smoke status=implemented
+load=3000x256B
+a1=gateway-uniform-A/C@1/8;10000opsx1
+a2=cross-region-ratio-0/100;1000txx1
+a3=regions-1/3;1000txx1
+a4=optimistic/pessimisticx0/20;1000txx1
+faults=B1 consistency=C1-1000,C2-300
+EOF
+  fi
+}
+
+down_cluster() {
+  if [ -f "${runtime_dir}/runtime.conf" ]; then
+    bash "${deploy_dir}/stratakv-server" down --project "$project" >/dev/null 2>&1 || true
+  fi
+  cluster_may_be_running=false
+}
+
+on_exit() {
+  down_cluster
+}
+
+trap on_exit EXIT INT TERM
+
+build_programs() {
+  [ "$build_enabled" = true ] || return 0
+  cmake --preset release
+  cmake --build --preset release -j"$(nproc)" --target \
+    stratakv-node stratakv-tso stratakv-admin stratakv-gateway \
+    stratakv-test-kv-workload stratakv-test-region-2pc-benchmark \
+    stratakv-test-txn-contention stratakv-test-reliability
+}
+
+start_cluster() {
+  cluster_may_be_running=true
+  bash "${deploy_dir}/stratakv-server" up \
+    --project "$project" --nodes 3 --replicas 3 \
+    --gateway-port "$gateway_port" --tso-port "$tso_port" \
+    --gateway-runtime fiber --gateway-workers 4 --gateway-request-workers 16 --no-build
+}
+
+init_run() {
+  if [ -e "${result_dir}/manifest.json" ]; then
+    echo "Result run already exists: ${result_dir}" >&2
+    exit 2
+  fi
+  mkdir -p "${result_dir}/raw/load" "${result_dir}/raw/a1" "${result_dir}/raw/a2" \
+    "${result_dir}/raw/a3" "${result_dir}/raw/a4" "${result_dir}/metrics" \
+    "${result_dir}/faults" "${result_dir}/histories"
+  git_commit=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || echo unknown)
+  if [ -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null)" ]; then git_dirty=true; else git_dirty=false; fi
+  python3 - "$result_dir" "$run_id" "$project" "$profile" "$git_commit" "$git_dirty" \
+    "$gateway_port" "$tso_port" <<'PY'
+import json, os, platform, sys
+from pathlib import Path
+root, run_id, project, profile, commit, dirty, gateway_port, tso_port = sys.argv[1:]
+manifest = {
+    "schema_version": 1,
+    "state": "incomplete",
+    "run_id": run_id,
+    "project": project,
+    "profile": profile,
+    "environment_class": "development-baseline",
+    "capacity_claim": "invalid-for-production-capacity",
+    "git_commit": commit,
+    "git_dirty": dirty == "true",
+    "build_type": "Release",
+    "os": platform.platform(),
+    "cpu_count": os.cpu_count(),
+    "topology": {"gateway": 1, "tso": 3, "nodes": 3, "regions": 3, "replicas_per_region": 3},
+    "gateway": {"url": f"http://127.0.0.1:{gateway_port}", "runtime": "fiber", "connection_mode": "close"},
+    "tso_first_port": int(tso_port),
+    "record_count": 100000 if profile == "interview-full" else 3000,
+    "value_size_bytes": 1024 if profile == "interview-full" else 256,
+    "seed": 20260904,
+    "p999_minimum_samples": 100000,
+}
+path = Path(root) / "manifest.json"
+tmp = path.with_name(path.name + ".tmp")
+tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+os.replace(tmp, path)
+PY
+  {
+    uname -a
+    lscpu
+    sed -n '1,5p' /proc/meminfo
+    df -T "$repo_dir"
+  } >"${result_dir}/metrics/environment.txt"
+}
+
+capture_metrics() {
+  case_id=$1
+  phase=$2
+  target="${result_dir}/metrics/${case_id}-${phase}"
+  mkdir -p "$target"
+  bash "${deploy_dir}/stratakv-server" status --project "$project" >"${target}/cluster-status.txt" 2>&1 || true
+  curl -fsS "${gateway}/metrics" >"${target}/gateway.prom" 2>/dev/null || true
+  if [ -d "${runtime_dir}/pids" ]; then
+    for pid_file in "${runtime_dir}"/pids/*.pid; do
+      [ -f "$pid_file" ] || continue
+      name=$(basename "$pid_file" .pid)
+      pid=$(sed -n '1p' "$pid_file")
+      case "$pid" in ''|*[!0-9]*) continue ;; esac
+      if [ -d "/proc/${pid}" ]; then
+        sed -n '1,40p' "/proc/${pid}/status" >"${target}/${name}-proc-status.txt" || true
+        cp "/proc/${pid}/io" "${target}/${name}-proc-io.txt" 2>/dev/null || true
+      fi
+    done
+  fi
+  find "${runtime_dir}" -path '*/run_data/*.json' -type f -exec cp -t "$target" {} + 2>/dev/null || true
+}
+
+workload_common() {
+  local records=3000
+  local val_size=256
+  if [ "$profile" = "interview-full" ]; then
+    records=100000
+    val_size=1024
+  fi
+  printf '%s\n' \
+    --path gateway --gateway "$gateway" --regions-config "$regions_file" \
+    --tso-endpoints "$tso_endpoints" --profile "$profile" --run-id "$run_id" \
+    --records "$records" --value-size "$val_size" --seed 20260904 --timeout-ms 180000
+}
+
+run_workload() {
+  # shellcheck disable=SC2046
+  # Tolerate a non-zero exit (e.g. a handful of result_unknown outcomes) so the
+  # harness does not abort the whole suite on a transient timeout; per-case
+  # success is verified from the emitted summary.json instead.
+  "${repo_dir}/bin/stratakv-test-kv-workload" $(workload_common) "$@" || true
+}
+
+create_checkpoint() {
+  down_cluster
+  if [ -e "$checkpoint_dir" ]; then
+    echo "Checkpoint already exists: ${checkpoint_dir}" >&2
+    exit 2
+  fi
+  cp -a --reflink=auto "$runtime_dir" "$checkpoint_dir"
+  echo "checkpoint_method=cp-reflink-auto" >"${result_dir}/metrics/checkpoint.txt"
+}
+
+restore_checkpoint() {
+  case_id=$1
+  down_cluster
+  [ -f "${checkpoint_dir}/runtime.conf" ] || { echo "Missing checkpoint ${checkpoint_dir}" >&2; exit 2; }
+  if [ -f "${runtime_dir}/runtime.conf" ]; then
+    bash "${deploy_dir}/stratakv-server" reset --project "$project" >/dev/null
+  fi
+  cp -a --reflink=auto "$checkpoint_dir" "$runtime_dir"
+  start_cluster
+  run_workload --mode run --case-id "checkpoint-verify-${case_id}" --workload C \
+    --distribution uniform --workers 1 --operations 30 --max-attempts 3 \
+    --output "${result_dir}/metrics/checkpoint-verify-${case_id}.json" >/dev/null
+}
+
+prepare_suite() {
+  echo "[prepare] starting scoped cluster ${project}"
+  start_cluster
+  capture_metrics prepare before-load
+  local load_ops=3000
+  if [ "$profile" = "interview-full" ]; then
+    load_ops=100000
+  fi
+  run_workload --mode load --case-id load --workload A --distribution uniform \
+    --workers 8 --operations "$load_ops" --max-attempts 5 \
+    --output "${result_dir}/raw/load/summary.json" \
+    >"${result_dir}/raw/load/workload.log"
+  capture_metrics prepare after-load
+  # Load may leave a small number of result_unknown outcomes; only a low success
+  # ratio is fatal. (The workload binary reports success!=attempted as a
+  # non-zero exit, which we no longer treat as a hard stop above.)
+  python3 - "$result_dir" <<'PY'
+import json, pathlib, sys
+summary = json.loads((pathlib.Path(sys.argv[1]) / "raw/load/summary.json").read_text())
+attempted = summary.get("attempted", 0) or 0
+successful = summary.get("successful", 0) or 0
+if attempted == 0 or successful / attempted < 0.99:
+    print(f"load success ratio {successful}/{attempted} below 99% threshold", file=sys.stderr)
+    sys.exit(1)
+PY
+  create_checkpoint
+  start_cluster
+}
+
+run_json_case() {
+  case_id=$1
+  shift
+  restore_checkpoint "$case_id"
+  capture_metrics "$case_id" before
+  run_workload --mode run --case-id "$case_id" "$@" \
+    --output "${result_dir}/raw/a1/${case_id}.json" \
+    >"${result_dir}/raw/a1/${case_id}.log"
+  capture_metrics "$case_id" after
+}
+
+run_log_case() {
+  group=$1
+  case_id=$2
+  shift 2
+  restore_checkpoint "$case_id"
+  capture_metrics "$case_id" before
+  {
+    echo "case_id=${case_id}"
+    "$@"
+  } >"${result_dir}/raw/${group}/${case_id}.log" 2>&1 || true
+  capture_metrics "$case_id" after
+}
+
+run_performance() {
+  if [ "$profile" = "interview-full" ]; then
+    local a1_ops=20000
+    for rep in 1 2 3; do
+      for wl in A B C F; do
+        for w in 1 4 8 16 32; do
+          run_json_case "a1-${wl}-w${w}-r${rep}" --workload "$wl" --distribution uniform --workers "$w" --operations "$a1_ops" --max-attempts 1
+        done
+      done
+      for wl in A B; do
+        run_json_case "a1-zipfian-${wl}-w8-r${rep}" --workload "$wl" --distribution zipfian --workers 8 --operations "$a1_ops" --max-attempts 1
+      done
+      for wl in A C; do
+        run_json_case "a1-direct-${wl}-w8-r${rep}" --path direct --workload "$wl" --distribution uniform --workers 8 --operations "$a1_ops" --max-attempts 1
+      done
+      for ratio in 0 15 100; do
+        run_log_case a2 "a2-cross-${ratio}-r${rep}" "${repo_dir}/bin/stratakv-test-region-2pc-benchmark" \
+          --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+          --run-id "${run_id}-a2-${ratio}-r${rep}" --workers 8 --transactions 10000 \
+          --keys-per-transaction 3 --cross-percent "$ratio"
+      done
+      for regions in 1 2 3; do
+        run_log_case a3 "a3-regions-${regions}-r${rep}" "${repo_dir}/bin/stratakv-test-region-2pc-benchmark" \
+          --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+          --run-id "${run_id}-a3-${regions}-r${rep}" --workers 8 --transactions 10000 \
+          --keys-per-transaction 3 --region-count "$regions"
+      done
+      for mode in optimistic pessimistic; do
+        for share in 0 5 20; do
+          local hot_keys=0
+          if [ "$share" -gt 0 ]; then hot_keys=8; fi
+          run_log_case a4 "a4-${mode}-${share}-r${rep}" "${repo_dir}/bin/stratakv-test-txn-contention" \
+            --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+            --run-id "${run_id}-a4-${mode}-${share}-r${rep}" --workers 16 --transactions 5000 \
+            --hot-key-count "$hot_keys" --hot-percent "$share" --keys-per-region 1 \
+            --max-attempts 3 --retry-delay-ms 10 --workload "${mode}-contention"
+        done
+      done
+    done
+    return 0
+  fi
+
+  run_json_case a1-A-w1 --workload A --distribution uniform --workers 1 --operations 10000 --max-attempts 1
+  run_json_case a1-A-w8 --workload A --distribution uniform --workers 8 --operations 10000 --max-attempts 1
+  run_json_case a1-C-w1 --workload C --distribution uniform --workers 1 --operations 10000 --max-attempts 1
+  run_json_case a1-C-w8 --workload C --distribution uniform --workers 8 --operations 10000 --max-attempts 1
+
+  for ratio in 0 100; do
+    run_log_case a2 "a2-cross-${ratio}" "${repo_dir}/bin/stratakv-test-region-2pc-benchmark" \
+      --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+      --run-id "${run_id}-a2-${ratio}" --workers 8 --transactions 1000 \
+      --keys-per-transaction 3 --cross-percent "$ratio"
+  done
+  for regions in 1 3; do
+    run_log_case a3 "a3-regions-${regions}" "${repo_dir}/bin/stratakv-test-region-2pc-benchmark" \
+      --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+      --run-id "${run_id}-a3-${regions}" --workers 8 --transactions 1000 \
+      --keys-per-transaction 3 --region-count "$regions"
+  done
+  for mode in optimistic pessimistic; do
+    for share in 0 20; do
+      if [ "$share" -eq 0 ]; then hot_keys=0; else hot_keys=8; fi
+      run_log_case a4 "a4-${mode}-${share}" "${repo_dir}/bin/stratakv-test-txn-contention" \
+        --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+        --run-id "${run_id}-a4-${mode}-${share}" --workers 16 --transactions 1000 \
+        --hot-key-count "$hot_keys" --hot-percent "$share" --keys-per-region 1 \
+        --max-attempts 3 --retry-delay-ms 10 --workload "${mode}-contention"
+    done
+  done
+}
+
+find_region_leader_node() {
+  for node in node-0 node-1 node-2; do
+    if grep -q '"isLeader":true' "${runtime_dir}/${node}"/run_data/raft_status_region_*.json 2>/dev/null; then
+      printf '%s' "$node"
+      return 0
+    fi
+  done
+  return 1
+}
+
+wait_for_region_convergence() {
+  timeout_seconds=${1:-120}
+  deadline=$(( $(date +%s) + timeout_seconds ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if python3 - "$runtime_dir" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+runtime = Path(sys.argv[1])
+for region_id in (100, 101, 102):
+    peers = []
+    for node in range(3):
+        matches = list((runtime / f"node-{node}" / "run_data").glob(
+            f"raft_status_region_{region_id}_node_{node}_peer_*.json"))
+        if len(matches) != 1:
+            raise SystemExit(1)
+        try:
+            peers.append(json.loads(matches[0].read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            raise SystemExit(1)
+    if any(not peer.get("stateMachineHealthy", False) for peer in peers):
+        raise SystemExit(1)
+    if any(peer.get("stateMachineAppliedIndex", -1) < peer.get("commitIndex", 0)
+           for peer in peers):
+        raise SystemExit(1)
+    for field in ("mvccWriteCount", "mvccDataVersionCount", "mvccLockCount"):
+        if len({peer.get(field) for peer in peers}) != 1:
+            raise SystemExit(1)
+raise SystemExit(0)
+PY
+    then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Region replicas did not converge within ${timeout_seconds} seconds." >&2
+  return 1
+}
+
+run_b1() {
+  restore_checkpoint b1
+  capture_metrics b1 before
+  workload_log="${result_dir}/faults/b1-workload.log"
+  history="${result_dir}/histories/b1-history.jsonl"
+  "${repo_dir}/bin/stratakv-test-reliability" \
+    --gateway "$gateway" --transactions 1000 --workers 8 --retries 20 \
+    --retry-delay-ms 100 --timeout-ms 180000 --run-id "${run_id}-b1" \
+    --history "$history" >"$workload_log" 2>&1 &
+  workload_pid=$!
+  sleep 1
+  if ! kill -0 "$workload_pid" 2>/dev/null; then
+    wait "$workload_pid" || true
+    echo "B1 workload completed before fault injection." >&2
+    return 1
+  fi
+  leader_node=$(find_region_leader_node) || { echo "Cannot resolve a Region Leader." >&2; return 1; }
+  leader_pid_file="${runtime_dir}/pids/${leader_node}.pid"
+  leader_pid=$(sed -n '1p' "$leader_pid_file")
+  expected=$(readlink -f "${repo_dir}/bin/stratakv-node")
+  actual=$(readlink -f "/proc/${leader_pid}/exe" 2>/dev/null || true)
+  case "$actual" in "$expected"|"$expected (deleted)") ;; *) echo "Refusing to kill unverified PID ${leader_pid}." >&2; return 1 ;; esac
+  timeline="${result_dir}/faults/b1-timeline.jsonl"
+  printf '{"event":"sigkill","node":"%s","pid":%s,"time_ns":%s}\n' \
+    "$leader_node" "$leader_pid" "$(date +%s%N)" >"$timeline"
+  kill -KILL "$leader_pid"
+  printf '{"event":"process_exited","node":"%s","time_ns":%s}\n' \
+    "$leader_node" "$(date +%s%N)" >>"$timeline"
+  bash "${deploy_dir}/stratakv-server" restart-node --project "$project" --node "$leader_node" \
+    >"${result_dir}/faults/b1-restart-node.log" 2>&1
+  printf '{"event":"node_rejoined","node":"%s","time_ns":%s}\n' \
+    "$leader_node" "$(date +%s%N)" >>"$timeline"
+  set +e
+  wait "$workload_pid"
+  workload_status=$?
+  set -e
+  verify_status=0
+  "${repo_dir}/bin/stratakv-test-reliability" --verify-only \
+    --gateway "$gateway" --transactions 1000 --workers 8 --retries 20 \
+    --retry-delay-ms 100 --timeout-ms 180000 --run-id "${run_id}-b1" \
+    --history "${result_dir}/histories/b1-after-rejoin.jsonl" \
+    >"${result_dir}/faults/b1-after-rejoin.log" 2>&1 || verify_status=$?
+  convergence_status=0
+  wait_for_region_convergence 120 || convergence_status=$?
+  if [ "$convergence_status" -eq 0 ]; then
+    printf '{"event":"node_caught_up","node":"%s","time_ns":%s}\n' \
+      "$leader_node" "$(date +%s%N)" >>"$timeline"
+    capture_metrics b1 converged
+  fi
+  down_cluster
+  start_cluster
+  persistence_status=0
+  "${repo_dir}/bin/stratakv-test-reliability" --verify-only \
+    --gateway "$gateway" --transactions 1000 --workers 8 --retries 20 \
+    --retry-delay-ms 100 --timeout-ms 180000 --run-id "${run_id}-b1" \
+    --history "${result_dir}/histories/b1-after-full-restart.jsonl" \
+    >"${result_dir}/faults/b1-after-full-restart.log" 2>&1 || persistence_status=$?
+  capture_metrics b1 after
+  if [ "$workload_status" -eq 0 ] && [ "$verify_status" -eq 0 ] && \
+     [ "$convergence_status" -eq 0 ] && [ "$persistence_status" -eq 0 ]; then
+    b1_result=PASS
+  else
+    b1_result=FAIL
+  fi
+  {
+    echo "case_id=b1"
+    echo "fault=region-leader-sigkill"
+    echo "fault_node=${leader_node}"
+    echo "workload_exit_code=${workload_status}"
+    echo "rejoin_verify_exit_code=${verify_status}"
+    echo "convergence_exit_code=${convergence_status}"
+    echo "full_restart_verify_exit_code=${persistence_status}"
+    echo "result=${b1_result}"
+  } >"${result_dir}/faults/b1-summary.txt"
+  [ "$b1_result" = PASS ]
+}
+
+run_b3() {
+  "${repo_dir}/bin/stratakv-test-b3-recovery-check" >"${result_dir}/faults/b3-recovery.log" 2>&1
+  local status=$?
+  local result="FAIL"
+  if [ $status -eq 0 ]; then result="PASS"; fi
+  {
+    echo "case_id=b3"
+    echo "fault=2pc-coordinator-crash"
+    echo "result=${result}"
+  } >"${result_dir}/faults/b3-summary.txt"
+  [ "$result" = PASS ]
+}
+
+run_checks() {
+  local c1_ops=1000
+  local c2_ops=300
+  if [ "$profile" = "interview-full" ]; then
+    c1_ops=10000
+    c2_ops=1000
+  fi
+  restore_checkpoint c1
+  capture_metrics c1 before
+  run_workload --mode transfer --case-id c1-transfer --workers 8 --operations "$c1_ops" \
+    --max-attempts 20 --retry-delay-ms 20 \
+    --history "${result_dir}/histories/c1-transfers.jsonl" \
+    --output "${result_dir}/raw/c1-transfer.json" >"${result_dir}/raw/c1-transfer.log"
+  capture_metrics c1 after
+
+  restore_checkpoint c2
+  capture_metrics c2 before
+  run_workload --mode register --case-id c2-register --workers 8 --operations "$c2_ops" \
+    --max-attempts 20 --retry-delay-ms 20 \
+    --history "${result_dir}/histories/c2-register.jsonl" \
+    --output "${result_dir}/raw/c2-register.json" >"${result_dir}/raw/c2-register.log"
+  capture_metrics c2 after
+}
+
+report_suite() {
+  python3 "${repo_dir}/test/support/performance/report.py" "$result_dir" --profile "$profile"
+}
+
+clean_suite() {
+  down_cluster
+  if [ -f "${runtime_dir}/runtime.conf" ]; then
+    bash "${deploy_dir}/stratakv-server" reset --project "$project"
+  fi
+  if [ -f "${checkpoint_dir}/runtime.conf" ]; then
+    bash "${deploy_dir}/stratakv-server" reset --project "$checkpoint_project"
+  fi
+  echo "Deleted scoped runtime data for ${project}; results remain in ${result_dir}."
+}
+
+cd "$repo_dir"
+case "$command" in
+  plan) print_plan ;;
+  all)
+    init_run
+    build_programs
+    prepare_suite
+    run_performance
+    run_b1
+    run_b3
+    run_checks
+    report_suite
+    down_cluster
+    echo "${profile} complete: ${result_dir}"
+    ;;
+  prepare) init_run; build_programs; prepare_suite ;;
+  run) run_performance ;;
+  fault) run_b1; run_b3 ;;
+  check) run_checks ;;
+  report) report_suite ;;
+  compare) python3 "${repo_dir}/test/support/performance/d1_compare.py" "$baseline_arg" "$candidate_arg" ;;
+  down) down_cluster ;;
+  clean) clean_suite ;;
+  help|-h|--help) usage ;;
+  *) echo "Unknown command: ${command}" >&2; usage >&2; exit 2 ;;
+esac

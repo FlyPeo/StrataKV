@@ -17,6 +17,11 @@ if(STRATAKV_ENABLE_ASAN)
     add_link_options(-fsanitize=address)
 endif()
 
+option(STRATAKV_ENABLE_TEST_FAILPOINTS "Enable test-only failpoint barriers in 2PC coordinator" ON)
+if(STRATAKV_ENABLE_TEST_FAILPOINTS)
+    add_compile_definitions(STRATAKV_ENABLE_TEST_FAILPOINTS=1)
+endif()
+
 # Keep every user-facing executable in one predictable directory for all
 # generators and build configurations.
 set(STRATAKV_BIN_DIR "${PROJECT_SOURCE_DIR}/bin")

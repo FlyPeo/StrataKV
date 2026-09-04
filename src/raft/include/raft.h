@@ -20,6 +20,7 @@
 #include "config.h"
 #include <pulsar/pulsar.h>
 #include "raft_rpc_util.h"
+#include "raft_log_gc.h"
 #include "util.h"
 // Transport status used to distinguish an RPC failure from a Raft rejection.
 constexpr int Disconnected =
@@ -55,6 +56,9 @@ class Raft : public raftRpcProctoc::raftRpc {
     uint64_t readIndexCompleted;
     uint64_t appendEntriesSent;
     uint64_t persistCount;
+    int lastSnapshotIndex;
+    uint64_t logEntryCount;
+    uint64_t raftStateBytes;
   };
 
  private:
@@ -62,6 +66,7 @@ class Raft : public raftRpcProctoc::raftRpc {
   // establish connections during startup. Reject inbound Raft RPCs until all
   // persistent state and the apply channel have been initialized.
   std::atomic<bool> m_initialized{false};
+  std::atomic<bool> m_backgroundWorkersStarted{false};
   std::mutex m_mtx;
   std::condition_variable m_applyCond;
   std::vector<std::shared_ptr<RaftRpcUtil>> m_peers;
@@ -173,6 +178,8 @@ class Raft : public raftRpcProctoc::raftRpc {
   void getLastLogIndexAndTerm(int *lastLogIndex, int *lastLogTerm);
   int getLogTermFromLogIndex(int logIndex);
   int GetRaftStateSize();
+  RaftLogGcDecision EvaluateLogGc(int stateMachineAppliedIndex,
+                                  const RaftLogGcConfig& config);
   int getSlicesIndexFromLogIndex(int logIndex);
 
   bool sendRequestVote(int server, std::shared_ptr<raftRpcProctoc::RequestVoteArgs> args,
@@ -190,7 +197,7 @@ class Raft : public raftRpcProctoc::raftRpc {
   bool IsLeaderInTerm(int term);
 
   // Persist a service snapshot through index and compact the covered log prefix.
-  void Snapshot(int index, std::string snapshot);
+  bool Snapshot(int index, std::string snapshot);
 
  public:
   // 重写基类方法,因为rpc远程调用真正调用的是这个方法
@@ -205,7 +212,12 @@ class Raft : public raftRpcProctoc::raftRpc {
 
  public:
   void init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
-            std::shared_ptr<LockQueue<ApplyMsg>> applyCh);
+            std::shared_ptr<LockQueue<ApplyMsg>> applyCh, bool deferActivation = false);
+
+  // RegionPeer defers activation until its durable snapshot is restored and
+  // its apply loop is ready. This closes the startup window in which a newer
+  // InstallSnapshot could be accepted and then overwritten by local recovery.
+  void Activate();
 
  private:
   bool hasCommittedEntryInCurrentTermLocked();

@@ -254,12 +254,31 @@ HttpResponse Error(int status, const std::string& code, const std::string& messa
 
 class Gateway {
  public:
+  Gateway(std::function<std::shared_ptr<stratakv::Client>()> clientFactory,
+          std::string runtimeMode, size_t runtimeWorkers,
+          BoundedThreadPool* requestExecutor)
+      : clientFactory_(std::move(clientFactory)),
+        runtimeMode_(std::move(runtimeMode)),
+        runtimeWorkers_(runtimeWorkers),
+        requestExecutor_(requestExecutor) {}
+
   Gateway(std::shared_ptr<stratakv::Client> client, std::string runtimeMode, size_t runtimeWorkers,
           BoundedThreadPool* requestExecutor)
       : client_(std::move(client)),
         runtimeMode_(std::move(runtimeMode)),
         runtimeWorkers_(runtimeWorkers),
         requestExecutor_(requestExecutor) {}
+
+  std::shared_ptr<stratakv::Client> Client() {
+    std::lock_guard<std::mutex> lock(clientMutex_);
+    if (!client_ && clientFactory_) {
+      client_ = clientFactory_();
+    }
+    if (!client_) {
+      throw std::runtime_error("stratakv client is unavailable");
+    }
+    return client_;
+  }
 
   void ConnectionOpened() {
     acceptedConnections_.fetch_add(1, std::memory_order_relaxed);
@@ -283,7 +302,7 @@ class Gateway {
     if (request.method == "POST" && request.path == "/v1/transactions") {
       const auto lockTtlMs = JsonUint64(request.body, "lockTtlMs");
       if (!lockTtlMs) return Error(400, "INVALID_ARGUMENT", "JSON field lockTtlMs is required");
-      const auto transaction = client_->Begin(*lockTtlMs);
+      const auto transaction = Client()->Begin(*lockTtlMs);
       const std::string id = NewId();
       {
         std::lock_guard<std::mutex> lock(transactionsMutex_);
@@ -308,11 +327,11 @@ class Gateway {
       if (!key || key->empty()) return Error(400, "INVALID_ARGUMENT", "JSON string field key is required");
       stratakv::Result result;
       if (JsonBool(request.body, "delete", false)) {
-        result = client_->Delete(transaction, *key);
+        result = Client()->Delete(transaction, *key);
       } else {
         const auto value = JsonString(request.body, "value");
         if (!value) return Error(400, "INVALID_ARGUMENT", "JSON string field value is required for Put");
-        result = client_->Put(transaction, *key, *value);
+        result = Client()->Put(transaction, *key, *value);
       }
       return ResultResponse(result);
     }
@@ -320,42 +339,42 @@ class Gateway {
     if (request.method == "GET" && action.rfind("/keys/", 0) == 0) {
       const std::string key = PercentDecode(action.substr(std::string("/keys/").size()));
       if (key.empty()) return Error(400, "INVALID_ARGUMENT", "key is required");
-      return ResultResponse(client_->Get(transaction, key));
+      return ResultResponse(Client()->Get(transaction, key));
     }
 
     if (request.method == "POST" && action == "/commit") {
-      const stratakv::Result result = client_->Commit(transaction);
+      const stratakv::Result result = Client()->Commit(transaction);
       Remove(id);
       if (result.ok()) committed_.fetch_add(1, std::memory_order_relaxed);
       return ResultResponse(result);
     }
 
     if (request.method == "POST" && action == "/rollback") {
-      const stratakv::Result result = client_->Rollback(transaction);
+      const stratakv::Result result = Client()->Rollback(transaction);
       Remove(id);
       rolledBack_.fetch_add(1, std::memory_order_relaxed);
       return ResultResponse(result);
     }
     
     if (request.method == "GET" && action.empty()) {
-      const stratakv::TransactionStatusResult result = client_->QueryTransactionStatus(transaction);
+      const stratakv::TransactionStatusResult result = Client()->QueryTransactionStatus(transaction);
       return {HttpStatus(result.status), TransactionStatusResultJson(result)};
     }
     
     if (request.method == "POST" && action.rfind("/keys/", 0) == 0 && action.rfind("/lock") == action.size() - 5) {
       const std::string key = PercentDecode(action.substr(6, action.size() - 11)); // /keys/<key>/lock
       if (key.empty()) return Error(400, "INVALID_ARGUMENT", "key is required");
-      return ResultResponse(client_->GetForUpdate(transaction, key));
+      return ResultResponse(Client()->GetForUpdate(transaction, key));
     }
     
     if (request.method == "POST" && action == "/locks") {
       const auto keys = JsonStringArray(request.body, "keys");
       if (keys.empty()) return Error(400, "INVALID_ARGUMENT", "JSON array field keys is required");
       if (JsonBool(request.body, "read", false)) {
-        const stratakv::BatchResult result = client_->BatchGetForUpdate(transaction, keys);
+        const stratakv::BatchResult result = Client()->BatchGetForUpdate(transaction, keys);
         return {HttpStatus(result.status), BatchResultJson(result)};
       } else {
-        return ResultResponse(client_->LockKeys(transaction, keys));
+        return ResultResponse(Client()->LockKeys(transaction, keys));
       }
     }
 
@@ -392,7 +411,22 @@ class Gateway {
       openTransactions = transactions_.size();
     }
     std::ostringstream output;
-    const stratakv::ClientMetrics clientMetrics = client_->Metrics();
+    stratakv::ClientMetrics clientMetrics{};
+    {
+      std::lock_guard<std::mutex> lock(clientMutex_);
+      if (!client_ && clientFactory_) {
+        try {
+          client_ = clientFactory_();
+        } catch (...) {
+        }
+      }
+      if (client_) {
+        try {
+          clientMetrics = client_->Metrics();
+        } catch (...) {
+        }
+      }
+    }
     output << "# HELP stratakv_gateway_requests_total Total HTTP requests handled by the StrataKV gateway.\n"
            << "# TYPE stratakv_gateway_requests_total counter\n"
            << "stratakv_gateway_requests_total " << requests_.load() << "\n"
@@ -445,6 +479,8 @@ class Gateway {
     return output.str();
   }
 
+  std::function<std::shared_ptr<stratakv::Client>()> clientFactory_;
+  std::mutex clientMutex_;
   std::shared_ptr<stratakv::Client> client_;
   const std::string runtimeMode_;
   const size_t runtimeWorkers_;
@@ -699,7 +735,10 @@ int main(int argc, char** argv) {
           static_cast<size_t>(requestWorkers), static_cast<size_t>(requestWorkers) * 16);
     }
     if (tsoEndpoints.empty()) tsoEndpoints = tsoHost + ":" + std::to_string(tsoPort);
-    Gateway gateway(stratakv::Client::Connect(regionConfigPath, tsoEndpoints), runtimeMode,
+    auto clientFactory = [regionConfigPath, tsoEndpoints]() {
+      return stratakv::Client::Connect(regionConfigPath, tsoEndpoints);
+    };
+    Gateway gateway(std::move(clientFactory), runtimeMode,
                     runtimeMode == "fiber" ? static_cast<size_t>(runtimeWorkers) : 0,
                     requestExecutor.get());
     const int listener = socket(AF_INET, SOCK_STREAM, 0);

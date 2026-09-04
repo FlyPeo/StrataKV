@@ -5,6 +5,7 @@
 !/README.md
 !/THIRD_PARTY_NOTICES.md
 !/CMakeLists.txt
+!/CMakePresets.json
 
 # OpenSpec project workflow and Codex skills.
 !/.agents/

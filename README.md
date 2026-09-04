@@ -141,12 +141,15 @@ git submodule update --init --recursive
 ### 2.3 构建与自动测试
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j"$(nproc)"
-ctest --test-dir build --output-on-failure
+cmake --preset release
+cmake --build --preset release -j"$(nproc)"
+ctest --preset release
 ```
 
-构建产物输出到源码目录中的 `bin/` 和 `lib/`。当前 CTest 注册了 9 项测试，
+所有 CMake 中间文件统一位于 `build/`，并按项目和配置分类；例如主项目的
+Release、Debug 和 ASan 构建分别位于 `build/stratakv/release`、
+`build/stratakv/debug` 和 `build/stratakv/asan`。最终产物输出到源码目录中的
+`bin/` 和 `lib/`。当前 CTest 注册了 14 项测试，
 覆盖 Fiber 上下文/同步、Scheduler work stealing 与线程亲和、有界线程池、事务
 调度、TSO、TimestampOracle、事务协调器和 SDK contract；集群可靠性测试需要单独
 运行，见第 7 节。
@@ -304,27 +307,26 @@ bash deploy/stratakv-server reset --project my-db
 ### Release
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j"$(nproc)"
+cmake --preset release
+cmake --build --preset release -j"$(nproc)"
 ```
 
 ### Debug
 
 ```bash
-cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-debug -j"$(nproc)"
+cmake --preset debug
+cmake --build --preset debug -j"$(nproc)"
 ```
 
 ### AddressSanitizer
 
 ```bash
-cmake -S . -B build-asan \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DSTRATAKV_ENABLE_ASAN=ON
-cmake --build build-asan -j"$(nproc)"
+cmake --preset asan
+cmake --build --preset asan -j"$(nproc)"
 ```
 
-所有构建目录都会把最终程序写入同一个 `bin/`，静态库写入同一个 `lib/`。
+所有新构建都应使用上述 Preset，避免在仓库根目录新增 `build-*`。各配置仍会把
+最终程序写入同一个 `bin/`，静态库写入同一个 `lib/`。
 不要在集群运行时切换构建类型或覆盖正在运行的程序；应先执行：
 
 ```bash
@@ -334,18 +336,18 @@ bash deploy/stratakv-server down --project my-db
 常用单独目标：
 
 ```bash
-cmake --build build --target stratakv-node
-cmake --build build --target stratakv-tso
-cmake --build build --target stratakv-gateway
-cmake --build build --target stratakv-client
-cmake --build build --target stratakv-admin
-cmake --build build --target stratakv_sdk
-cmake --build build --target stratakv-test-fiber-sync
-cmake --build build --target stratakv-test-bounded-thread-pool
-cmake --build build --target stratakv-test-tso
-cmake --build build --target stratakv-test-tso-range-benchmark
-cmake --build build --target stratakv-test-fiber-benchmark
-cmake --build build --target stratakv-test-reliability
+cmake --build --preset release --target stratakv-node
+cmake --build --preset release --target stratakv-tso
+cmake --build --preset release --target stratakv-gateway
+cmake --build --preset release --target stratakv-client
+cmake --build --preset release --target stratakv-admin
+cmake --build --preset release --target stratakv_sdk
+cmake --build --preset release --target stratakv-test-fiber-sync
+cmake --build --preset release --target stratakv-test-bounded-thread-pool
+cmake --build --preset release --target stratakv-test-tso
+cmake --build --preset release --target stratakv-test-tso-range-benchmark
+cmake --build --preset release --target stratakv-test-fiber-benchmark
+cmake --build --preset release --target stratakv-test-reliability
 ```
 
 修改源码后停止进程、重新构建并用原数据启动：
@@ -462,12 +464,13 @@ Raft 一次提交一段 high-water range，Leader 在 150 ms 多数派 fence 有
 ### 7.1 CTest
 
 ```bash
-ctest --test-dir build --output-on-failure
+ctest --preset release
 ```
 
 当前 CTest 自动执行 Pulsar Fiber 切换/reset/异常边界、Fiber 同步、Scheduler work stealing/线程亲和、有界线程池、事务调度，以及 TSO 多 range 并发、
 Observe、stale/crashed Leader、未提交 reservation、少数派 fence、Snapshot 和全控制层重启测试。集群测试
-不会自动注册到 CTest，避免在普通构建过程中启动服务和写入持久化数据。
+不会自动注册到 CTest，避免在普通构建过程中启动服务和写入持久化数据。每个测试
+文件的职责和运行方式见 [`test/README.md`](test/README.md)。
 
 ### 7.2 集群冒烟测试
 
@@ -512,7 +515,7 @@ bash deploy/stratakv-reliability --help
 ### 7.4 TSO range 基准
 
 ```bash
-cmake --build build --target stratakv-test-tso-range-benchmark
+cmake --build --preset release --target stratakv-test-tso-range-benchmark
 ./bin/stratakv-test-tso-range-benchmark \
   --requests 2048 --clients 8 --warmup 128 \
   --baseline-range 1 --optimized-range 4096
@@ -542,7 +545,7 @@ bash deploy/stratakv-fiber-benchmark
 可安全重新生成、且不应提交到 Git：
 
 ```text
-build*/
+build/
 bin/
 lib/
 test-results/

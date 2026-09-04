@@ -37,7 +37,7 @@ class RegionPeer : public TxnRegionExecutor {
   std::shared_ptr<Persister> m_persister;
   std::shared_ptr<LockQueue<ApplyMsg> > applyChan;  // kvServer和raft节点的通信管道
   std::vector<std::pair<std::string, short>> m_peerAddresses;
-  int m_maxRaftState;                               // snapshot if log grows this big
+  RaftLogGcConfig m_raftLogGcConfig;
 
   // Serialized state used while producing and restoring Region snapshots.
   std::string m_serializedKVData;
@@ -53,6 +53,17 @@ class RegionPeer : public TxnRegionExecutor {
 
   std::atomic<uint64_t> m_prewriteApplyConflicts{0};
   std::atomic<uint64_t> m_txnRaftApplies{0};
+  std::atomic<uint64_t> m_raftLogGcRuns{0};
+  std::atomic<uint64_t> m_raftLogGcSoftRuns{0};
+  std::atomic<uint64_t> m_raftLogGcForcedRuns{0};
+  std::atomic<uint64_t> m_raftLogGcReclaimedEntries{0};
+  std::atomic<uint64_t> m_raftLogGcLastDurationMicros{0};
+  std::atomic<uint64_t> m_raftLogGcTotalDurationMicros{0};
+  std::atomic<uint64_t> m_raftLogGcMaxDurationMicros{0};
+
+  // The apply loop and the GC snapshotter share one state-machine boundary.
+  // This prevents a snapshot labelled N from observing part of command N+1.
+  std::mutex m_stateMachineExecutionMutex;
 
   // Raft::lastApplied means "delivered to applyChan". Linearizable reads must
   // instead wait for this Region state machine (including RocksDB) to finish.
@@ -67,7 +78,8 @@ class RegionPeer : public TxnRegionExecutor {
  public:
   RegionPeer() = delete;
 
-  RegionPeer(int physicalNodeId, int regionId, int localPeerId, int maxraftstate,
+  RegionPeer(int physicalNodeId, int regionId, int localPeerId,
+             RaftLogGcConfig raftLogGcConfig,
              std::string regionStartKey, std::string regionEndKey,
              std::vector<std::pair<std::string, short>> peerAddresses,
              const std::shared_ptr<NodeTxnScheduler>& nodeTxnScheduler);
@@ -128,8 +140,9 @@ class RegionPeer : public TxnRegionExecutor {
 
   void ReleaseWaitApplyQueue(const std::string& reqKey, const WaitApplyQueue& queue);
 
-  // 检查是否需要制作快照，需要的话就向raft之下制作快照
-  void IfNeedToSendSnapShotCommand(int raftIndex, int proportion);
+  // Periodically compact applied Raft logs. Soft GC stays behind every
+  // replicated peer; hard count/size limits may require snapshot catch-up.
+  void RaftLogGcLoop();
 
   // Install a snapshot delivered through the Region apply queue.
   void GetSnapShotFromRaft(ApplyMsg message);

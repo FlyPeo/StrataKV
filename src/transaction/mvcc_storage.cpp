@@ -1,5 +1,6 @@
 // Transaction subsystem: MVCC state over the local storage engine.
 #include "mvcc_storage.h"
+#include "timestamp_oracle.h"
 
 #include "kv_server_rpc.pb.h"
 
@@ -445,6 +446,9 @@ PreparedMvccWrite MvccStorage::PreparePrewrite(const std::string& key, const std
     mvccLock.legacyExpiry = existingLock->second.legacyExpiry;
   } else {
     mvccLock.forUpdateTs = forUpdateTs == 0 ? startTs : forUpdateTs;
+    const uint64_t baseMs = HlcTimestamp::PhysicalMs(mvccLock.forUpdateTs);
+    mvccLock.expireAtPhysicalMs = (baseMs > 0 ? baseMs : NowMs()) + ttlMs;
+    mvccLock.legacyExpiry = false;
   }
   if (isDelete) {
     prepared.modifications.push_back({KVBatchOpType::Delete, DataKey(key, startTs), {}});
@@ -1024,6 +1028,9 @@ TxnStatus MvccStorage::PrewriteLocked(const std::string& key, const std::string&
     mvccLock.legacyExpiry = existingLock->second.legacyExpiry;
   } else {
     mvccLock.forUpdateTs = forUpdateTs == 0 ? startTs : forUpdateTs;
+    const uint64_t baseMs = HlcTimestamp::PhysicalMs(mvccLock.forUpdateTs);
+    mvccLock.expireAtPhysicalMs = (baseMs > 0 ? baseMs : NowMs()) + ttlMs;
+    mvccLock.legacyExpiry = false;
   }
   std::vector<KVBatchOp> ops;
   if (isDelete) {
@@ -1187,8 +1194,10 @@ std::vector<std::pair<std::string, MvccLock>> MvccStorage::ExpiredLocks(uint64_t
   std::shared_lock<std::shared_mutex> lock(mutex_);
   std::vector<std::pair<std::string, MvccLock>> expired;
   for (const auto& item : locks_) {
-    const bool isExpired = !item.second.legacyExpiry && item.second.expireAtPhysicalMs != 0 &&
-                           item.second.expireAtPhysicalMs <= nowMs;
+    const bool isExpired = (!item.second.legacyExpiry && item.second.expireAtPhysicalMs != 0)
+                               ? (item.second.expireAtPhysicalMs <= nowMs)
+                               : (item.second.createTimeMs != 0 && item.second.ttlMs != 0 &&
+                                  item.second.createTimeMs + item.second.ttlMs <= nowMs);
     if (isExpired) {
       expired.push_back(item);
     }

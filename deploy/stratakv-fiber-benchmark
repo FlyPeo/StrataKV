@@ -5,14 +5,15 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 run_id="$(date +%Y%m%d-%H%M%S)-boost-context"
 result_dir="${1:-${project_dir}/test-results/fiber/${run_id}}"
 benchmark="${project_dir}/bin/stratakv-test-fiber-benchmark"
+build_dir="${project_dir}/build/stratakv/release"
 
 mkdir -p "${result_dir}"
 
-cmake -S "${project_dir}" -B "${project_dir}/build" \
+cmake -S "${project_dir}" -B "${build_dir}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DSTRATAKV_ENABLE_ASAN=OFF \
   -DPULSAR_FIBER_GUARD_PAGES=OFF
-cmake --build "${project_dir}/build" --target stratakv-test-fiber-benchmark stratakv-test-fiber-sync -j2
+cmake --build "${build_dir}" --target stratakv-test-fiber-benchmark stratakv-test-fiber-sync -j2
 
 {
   date --iso-8601=seconds
@@ -72,7 +73,7 @@ run_case hook-echo 5 taskset -c 0-1 "${benchmark}" --case hook-echo --count 1000
 run_case sync 5 taskset -c 0-3 "${benchmark}" --case sync --count 1000 --threads 4 --delay-ms 1
 run_case sync-heavy 5 taskset -c 0-3 "${benchmark}" --case sync --count 10000 --threads 4 --delay-ms 0
 
-if rg -n 'correctness=FAIL|\[assert by\]|timed out|stratakv-test-fiber-benchmark:' "${result_dir}"/*.txt; then
+if rg -n 'correctness=FAIL|\[assert by\]|timed out|pulsar-benchmark:' "${result_dir}"/*.txt; then
   echo "[fiber-benchmark] FAIL; an assertion, timeout, or correctness failure was recorded" >&2
   exit 1
 fi

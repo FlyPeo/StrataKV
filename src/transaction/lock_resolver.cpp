@@ -5,8 +5,11 @@
 
 namespace {
 bool IsExpired(const MvccLock& lock, uint64_t nowMs) {
-  return !lock.legacyExpiry && lock.expireAtPhysicalMs != 0 &&
-         lock.expireAtPhysicalMs <= nowMs;
+  if (!lock.legacyExpiry && lock.expireAtPhysicalMs != 0) {
+    return lock.expireAtPhysicalMs <= nowMs;
+  }
+  return lock.createTimeMs != 0 && lock.ttlMs != 0 &&
+         lock.createTimeMs + lock.ttlMs <= nowMs;
 }
 }  // namespace
 
@@ -34,9 +37,9 @@ PrimaryTxnStatus LockResolver::CheckPrimary(const std::string& primaryKey, uint6
   return PrimaryTxnStatus{TxnStatus::StorageError};
 }
 
-TxnStatus LockResolver::ResolveLock(const std::string& key, const MvccLock& lock) {
+TxnStatus LockResolver::ResolveLock(const std::string& key, const MvccLock& lock, uint64_t nowMs) {
   auto shard = router_->Route(key);
-  const uint64_t nowMs = HlcTimestamp::WallClockMs();
+  if (nowMs == 0) nowMs = HlcTimestamp::WallClockMs();
   if (!IsExpired(lock, nowMs)) return TxnStatus::LockConflict;
   const PrimaryTxnStatus primary = CheckPrimary(lock.primaryKey, lock.startTs, nowMs, true);
   if (primary.queryStatus != TxnStatus::Ok) return primary.queryStatus;
@@ -53,7 +56,7 @@ size_t LockResolver::ResolveExpiredLocks(uint64_t nowMs) {
   size_t resolved = 0;
   for (const auto& shard : router_->Shards()) {
     for (const auto& item : shard->ExpiredLocks(nowMs)) {
-      if (ResolveLock(item.first, item.second) == TxnStatus::Ok) {
+      if (ResolveLock(item.first, item.second, nowMs) == TxnStatus::Ok) {
         ++resolved;
       }
     }

@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -15,7 +17,11 @@ namespace {
 void PrintUsage(const char* program) {
   std::cerr << "Usage: " << program
             << " --node-id <id> --regions-config <regions.conf>"
-               " [--max-raft-state <bytes>] [--tso-endpoints <endpoints>]\n";
+               " [--raft-log-gc-threshold <count>]"
+               " [--raft-log-gc-count-limit <count>]"
+               " [--raft-log-gc-size-limit <bytes>]"
+               " [--raft-log-gc-tick-interval-ms <milliseconds>]"
+               " [--tso-endpoints <endpoints>]\n";
 }
 
 bool ParseInt(const std::string& text, int* value) {
@@ -32,6 +38,22 @@ bool ParseInt(const std::string& text, int* value) {
   }
 }
 
+bool ParseUint64(const std::string& text, uint64_t* value) {
+  if (text.empty() ||
+      std::any_of(text.begin(), text.end(), [](char ch) { return ch < '0' || ch > '9'; })) {
+    return false;
+  }
+  try {
+    size_t consumed = 0;
+    const unsigned long long parsed = std::stoull(text, &consumed);
+    if (consumed != text.size()) return false;
+    *value = static_cast<uint64_t>(parsed);
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -41,10 +63,7 @@ int main(int argc, char** argv) {
   }
 
   int nodeId = -1;
-  // Persist rewrites the complete Raft state. Keeping the default at 64 MiB
-  // causes severe O(log-size) write amplification before the first snapshot.
-  // A 1 MiB cap snapshots at 90% in RegionPeer and keeps long local runs bounded.
-  int maxRaftState = 1024 * 1024;
+  RaftLogGcConfig raftLogGcConfig;
   std::string regionsConfigPath;
   std::string tsoEndpoints;
 
@@ -63,11 +82,30 @@ int main(int argc, char** argv) {
       }
     } else if (option == "--regions-config") {
       regionsConfigPath = value;
-    } else if (option == "--max-raft-state") {
-      if (!ParseInt(value, &maxRaftState) || maxRaftState == 0) {
-        std::cerr << "invalid --max-raft-state: " << value << '\n';
+    } else if (option == "--raft-log-gc-threshold") {
+      if (!ParseUint64(value, &raftLogGcConfig.threshold) || raftLogGcConfig.threshold == 0) {
+        std::cerr << "invalid --raft-log-gc-threshold: " << value << '\n';
         return EXIT_FAILURE;
       }
+    } else if (option == "--raft-log-gc-count-limit") {
+      if (!ParseUint64(value, &raftLogGcConfig.countLimit) || raftLogGcConfig.countLimit == 0) {
+        std::cerr << "invalid --raft-log-gc-count-limit: " << value << '\n';
+        return EXIT_FAILURE;
+      }
+    } else if (option == "--raft-log-gc-size-limit" || option == "--max-raft-state") {
+      if (!ParseUint64(value, &raftLogGcConfig.sizeLimitBytes) ||
+          raftLogGcConfig.sizeLimitBytes == 0) {
+        std::cerr << "invalid " << option << ": " << value << '\n';
+        return EXIT_FAILURE;
+      }
+    } else if (option == "--raft-log-gc-tick-interval-ms") {
+      uint64_t intervalMs = 0;
+      if (!ParseUint64(value, &intervalMs) || intervalMs == 0 ||
+          intervalMs > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+        std::cerr << "invalid --raft-log-gc-tick-interval-ms: " << value << '\n';
+        return EXIT_FAILURE;
+      }
+      raftLogGcConfig.tickInterval = std::chrono::milliseconds(intervalMs);
     } else if (option == "--tso-endpoints") {
       tsoEndpoints = value;
     } else {
@@ -84,7 +122,7 @@ int main(int argc, char** argv) {
 
   try {
     const RegionCatalog catalog = RegionCatalog::LoadFromConfig(regionsConfigPath);
-    NodeServer server(nodeId, maxRaftState, catalog, tsoEndpoints);
+    NodeServer server(nodeId, raftLogGcConfig, catalog, tsoEndpoints);
     server.Start();
     while (true) {
       std::this_thread::sleep_for(std::chrono::hours(24));

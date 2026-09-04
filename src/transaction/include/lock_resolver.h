@@ -42,7 +42,7 @@ class LockResolver {
                                 uint64_t currentPhysicalMs = 0,
                                 bool rollbackIfExpired = false);
   // 根据 primary 裁决结果处理某个具体 key 上的锁。
-  TxnStatus ResolveLock(const std::string& key, const MvccLock& lock);
+  TxnStatus ResolveLock(const std::string& key, const MvccLock& lock, uint64_t nowMs = 0);
   // 扫描所有分片上的过期锁，并批量触发恢复处理。
   size_t ResolveExpiredLocks(uint64_t nowMs);
 

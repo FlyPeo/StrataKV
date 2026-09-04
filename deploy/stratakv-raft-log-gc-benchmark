@@ -1,0 +1,300 @@
+#!/usr/bin/env sh
+# 测试目标：量化 Raft Log GC 对全链路事务吞吐、尾延迟、资源占用、重启恢复和落后副本追赶的影响。
+# 测试策略：在同一台机器上依次启动两个全新三节点集群，分别关闭 GC 和使用默认 GC；每个数据规模
+#           先 load，再对固定键集执行 3 轮 update。最后用降低后的强制阈值构造可控的 InstallSnapshot。
+# 测试规模：8 workers；100/250/500 个跨三 Region 事务，对应 300/750/1500 个业务键；每档正式测量
+#           3 轮。追赶场景先写 100 个事务，再暂停一个 Follower 并写 200 个事务。
+# 验证内容：QPS、P50/P95/P99/P99.9/Max、GC 次数与耗时、Raft 状态大小、进程 CPU/IO、已确认事务
+#           原子性、Follower InstallSnapshot 追赶和节点重启后的全量回读。
+set -eu
+
+deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_dir=$(CDPATH= cd -- "${deploy_dir}/.." && pwd)
+run_stamp=$(date +%Y%m%d-%H%M%S)
+result_dir="${repo_dir}/test-results/performance/raft-log-gc-${run_stamp}"
+workers=8
+repetitions=3
+case_timeout_seconds=240
+paused_pid=
+active_project=
+
+usage() {
+  cat <<'EOF'
+Usage: bash deploy/stratakv-raft-log-gc-benchmark [options]
+
+Options:
+  --result-dir PATH  Result directory. Default: test-results/performance/raft-log-gc-<timestamp>.
+  --workers N        Concurrent transaction workers. Default: 8.
+  --repetitions N    Measured update rounds per scale. Default: 3.
+  --case-timeout N   Hard timeout for one load/update case in seconds. Default: 240.
+  --help             Show this help.
+
+The script requires current Release binaries and uses three temporary projects sequentially.
+All temporary clusters are stopped and reset, including on interruption.
+EOF
+}
+
+is_uint() { case "$1" in ''|*[!0-9]*) return 1 ;; *) [ "$1" -gt 0 ] ;; esac; }
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --result-dir) result_dir=${2:?--result-dir requires a value}; shift 2 ;;
+    --workers) workers=${2:?--workers requires a value}; shift 2 ;;
+    --repetitions) repetitions=${2:?--repetitions requires a value}; shift 2 ;;
+    --case-timeout) case_timeout_seconds=${2:?--case-timeout requires a value}; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+is_uint "$workers" || { echo "--workers must be a positive integer." >&2; exit 2; }
+is_uint "$repetitions" || { echo "--repetitions must be a positive integer." >&2; exit 2; }
+is_uint "$case_timeout_seconds" || { echo "--case-timeout must be a positive integer." >&2; exit 2; }
+
+server_script="${deploy_dir}/stratakv-server"
+load_bin="${repo_dir}/bin/stratakv-test-reliability"
+off_project="raft-gc-off-$$"
+on_project="raft-gc-on-$$"
+fault_project="raft-gc-fault-$$"
+
+cleanup() {
+  trap - EXIT INT TERM
+  if [ -n "$paused_pid" ]; then kill -CONT "$paused_pid" 2>/dev/null || true; fi
+  for project in "$off_project" "$on_project" "$fault_project"; do
+    bash "$server_script" reset --project "$project" >/dev/null 2>&1 || true
+  done
+}
+trap cleanup EXIT INT TERM
+
+[ -x "$load_bin" ] || { echo "Missing ${load_bin}; build the Release targets first." >&2; exit 1; }
+command -v timeout >/dev/null || { echo "GNU timeout is required." >&2; exit 1; }
+mkdir -p "$result_dir/raw" "$result_dir/fault" "$result_dir/summary"
+
+capture_environment() {
+  output=$1
+  {
+    echo "captured_at=$(date --iso-8601=seconds)"
+    echo "git_commit=$(git -C "$repo_dir" rev-parse --short HEAD)"
+    echo "working_tree_dirty=$(git -C "$repo_dir" diff --quiet && git -C "$repo_dir" diff --cached --quiet && echo false || echo true)"
+    echo "kernel=$(uname -srvm)"
+    echo "cpu_count=$(nproc)"
+    echo "clock_ticks=$(getconf CLK_TCK)"
+    echo "page_size=$(getconf PAGESIZE)"
+    echo "workers=${workers}"
+    echo "repetitions=${repetitions}"
+    echo "case_timeout_seconds=${case_timeout_seconds}"
+    echo
+    lscpu
+    echo
+    free -b
+    echo
+    df -B1 "$repo_dir"
+  } >"$output"
+}
+
+json_number() {
+  key=$1
+  file=$2
+  sed -n "s/.*\"${key}\":\([0-9][0-9]*\).*/\1/p" "$file"
+}
+
+snapshot_status() {
+  project=$1
+  destination=$2
+  runtime="${deploy_dir}/runtime/${project}"
+  mkdir -p "$destination"
+  for file in "$runtime"/node-*/run_data/raft_status_region_*.json; do
+    [ -f "$file" ] || continue
+    node=$(basename "$(dirname "$(dirname "$file")")")
+    cp "$file" "${destination}/${node}-$(basename "$file")"
+  done
+}
+
+capture_processes() {
+  project=$1
+  output=$2
+  runtime="${deploy_dir}/runtime/${project}"
+  now=$(date +%s%N)
+  echo "timestamp_ns,name,pid,user_ticks,system_ticks,rss_pages,read_bytes,write_bytes" >"$output"
+  for file in "$runtime"/pids/*.pid; do
+    [ -f "$file" ] || continue
+    name=$(basename "$file" .pid)
+    pid=$(sed -n '1p' "$file")
+    [ -r "/proc/${pid}/stat" ] || continue
+    set -- $(awk '{print $14, $15, $24}' "/proc/${pid}/stat")
+    user_ticks=$1
+    system_ticks=$2
+    rss_pages=$3
+    read_bytes=$(sed -n 's/^read_bytes: *//p' "/proc/${pid}/io")
+    write_bytes=$(sed -n 's/^write_bytes: *//p' "/proc/${pid}/io")
+    echo "${now},${name},${pid},${user_ticks},${system_ticks},${rss_pages},${read_bytes:-0},${write_bytes:-0}" >>"$output"
+  done
+}
+
+run_case() {
+  mode=$1
+  project=$2
+  case_name=$3
+  transactions=$4
+  run_id=$5
+  case_dir="${result_dir}/raw/${mode}/${case_name}"
+  runtime="${deploy_dir}/runtime/${project}"
+  mkdir -p "$case_dir"
+  snapshot_status "$project" "${case_dir}/status-before"
+  capture_processes "$project" "${case_dir}/process-before.csv"
+  du -sb "$runtime" >"${case_dir}/runtime-size-before.txt"
+  started=$(date +%s%N)
+  timeout --signal=TERM --kill-after=10s "$case_timeout_seconds" "$load_bin" \
+    --gateway "http://127.0.0.1:${gateway_port}" \
+    --transactions "$transactions" --workers "$workers" \
+    --retries 20 --timeout-ms 30000 --run-id "$run_id" \
+    --history "${case_dir}/history.jsonl" >"${case_dir}/workload.txt" 2>&1
+  finished=$(date +%s%N)
+  echo "wall_time_ns=$((finished - started))" >"${case_dir}/wall-time.txt"
+  sleep 4
+  capture_processes "$project" "${case_dir}/process-after.csv"
+  snapshot_status "$project" "${case_dir}/status-after"
+  du -sb "$runtime" >"${case_dir}/runtime-size-after.txt"
+}
+
+run_mode() {
+  mode=$1
+  project=$2
+  gateway_port=$3
+  tso_port=$4
+  threshold=$5
+  count_limit=$6
+  size_limit=$7
+  tick_ms=$8
+
+  active_project=$project
+  bash "$server_script" reset --project "$project" >/dev/null 2>&1 || true
+  bash "$server_script" up --project "$project" \
+    --gateway-port "$gateway_port" --tso-port "$tso_port" \
+    --gateway-runtime fiber --gateway-workers 6 --gateway-request-workers 32 \
+    --raft-log-gc-threshold "$threshold" \
+    --raft-log-gc-count-limit "$count_limit" \
+    --raft-log-gc-size-limit "$size_limit" \
+    --raft-log-gc-tick-interval-ms "$tick_ms" --no-build \
+    >"${result_dir}/raw/${mode}-cluster-start.txt" 2>&1
+
+  run_case "$mode" "$project" warmup 50 "${mode}-warmup"
+  for spec in "small 100" "medium 250" "large 500"; do
+    set -- $spec
+    scale=$1
+    transactions=$2
+    stable_run_id="${mode}-${scale}"
+    run_case "$mode" "$project" "${scale}-load" "$transactions" "$stable_run_id"
+    round=1
+    while [ "$round" -le "$repetitions" ]; do
+      run_case "$mode" "$project" "${scale}-r${round}" "$transactions" "$stable_run_id"
+      round=$((round + 1))
+    done
+  done
+
+  restart_dir="${result_dir}/raw/${mode}/restart-node-2"
+  mkdir -p "$restart_dir"
+  snapshot_status "$project" "${restart_dir}/status-before"
+  started=$(date +%s%N)
+  bash "$server_script" restart-node --project "$project" --node node-2 \
+    >"${restart_dir}/restart.txt" 2>&1
+  finished=$(date +%s%N)
+  echo "restart_time_ns=$((finished - started))" >"${restart_dir}/restart-time.txt"
+  sleep 4
+  snapshot_status "$project" "${restart_dir}/status-after"
+  "$load_bin" --gateway "http://127.0.0.1:${gateway_port}" \
+    --transactions 500 --workers "$workers" --retries 20 --timeout-ms 30000 \
+    --run-id "${mode}-large" --verify-only \
+    --history "${restart_dir}/verify-history.jsonl" >"${restart_dir}/verify.txt" 2>&1
+  bash "$server_script" verify --project "$project" >"${restart_dir}/cluster-verify.txt" 2>&1
+  cp "${deploy_dir}/runtime/${project}/runtime.conf" "${result_dir}/raw/${mode}-runtime.conf"
+  bash "$server_script" reset --project "$project" >/dev/null
+  active_project=
+}
+
+region_leader_status() {
+  project=$1
+  region=$2
+  runtime="${deploy_dir}/runtime/${project}"
+  for file in "$runtime"/node-*/run_data/raft_status_region_"${region}"_*.json; do
+    [ -f "$file" ] || continue
+    grep -q '"isLeader":true' "$file" && { echo "$file"; return 0; }
+  done
+  return 1
+}
+
+run_fault_case() {
+  project=$fault_project
+  gateway_port=18130
+  tso_port=26430
+  active_project=$project
+  bash "$server_script" reset --project "$project" >/dev/null 2>&1 || true
+  bash "$server_script" up --project "$project" \
+    --gateway-port "$gateway_port" --tso-port "$tso_port" \
+    --gateway-runtime fiber --gateway-workers 6 --gateway-request-workers 32 \
+    --raft-log-gc-threshold 1000000000 --raft-log-gc-count-limit 100 \
+    --raft-log-gc-size-limit 1073741824 --raft-log-gc-tick-interval-ms 200 \
+    --no-build >"${result_dir}/fault/cluster-start.txt" 2>&1
+
+  run_case fault "$project" preload 100 fault-preload
+  leader_file=$(region_leader_status "$project" 100)
+  leader_node=$(basename "$(dirname "$(dirname "$leader_file")")")
+  follower_node=node-0
+  [ "$leader_node" = node-0 ] && follower_node=node-1
+  follower_pid=$(sed -n '1p' "${deploy_dir}/runtime/${project}/pids/${follower_node}.pid")
+  follower_file=$(find "${deploy_dir}/runtime/${project}/${follower_node}/run_data" \
+    -maxdepth 1 -name 'raft_status_region_100_*.json' -type f | head -1)
+  follower_snapshot_before=$(json_number lastSnapshotIndex "$follower_file")
+
+  kill -STOP "$follower_pid"
+  paused_pid=$follower_pid
+  run_case fault "$project" follower-paused 200 fault-lag
+  sleep 3
+  leader_file=$(region_leader_status "$project" 100)
+  forced_snapshot=$(json_number lastSnapshotIndex "$leader_file")
+  forced_gc_runs=$(json_number raftLogGcForcedRuns "$leader_file")
+  resume_started=$(date +%s%N)
+  kill -CONT "$follower_pid"
+  paused_pid=
+
+  caught_up=false
+  attempt=0
+  while [ "$attempt" -lt 120 ]; do
+    sleep 1
+    follower_snapshot_after=$(json_number lastSnapshotIndex "$follower_file")
+    if [ -n "$follower_snapshot_after" ] && [ "$follower_snapshot_after" -ge "$forced_snapshot" ]; then
+      caught_up=true
+      break
+    fi
+    attempt=$((attempt + 1))
+  done
+  resume_finished=$(date +%s%N)
+  snapshot_status "$project" "${result_dir}/fault/status-final"
+  "$load_bin" --gateway "http://127.0.0.1:${gateway_port}" \
+    --transactions 200 --workers "$workers" --retries 20 --timeout-ms 30000 \
+    --run-id fault-lag --verify-only \
+    --history "${result_dir}/fault/verify-history.jsonl" >"${result_dir}/fault/verify.txt" 2>&1
+  {
+    echo "leader_node=${leader_node}"
+    echo "follower_node=${follower_node}"
+    echo "follower_snapshot_before=${follower_snapshot_before}"
+    echo "leader_forced_snapshot=${forced_snapshot}"
+    echo "leader_forced_gc_runs=${forced_gc_runs}"
+    echo "follower_snapshot_after=${follower_snapshot_after:-0}"
+    echo "snapshot_catchup=${caught_up}"
+    echo "snapshot_catchup_time_ns=$((resume_finished - resume_started))"
+  } >"${result_dir}/fault/summary.txt"
+  cp "${deploy_dir}/runtime/${project}/runtime.conf" "${result_dir}/fault/runtime.conf"
+  bash "$server_script" reset --project "$project" >/dev/null
+  active_project=
+  [ "$caught_up" = true ] || return 1
+}
+
+capture_environment "${result_dir}/environment.txt"
+echo "[1/3] GC disabled A/B baseline"
+run_mode off "$off_project" 18110 26410 1000000000 1000000000 1073741824 3000
+echo "[2/3] Default GC"
+run_mode on "$on_project" 18120 26420 50 196608 201326592 3000
+echo "[3/3] Forced GC and InstallSnapshot catch-up"
+run_fault_case
+echo "result_dir=${result_dir}"

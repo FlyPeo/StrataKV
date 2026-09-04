@@ -34,7 +34,15 @@ Options:
                      IOManager workers in fiber mode. Default: 4.
   --gateway-request-workers N
                      Native blocking-request workers in fiber mode. Default: 16.
-  --max-raft-state B Snapshot threshold base in bytes. Default: 1048576.
+  --raft-log-gc-threshold N
+                     Soft GC threshold in reclaimable entries. Default: 50.
+  --raft-log-gc-count-limit N
+                     Force GC at this many log entries. Default: 196608.
+  --raft-log-gc-size-limit B
+                     Force GC at this approximate log size. Default: 201326592 (192 MiB).
+  --raft-log-gc-tick-interval-ms N
+                     Raft log GC check period. Default: 3000.
+  --max-raft-state B Deprecated alias for --raft-log-gc-size-limit.
   --node NAME        Member selected by restart-node/restart-tso/logs/local-data.
   --prefix PREFIX    Key prefix used by local-data.
   --no-build         Reuse the current bin/ executables.
@@ -59,7 +67,10 @@ tso_range_size=4096
 gateway_runtime=thread
 gateway_workers=4
 gateway_request_workers=16
-max_raft_state=1048576
+raft_log_gc_threshold=50
+raft_log_gc_count_limit=196608
+raft_log_gc_size_limit=201326592
+raft_log_gc_tick_interval_ms=3000
 selected_node=all
 inspect_prefix=
 build_enabled=true
@@ -75,7 +86,11 @@ while [ "$#" -gt 0 ]; do
     --gateway-runtime) gateway_runtime=${2:?--gateway-runtime requires a value}; shift 2 ;;
     --gateway-workers) gateway_workers=${2:?--gateway-workers requires a value}; shift 2 ;;
     --gateway-request-workers) gateway_request_workers=${2:?--gateway-request-workers requires a value}; shift 2 ;;
-    --max-raft-state) max_raft_state=${2:?--max-raft-state requires a value}; shift 2 ;;
+    --raft-log-gc-threshold) raft_log_gc_threshold=${2:?--raft-log-gc-threshold requires a value}; shift 2 ;;
+    --raft-log-gc-count-limit) raft_log_gc_count_limit=${2:?--raft-log-gc-count-limit requires a value}; shift 2 ;;
+    --raft-log-gc-size-limit) raft_log_gc_size_limit=${2:?--raft-log-gc-size-limit requires a value}; shift 2 ;;
+    --raft-log-gc-tick-interval-ms) raft_log_gc_tick_interval_ms=${2:?--raft-log-gc-tick-interval-ms requires a value}; shift 2 ;;
+    --max-raft-state) raft_log_gc_size_limit=${2:?--max-raft-state requires a value}; shift 2 ;;
     --node) selected_node=${2:?--node requires a value}; shift 2 ;;
     --prefix) inspect_prefix=${2:?--prefix requires a value}; shift 2 ;;
     --no-build) build_enabled=false; shift ;;
@@ -113,8 +128,19 @@ load_settings() {
   [ -z "$saved_gateway_workers" ] || gateway_workers=$saved_gateway_workers
   saved_gateway_request_workers=$(sed -n 's/^gateway_request_workers=//p' "$settings_file")
   [ -z "$saved_gateway_request_workers" ] || gateway_request_workers=$saved_gateway_request_workers
-  saved_max_raft_state=$(sed -n 's/^max_raft_state=//p' "$settings_file")
-  [ -z "$saved_max_raft_state" ] || max_raft_state=$saved_max_raft_state
+  saved_raft_log_gc_threshold=$(sed -n 's/^raft_log_gc_threshold=//p' "$settings_file")
+  [ -z "$saved_raft_log_gc_threshold" ] || raft_log_gc_threshold=$saved_raft_log_gc_threshold
+  saved_raft_log_gc_count_limit=$(sed -n 's/^raft_log_gc_count_limit=//p' "$settings_file")
+  [ -z "$saved_raft_log_gc_count_limit" ] || raft_log_gc_count_limit=$saved_raft_log_gc_count_limit
+  saved_raft_log_gc_size_limit=$(sed -n 's/^raft_log_gc_size_limit=//p' "$settings_file")
+  if [ -n "$saved_raft_log_gc_size_limit" ]; then
+    raft_log_gc_size_limit=$saved_raft_log_gc_size_limit
+  else
+    saved_max_raft_state=$(sed -n 's/^max_raft_state=//p' "$settings_file")
+    [ -z "$saved_max_raft_state" ] || raft_log_gc_size_limit=$saved_max_raft_state
+  fi
+  saved_raft_log_gc_tick_interval_ms=$(sed -n 's/^raft_log_gc_tick_interval_ms=//p' "$settings_file")
+  [ -z "$saved_raft_log_gc_tick_interval_ms" ] || raft_log_gc_tick_interval_ms=$saved_raft_log_gc_tick_interval_ms
 }
 
 validate_topology() {
@@ -148,8 +174,17 @@ validate_topology() {
   is_uint "$gateway_request_workers" && [ "$gateway_request_workers" -gt 0 ] && [ "$gateway_request_workers" -le 256 ] || {
     echo "--gateway-request-workers must be between 1 and 256." >&2; exit 2;
   }
-  is_uint "$max_raft_state" && [ "$max_raft_state" -gt 0 ] || {
-    echo "--max-raft-state must be a positive integer." >&2; exit 2;
+  is_uint "$raft_log_gc_threshold" && [ "$raft_log_gc_threshold" -gt 0 ] || {
+    echo "--raft-log-gc-threshold must be a positive integer." >&2; exit 2;
+  }
+  is_uint "$raft_log_gc_count_limit" && [ "$raft_log_gc_count_limit" -gt 0 ] || {
+    echo "--raft-log-gc-count-limit must be a positive integer." >&2; exit 2;
+  }
+  is_uint "$raft_log_gc_size_limit" && [ "$raft_log_gc_size_limit" -gt 0 ] || {
+    echo "--raft-log-gc-size-limit must be a positive integer." >&2; exit 2;
+  }
+  is_uint "$raft_log_gc_tick_interval_ms" && [ "$raft_log_gc_tick_interval_ms" -gt 0 ] || {
+    echo "--raft-log-gc-tick-interval-ms must be a positive integer." >&2; exit 2;
   }
   [ "$nodes" -eq 3 ] && [ "$replicas" -eq 3 ] || {
     echo "Native local deployment currently requires --nodes 3 --replicas 3." >&2
@@ -163,10 +198,11 @@ validate_topology() {
 build_programs() {
   [ "$build_enabled" = true ] || return 0
   asan=${STRATAKV_ENABLE_ASAN:-OFF}
-  cmake -S "$repo_dir" -B "${repo_dir}/build" \
+  build_dir="${repo_dir}/build/stratakv/release"
+  cmake -S "$repo_dir" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
     -DSTRATAKV_ENABLE_ASAN="$asan"
-  cmake --build "${repo_dir}/build" -j"$(nproc)" \
+  cmake --build "$build_dir" -j"$(nproc)" \
     --target stratakv-node stratakv-tso stratakv-admin stratakv-gateway stratakv-client stratakv-test-reliability
 }
 
@@ -213,7 +249,10 @@ write_regions() {
     echo "gateway_runtime=${gateway_runtime}"
     echo "gateway_workers=${gateway_workers}"
     echo "gateway_request_workers=${gateway_request_workers}"
-    echo "max_raft_state=${max_raft_state}"
+    echo "raft_log_gc_threshold=${raft_log_gc_threshold}"
+    echo "raft_log_gc_count_limit=${raft_log_gc_count_limit}"
+    echo "raft_log_gc_size_limit=${raft_log_gc_size_limit}"
+    echo "raft_log_gc_tick_interval_ms=${raft_log_gc_tick_interval_ms}"
   } >"$settings_file"
 }
 
@@ -296,7 +335,10 @@ start_node() {
     setsid "$node_bin" \
       --node-id "$node_id" \
       --regions-config "$regions_file" \
-      --max-raft-state "$max_raft_state" >>"$log" 2>&1 </dev/null &
+      --raft-log-gc-threshold "$raft_log_gc_threshold" \
+      --raft-log-gc-count-limit "$raft_log_gc_count_limit" \
+      --raft-log-gc-size-limit "$raft_log_gc_size_limit" \
+      --raft-log-gc-tick-interval-ms "$raft_log_gc_tick_interval_ms" >>"$log" 2>&1 </dev/null &
     echo "$!" >"$(pid_file "$name")"
   )
 }
@@ -483,6 +525,7 @@ show_status() {
   echo "gateway=http://127.0.0.1:${gateway_port}"
   echo "tso=$(time_service_endpoints) leaders=$(tso_leader_count)"
   echo "gateway-runtime=${gateway_runtime} io-workers=${gateway_workers} request-workers=${gateway_request_workers}"
+  echo "raft-log-gc threshold=${raft_log_gc_threshold} count-limit=${raft_log_gc_count_limit} size-limit=${raft_log_gc_size_limit} tick-ms=${raft_log_gc_tick_interval_ms}"
   for region_id in 100 101 102; do
     echo "region-${region_id}: leaders=$(leader_count "$region_id")"
   done

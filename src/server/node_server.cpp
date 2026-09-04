@@ -19,7 +19,8 @@ void RegionUnavailable(Reply* response, google::protobuf::Closure* done) {
 
 }  // namespace
 
-NodeServer::NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalog, const std::string& tsoEndpoints)
+NodeServer::NodeServer(int nodeId, RaftLogGcConfig raftLogGcConfig,
+                       const RegionCatalog& catalog, const std::string& tsoEndpoints)
     : nodeId_(nodeId),
       txnScheduler_(std::make_shared<NodeTxnScheduler>()),
       kvService_(this),
@@ -44,7 +45,7 @@ NodeServer::NodeServer(int nodeId, int maxRaftState, const RegionCatalog& catalo
     }
 
     auto regionPeer = std::make_shared<RegionPeer>(
-        nodeId_, assignment.region.regionId, static_cast<int>(assignment.peerIndex), maxRaftState,
+        nodeId_, assignment.region.regionId, static_cast<int>(assignment.peerIndex), raftLogGcConfig,
         assignment.region.startKey, assignment.region.endKey,
         std::move(addresses), txnScheduler_);
     txnScheduler_->RegisterRegion(regionPeer);

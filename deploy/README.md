@@ -50,6 +50,26 @@ Raft 和 RocksDB 仍在原生线程或有界线程池中执行；请求队列满
 返回 HTTP 503。Fiber 模式的主要目标是给连接和线程资源设置上界，
 不保证在所有负载下比 `thread` 模式更快；生产取舍前应使用目标负载做 A/B。
 
+### Raft 日志压缩
+
+存储 Region 默认每 3 秒检查一次 Raft Log GC。至少有 50 条已经 Apply 且已复制到
+所有 Follower 的日志时执行软 GC；日志达到 196608 条或近似大小达到 192 MiB 时，
+强制压缩到本机已 Apply 的位置。落后到压缩边界之前的 Follower 会通过
+`InstallSnapshot` 追赶。
+
+```bash
+bash deploy/stratakv-server up \
+  --project my-db \
+  --raft-log-gc-threshold 50 \
+  --raft-log-gc-count-limit 196608 \
+  --raft-log-gc-size-limit 201326592 \
+  --raft-log-gc-tick-interval-ms 3000
+```
+
+`raft-log-gc-size-limit` 使用字节；默认 192 MiB，按 256 MiB Region 目标上限的
+四分之三设置。运行值会保存在项目的 `runtime.conf` 中，旧项目中的
+`max_raft_state` 会作为大小硬阈值继续读取。
+
 ## 状态与验证
 
 ```bash
@@ -185,6 +205,16 @@ bash deploy/stratakv-reliability run \
 脚本使用独立的 `reliability-db` 本地目录，运行时重启一个 Leader 所在节点，
 逐笔验证三 Region 原子性，再重启整个本地集群验证 RocksDB 持久化。完整参数可通过
 `bash deploy/stratakv-reliability --help` 查看。
+
+Raft Log GC 的开关 A/B、三档数据规模、节点重启和 Follower Snapshot 追赶使用：
+
+```bash
+bash deploy/stratakv-raft-log-gc-benchmark \
+  --result-dir test-results/performance/raft-log-gc-$(date +%Y%m%d-%H%M%S)
+```
+
+每档先 load，再对固定键集测量三轮。原始数据和报告统一写入指定目录；脚本退出时会
+停止并删除自己创建的三个临时项目。
 
 ## 常见问题
 

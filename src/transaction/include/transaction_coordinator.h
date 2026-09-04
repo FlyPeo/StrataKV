@@ -19,6 +19,8 @@ struct TxnOptions {
   uint64_t transactionTimeoutMs = 60000;
   // 单次协调器操作的本地端到端预算。跨 RPC 仅传剩余毫秒数。
   uint64_t rpcBudgetMs = 5000;
+  // 显式测试 project token，用于受控 2PC failpoint barrier。
+  std::string testProjectToken;
 };
 
 enum class TransactionState {
