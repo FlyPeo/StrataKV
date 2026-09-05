@@ -373,11 +373,11 @@ stop_process() {
   fi
   kill -TERM "$pid" 2>/dev/null || true
   attempt=0
-  while [ "$attempt" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+  while [ "$attempt" -lt 10 ] && managed_pid "$name" >/dev/null 2>&1; do
     sleep 1
     attempt=$((attempt + 1))
   done
-  if kill -0 "$pid" 2>/dev/null; then
+  if managed_pid "$name" >/dev/null 2>&1; then
     kill -KILL "$pid" 2>/dev/null || true
   fi
   rm -f "$file"

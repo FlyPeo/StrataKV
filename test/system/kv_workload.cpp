@@ -4,7 +4,7 @@
  *           C1 检查守恒，C2 按 quiescent epoch 对带 invocation/completion 时间的历史做有界线性化搜索。
  * 测试规模：interview-smoke 为 3,000×256 B、A/C 各 10,000 ops、1,000 transfers、
  *           300 register ops；interview-full 为 100,000×1 KiB、A1 完整 24 点 20,000 ops。
- * 验证内容：成功/失败吞吐与延迟口径明确、A1 各点指标完整、转账总额恒定、register 历史存在合法串行化。
+ * 验证内容：verify 全量检查 checkpoint 的初始键值；成功/失败吞吐与延迟口径明确、转账守恒、register 历史可线性化。
  */
 #include <algorithm>
 #include <atomic>
@@ -64,7 +64,7 @@ uint64_t Positive(const std::string& value, const std::string& option) {
 }
 
 void Usage(const char* program) {
-  std::cout << "Usage: " << program << " --mode load|run|a1-matrix|transfer|register [options]\n"
+  std::cout << "Usage: " << program << " --mode load|verify|run|a1-matrix|transfer|register [options]\n"
             << "  --path gateway|direct --regions-config PATH --run-id ID --case-id ID\n"
             << "  --gateway URL --tso-endpoints CSV --profile NAME\n"
             << "  --workload A|B|C|F --distribution uniform|zipfian\n"
@@ -108,9 +108,9 @@ Options Parse(int argc, char** argv) {
   if (options.regionsConfig.empty() || options.output.empty()) {
     throw std::invalid_argument("--regions-config and --output are required");
   }
-  if (options.mode != "load" && options.mode != "run" && options.mode != "a1-matrix" &&
+  if (options.mode != "load" && options.mode != "verify" && options.mode != "run" && options.mode != "a1-matrix" &&
       options.mode != "transfer" && options.mode != "register") {
-    throw std::invalid_argument("--mode must be load, run, a1-matrix, transfer, or register");
+    throw std::invalid_argument("--mode must be load, verify, run, a1-matrix, transfer, or register");
   }
   if (options.path != "gateway" && options.path != "direct") {
     throw std::invalid_argument("--path must be gateway or direct");
@@ -435,6 +435,28 @@ int main(int argc, char** argv) {
       const auto summary = perf::LoadRecords(spec, keys, factory, options.caseId);
       Publish(options, summary, "record");
       return summary.successful == summary.attempted ? 0 : 1;
+    }
+    if (options.mode == "verify") {
+      auto adapter = factory();
+      perf::RunSummary summary;
+      summary.caseId = options.caseId;
+      summary.path = options.path;
+      summary.workload = "verify";
+      summary.workers = 1;
+      const auto started = std::chrono::steady_clock::now();
+      for (uint64_t record = 0; record < options.records; ++record) {
+        ++summary.attempted;
+        const auto result = ReadOne(adapter.get(), keys.Key(record));
+        if (result.ok() && result.value == perf::StableValue(record, options.valueSize)) {
+          ++summary.successful;
+        } else {
+          ++summary.unavailable;
+          std::cerr << "checkpoint mismatch record=" << record << '\n';
+        }
+      }
+      summary.elapsedSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+      Publish(options, summary, "record");
+      return summary.successful == options.records ? 0 : 1;
     }
     if (options.mode == "run") {
       const auto summary = perf::RunRecords(spec, keys, factory, options.caseId);

@@ -110,7 +110,46 @@ def main() -> int:
         "a4-optimistic-0", "a4-optimistic-20", "a4-pessimistic-0", "a4-pessimistic-20",
         "c1-transfer", "c2-register",
     }
+    if args.profile == "interview-full":
+        points = [f"a1-{wl}-w{w}" for wl in "ABCF" for w in (1, 4, 8, 16, 32)]
+        points += [f"a1-zipfian-{wl}-w8" for wl in "AB"]
+        points += [f"a1-direct-{wl}-w8" for wl in "AC"]
+        points += [f"a2-cross-{v}" for v in (0, 15, 100)]
+        points += [f"a3-regions-{v}" for v in (1, 2, 3)]
+        points += [f"a4-{mode}-{v}" for mode in ("optimistic", "pessimistic") for v in (0, 5, 20)]
+        required = {f"{point}-r{rep}" for point in points for rep in (1, 2, 3)} | {"c1-transfer", "c2-register"}
     missing = sorted(required - cases.keys())
+    failures: list[str] = []
+    for name in sorted(required & cases.keys()):
+        case = cases[name]
+        expected = (20000 if args.profile == "interview-full" else 10000) if name.startswith("a1") else (
+            (1000 if args.profile == "interview-full" else 300) if name == "c2-register" else
+            (5000 if name.startswith("a4") else 10000) if args.profile == "interview-full" else 1000)
+        attempted = number(case, "attempted", "transactions_attempted", "transactions_total")
+        if attempted != expected:
+            failures.append(f"{name}: attempted={attempted:g}, expected={expected}")
+        for field in ("timeouts", "unavailable", "cleanup_pending", "result_unknown", "atomicity_failures", "transactions_failed"):
+            if number(case, field) != 0:
+                failures.append(f"{name}: {field}={case[field]}")
+        if name.startswith("a1"):
+            wl = case.get("workload")
+            if wl in ("A", "C"):
+                reads = expected // 2 if wl == "A" else expected
+                if number(case, "reads") != reads or number(case, "updates") != expected - reads:
+                    failures.append(f"{name}: incorrect read/update mix")
+    load = cases.get("load", {})
+    expected_records = 100000 if args.profile == "interview-full" else 3000
+    load_pass = number(load, "attempted") == expected_records and number(load, "successful") == expected_records
+    checkpoint_pass = True
+    checkpoint_cases = {name for name in required if name.startswith("a")} | {"b1", "c1", "c2"}
+    for name in sorted(checkpoint_cases):
+        path = run_dir / "metrics" / f"checkpoint-verify-{name}.json"
+        data = json.loads(path.read_text()) if path.exists() else {}
+        if number(data, "attempted") != expected_records or number(data, "successful") != expected_records:
+            checkpoint_pass = False
+            failures.append(f"checkpoint {name}: missing or incomplete verification")
+    cleanup_path = run_dir / "metrics/cleanup.json"
+    cleanup_pass = cleanup_path.exists() and json.loads(cleanup_path.read_text()).get("passed") is True
     b1_summary = run_dir / "faults" / "b1-summary.txt"
     b1_timeline = run_dir / "faults" / "b1-timeline.jsonl"
     b1_pass = (b1_summary.exists() and b1_timeline.exists()
@@ -124,8 +163,8 @@ def main() -> int:
     c2_pass = c2.get("linearizability", {}).get("result") == "pass"
     performance_success = all(number(cases[name], "successful", "transactions_committed") > 0
                               for name in required if name in cases and not name.startswith("c"))
-    b3_ok = b3_pass if b3_summary.exists() else True
-    complete = not missing and b1_pass and b3_ok and c1_pass and c2_pass and performance_success
+    complete = (not missing and not failures and load_pass and checkpoint_pass and cleanup_pass
+                and b1_pass and b3_pass and c1_pass and c2_pass and performance_success)
 
     rows: list[dict[str, Any]] = []
     for case_id, case in sorted(cases.items()):
@@ -160,13 +199,16 @@ def main() -> int:
         "state": "complete" if complete else "incomplete",
         "overall": "PASS" if complete else "FAIL",
         "missing_cases": missing,
-        "gates": {"performance_cases": performance_success, "b1": b1_pass, "c1": c1_pass, "c2": c2_pass},
+        "validation_failures": failures,
+        "gates": {"load": load_pass, "performance_cases": performance_success and not failures,
+                  "checkpoints": checkpoint_pass, "cleanup": cleanup_pass,
+                  "b1": b1_pass, "b3_simulated": b3_pass, "c1": c1_pass, "c2": c2_pass},
         "cases": cases,
     }
     atomic_json(run_dir / "summary.json", summary)
 
     lines = [
-        "# StrataKV interview-smoke 报告",
+        f"# StrataKV {args.profile} 报告",
         "",
         "> 本结果来自客户端与服务共置的 WSL，仅是 development baseline，不能作为生产容量。",
         "",
@@ -235,7 +277,7 @@ def main() -> int:
         f"- B1 Region Leader SIGKILL、追赶与完整重启校验：**{'PASS' if b1_pass else 'FAIL'}**；证据 `faults/`。",
     ]
     if b3_summary.exists():
-        lines.append(f"- B3 2PC Coordinator 崩溃恢复（Rollback / Roll-forward 幂等）：**{'PASS' if b3_pass else 'FAIL'}**；证据 `faults/b3-summary.txt`。")
+        lines.append(f"- B3 内存模拟恢复单元测试（异常模拟 Coordinator 崩溃，并非真实进程 SIGKILL）：**{'PASS' if b3_pass else 'FAIL'}**；证据 `faults/b3-recovery.log`。")
     lines += [
         f"- C1 并发转账总额守恒：**{'PASS' if c1_pass else 'FAIL'}**；证据 `{c1.get('source', 'missing')}`。",
         f"- C2 bounded register linearizability：**{'PASS' if c2_pass else 'FAIL'}**；证据 `{c2.get('source', 'missing')}` 与 `histories/`。",
@@ -243,6 +285,7 @@ def main() -> int:
         "- A1 的数据集横跨三个 Region，但每次 YCSB operation 只访问一个 record/Region。",
         "- A2/A3 的主体是完整三 mutation transaction，因此报告 TPS，不与 A1 OPS 混用。",
         "- smoke 每点只运行一次，只用于证明测试链路可执行；性能回归结论需 full 的三次重复。",
+        "- C1/C2 在独立恢复的无故障集群运行，未与 B1/B3 组合；B3 只提供内存模拟证据。",
         "- A2 与 A3 的相同端点仍有单次运行波动，因此小幅差值只作为现象，不解释为确定收益。",
         "- 报告只陈述原始指标支持的变化，不据此宣称生产容量或与 TiKV 官方硬件横向比较。",
     ]
@@ -250,6 +293,22 @@ def main() -> int:
         lines += ["", "B1 的指标级根因分析见 `faults/B1-DIAGNOSIS.md`。"]
     if missing:
         lines += ["", "缺失 case：`" + "`, `".join(missing) + "`。"]
+    if failures:
+        lines += ["", "验收失败："] + [f"- {failure}" for failure in failures]
+    lines += ["", "## 完整测量表", "",
+              "延迟单位为微秒；A1 延迟包含所有逻辑操作（包括最终冲突），A4 包含重试与退避。",
+              "", "| Case | 尝试 | 成功 | 成功 OPS/TPS | P50 | P95 | P99 | Max |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for row in rows:
+        if row["case_id"] in required:
+            lines.append("| " + " | ".join(str(row[field]) for field in (
+                "case_id", "attempted", "successful", "successful_per_second",
+                "p50_us", "p95_us", "p99_us", "max_us")) + " |")
+    lines += ["", "## 验收与资源证据", "",
+              f"- 完整 Load：{load_pass}；逐点全量 checkpoint 校验：{checkpoint_pass}；进程清理：{cleanup_pass}。",
+              "- 客户端 CPU 时间和峰值 RSS：`metrics/*-client.txt`；服务进程 CPU/IO/状态：各点 before/after 目录。",
+              "- 二进制 SHA-256：`manifest.json`；固定 seed=20260904。",
+              "- B1 时间线表示脚本观测时刻；不应直接当作纯 Raft 选举耗时。"]
     atomic_text(run_dir / "REPORT.md", "\n".join(lines) + "\n")
 
     manifest["state"] = "complete" if complete else "incomplete"

@@ -117,25 +117,54 @@ cmake --build --preset release --target stratakv-test-tso-range-benchmark
 - **吞吐与延迟统计口径**：
   - **OPS (Operations Per Second)**：仅用于 A1 单记录读写操作。
   - **TPS (Transactions Per Second)**：用于 A2/A3/A4/C1 完整事务提交，绝不与 OPS 混为一谈。
-  - **延迟与分位数**：严格按照 attempted/successful 分离，仅当单点有效样本达到 100,000 时才报告可靠的 P99.9；在 smoke 阶段以 P50/P95/P99/Max 为准。
+  - **延迟与分位数**：严格按照 attempted/successful 分离，A1 延迟直方图包含所有逻辑操作（含最终冲突），A4 延迟包含重试与退避；单点样本不足 100,000 时不发布有效 P99.9。Smoke 使用 P50/P95/P99/Max。
 
 ### 2. 执行命令与复跑方式
 
-面试版全链路测试由统一入口执行，完全基于 project 命名空间隔离，无宽泛危险命令：
+在项目根目录执行 **`deploy/stratakv-performance`**：
 
 ```bash
-# 1. 快速冒烟测试 (约 1~2 分钟)
 bash deploy/stratakv-performance all --profile interview-smoke
-
-# 2. 全量复现测试 (包含 100,000 records, 3 次重复, B1/B3, C1/C2)
-bash deploy/stratakv-performance all --profile interview-full
-
-# 3. D1 回归比对
-bash deploy/stratakv-performance compare test-results/performance/<baseline-id> test-results/performance/<candidate-id>
-
-# 4. 清理指定项目运行时数据 (测试结果保留在 test-results/ 中)
-bash deploy/stratakv-performance clean --project perf-<run-id>
 ```
+
+该命令自动进行 Release 构建、启动专用集群、Load、逐点 checkpoint 恢复及全量键值校验、
+施压、故障/一致性检查、集群停止和报告生成。需要 Bash、CMake/C++ 构建依赖、Python 3、
+curl 和 GNU `/usr/bin/time`。本地节点使用 26200–26202 端口，测试前请确保没有另一套集群占用。
+运行时间包含构建及多次集群重启，不承诺固定分钟数。
+
+Smoke 的固定规模如下：
+
+| 项目 | 规模 |
+|---|---|
+| Load | 3,000 条 × 256 B，每个 checkpoint 恢复后逐条核对全部初始值 |
+| A1 | Gateway、uniform、A/C × 1/8 workers，每点 10,000 operations |
+| A2 | 跨 Region 比例 0/100%，8 workers，每点 1,000 transactions |
+| A3 | 1/3 Region，8 workers，每点 1,000 transactions |
+| A4 | 乐观/悲观 fast-fail × 0/20% 目标争用，16 workers，每点 1,000 transactions |
+| B1 | 持续写入时强杀 Region Leader，检查恢复、追赶及完整重启后的数据 |
+| B3（附加） | 内存存储上以异常模拟协调器中断，验证提交前/后的恢复语义 |
+| C1 / C2 | 无故障集群上 1,000 次转账 / 300 次寄存器操作 |
+
+默认 run-id 为 `smoke-日期-时间`，project 为 `perf-<run-id>`。也可以显式指定：
+
+```bash
+bash deploy/stratakv-performance all --profile interview-smoke --run-id smoke-my-check
+
+# 仅查看矩阵；不启动集群
+bash deploy/stratakv-performance plan --profile interview-smoke
+
+# 已自行完成构建时，可在 all 命令末尾追加 --no-build
+# 手动停止或删除指定测试项目（结果目录保留）
+bash deploy/stratakv-performance down --project perf-smoke-my-check
+bash deploy/stratakv-performance clean --project perf-smoke-my-check
+```
+
+同一 run-id 不能覆盖已有结果，重新运行请换新 ID。正常结束、失败和中断后保留已有证据，
+未完成时保持 `incomplete`。验收检查必选点规模、完整 Load、checkpoint 校验、错误计数、
+B1/B3/C1/C2 和清理结果；不能仅凭“有成功请求”判为 PASS。
+
+`interview-full` 的执行矩阵已存在，但完整验收和报告能力仍待补齐。D1 比较器也仍有待修复的
+采样/正确性门禁问题，目前不要把它们的 PASS 当作完整变更验收证据。
 
 ### 3. 结果目录结构
 
@@ -158,19 +187,20 @@ test-results/performance/<run-id>/
 └── histories/          # C1/C2 事务历史与线性一致性反例诊断
 ```
 
-### 4. 面试讲法与适用边界
+### 4. 结果分析与适用边界
 
-1. **环境定位**：测试均在 WSL/开发机器上完成，明确声明为 development baseline，关注相对趋势而非硬件极限吞吐。
-2. **扩展性证据**：
-   - A1 从 1 到 8 workers 展示了并发读写随核数的良好扩展。
-   - A2/A3 清晰揭示了跨 Region 2PC 的网络与协商成本（随着参与 Region 增加，协调开销上升）。
-3. **争用与自适应**：
-   - A4 展示了低争用下乐观锁的高吞吐，以及高争用下乐观锁反复冲突与悲观锁快速排队/快速失败的权衡。
-4. **高可用与一致性闭环**：
-   - B1 证明多数派下 Region Leader 故障可秒级自愈且旧数据不丢；
-   - B3 证明 2PC 协调器在 Primary 提交前后崩溃时，锁解析器能够幂等回滚或 roll-forward，无悬挂锁；
-   - C1 证明并发转账总额守恒，零部分转账；
-   - C2 证明单寄存器读写在静态 epoch 下严格满足有界线性一致性，未知写绝不猜测为成功。
+运行完成后先核对 `manifest.json` 的 `state=complete`、`overall=PASS`，再阅读
+`REPORT.md` 和 `summary.json`。客户端 CPU 时间与峰值 RSS 位于 `metrics/*-client.txt`，
+服务 CPU/IO 和状态位于各点 before/after 目录，二进制 SHA-256 位于 manifest。
+
+- A1 的 1/8 worker 点只支持描述这两个点的变化，不能据此宣称达到吞吐平台或定位 Gateway 瓶颈。
+- A2/A3 的单位是事务 TPS；其写入值是 benchmark 自己生成的短字符串，不应假设与 A1 的 256 B 相同。
+- A4 必须同时看提交吞吐、实际冲突率、成功率和包含退避的延迟，未观察到曲线交叉时不外推切换点。
+- B1 时间线是脚本观测时间，包含重启、轮询和校验成本，不等同于纯 Raft 选举耗时。
+- B3 当前是内存模拟单元测试，不等于真实集群 Coordinator 进程强杀。
+- C1 检查账户总额守恒，C2 检查有限 register history；两者目前没有与 B1/B3 组合运行。
+- C1/C2 的总体耗时还包含最终校验或 epoch 管理，不作为与 A1 同口径的性能对照。
+- Smoke 每点一次，结论仅是 WSL development baseline，不能作为生产容量、完整事务隔离证明或稳定性能回归结论。
 
 ## 维护约定
 

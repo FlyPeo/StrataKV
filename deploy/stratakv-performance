@@ -14,7 +14,7 @@ Usage:
   bash deploy/stratakv-performance plan [--profile interview-smoke]
 
 Options:
-  --profile NAME       interview-smoke (implemented) or interview-full (planned).
+  --profile NAME       interview-smoke (default); interview-full acceptance is pending.
   --run-id ID          Result directory name. Default: smoke-YYYYmmdd-HHMMSS.
   --project NAME       Scoped runtime project. Default: perf-<run-id>.
   --result-dir PATH    Default: test-results/performance/<run-id>.
@@ -25,6 +25,8 @@ Options:
 The smoke profile uses 3,000 records × 256 B and produces all files below
 test-results/performance/<run-id>/. It always stops its own cluster on exit;
 runtime data and the checkpoint remain until the explicit clean command.
+B3 is an additional in-memory simulated recovery check. C1/C2 run without
+fault injection. Full production-style fault coverage is not claimed.
 EOF
 }
 
@@ -82,6 +84,7 @@ gateway="http://127.0.0.1:${gateway_port}"
 tso_endpoints="127.0.0.1:${tso_port},127.0.0.1:$((tso_port + 1)),127.0.0.1:$((tso_port + 2))"
 regions_file="${runtime_dir}/regions.conf"
 cluster_may_be_running=false
+run_initialized=false
 
 print_plan() {
   if [ "$profile" = interview-full ]; then
@@ -109,16 +112,53 @@ EOF
 
 down_cluster() {
   if [ -f "${runtime_dir}/runtime.conf" ]; then
-    bash "${deploy_dir}/stratakv-server" down --project "$project" >/dev/null 2>&1 || true
+    bash "${deploy_dir}/stratakv-server" down --project "$project" >/dev/null 2>&1 || return 1
+    python3 - "$runtime_dir" "$result_dir" <<'PY' || return 1
+import json, os, sys, time
+from pathlib import Path
+runtime, result = map(Path, sys.argv[1:])
+alive = []
+for attempt in range(50):
+    alive = []
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            cwd = (proc / 'cwd').resolve(strict=True)
+            if cwd == runtime or runtime in cwd.parents:
+                alive.append(int(proc.name))
+        except (OSError, RuntimeError):
+            pass
+    if not alive:
+        break
+    time.sleep(0.1)
+if (result / 'metrics').is_dir():
+    path = result / 'metrics/cleanup.json'
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps({'passed': not alive, 'remaining_pids': alive}) + '\n')
+    os.replace(tmp, path)
+if alive:
+    raise SystemExit(f'Project processes still running: {alive}')
+PY
   fi
   cluster_may_be_running=false
 }
 
 on_exit() {
-  down_cluster
+  local status=$?
+  trap - EXIT INT TERM
+  if [ "$cluster_may_be_running" = true ]; then
+    down_cluster || status=1
+  fi
+  if [ "$command" = all ] && [ "$run_initialized" = true ] && [ "$status" -ne 0 ] && [ -f "${result_dir}/manifest.json" ]; then
+    report_suite || true
+  fi
+  exit "$status"
 }
 
-trap on_exit EXIT INT TERM
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 build_programs() {
   [ "$build_enabled" = true ] || return 0
@@ -126,7 +166,7 @@ build_programs() {
   cmake --build --preset release -j"$(nproc)" --target \
     stratakv-node stratakv-tso stratakv-admin stratakv-gateway \
     stratakv-test-kv-workload stratakv-test-region-2pc-benchmark \
-    stratakv-test-txn-contention stratakv-test-reliability
+    stratakv-test-txn-contention stratakv-test-reliability stratakv-test-b3-recovery-check
 }
 
 start_cluster() {
@@ -184,6 +224,7 @@ PY
     sed -n '1,5p' /proc/meminfo
     df -T "$repo_dir"
   } >"${result_dir}/metrics/environment.txt"
+  run_initialized=true
 }
 
 capture_metrics() {
@@ -202,6 +243,7 @@ capture_metrics() {
       if [ -d "/proc/${pid}" ]; then
         sed -n '1,40p' "/proc/${pid}/status" >"${target}/${name}-proc-status.txt" || true
         cp "/proc/${pid}/io" "${target}/${name}-proc-io.txt" 2>/dev/null || true
+        cp "/proc/${pid}/stat" "${target}/${name}-proc-stat.txt" 2>/dev/null || true
       fi
     done
   fi
@@ -222,11 +264,16 @@ workload_common() {
 }
 
 run_workload() {
-  # shellcheck disable=SC2046
-  # Tolerate a non-zero exit (e.g. a handful of result_unknown outcomes) so the
-  # harness does not abort the whole suite on a transient timeout; per-case
-  # success is verified from the emitted summary.json instead.
-  "${repo_dir}/bin/stratakv-test-kv-workload" $(workload_common) "$@" || true
+  local metric_case=workload previous= arg
+  local -a common_args
+  mapfile -t common_args < <(workload_common)
+  for arg in "$@"; do
+    if [ "$previous" = --case-id ]; then metric_case=$arg; fi
+    previous=$arg
+  done
+  /usr/bin/time -f 'user_seconds=%U\nsystem_seconds=%S\nmax_rss_kib=%M\nwall_seconds=%e\nexit_code=%x' \
+    -o "${result_dir}/metrics/${metric_case}-client.txt" \
+    "${repo_dir}/bin/stratakv-test-kv-workload" "${common_args[@]}" "$@"
 }
 
 create_checkpoint() {
@@ -248,8 +295,8 @@ restore_checkpoint() {
   fi
   cp -a --reflink=auto "$checkpoint_dir" "$runtime_dir"
   start_cluster
-  run_workload --mode run --case-id "checkpoint-verify-${case_id}" --workload C \
-    --distribution uniform --workers 1 --operations 30 --max-attempts 3 \
+  run_workload --mode verify --case-id "checkpoint-verify-${case_id}" --workload C \
+    --distribution uniform --workers 1 --max-attempts 3 \
     --output "${result_dir}/metrics/checkpoint-verify-${case_id}.json" >/dev/null
 }
 
@@ -266,16 +313,14 @@ prepare_suite() {
     --output "${result_dir}/raw/load/summary.json" \
     >"${result_dir}/raw/load/workload.log"
   capture_metrics prepare after-load
-  # Load may leave a small number of result_unknown outcomes; only a low success
-  # ratio is fatal. (The workload binary reports success!=attempted as a
-  # non-zero exit, which we no longer treat as a hard stop above.)
+  # A checkpoint must contain every initial record, with no unknown outcome.
   python3 - "$result_dir" <<'PY'
 import json, pathlib, sys
 summary = json.loads((pathlib.Path(sys.argv[1]) / "raw/load/summary.json").read_text())
 attempted = summary.get("attempted", 0) or 0
 successful = summary.get("successful", 0) or 0
-if attempted == 0 or successful / attempted < 0.99:
-    print(f"load success ratio {successful}/{attempted} below 99% threshold", file=sys.stderr)
+if attempted == 0 or successful != attempted:
+    print(f"load incomplete: {successful}/{attempted}", file=sys.stderr)
     sys.exit(1)
 PY
   create_checkpoint
@@ -285,6 +330,7 @@ PY
 run_json_case() {
   case_id=$1
   shift
+  echo "[case] ${case_id}: restoring and verifying checkpoint, then measuring"
   restore_checkpoint "$case_id"
   capture_metrics "$case_id" before
   run_workload --mode run --case-id "$case_id" "$@" \
@@ -297,12 +343,14 @@ run_log_case() {
   group=$1
   case_id=$2
   shift 2
+  echo "[case] ${case_id}: restoring and verifying checkpoint, then measuring"
   restore_checkpoint "$case_id"
   capture_metrics "$case_id" before
   {
     echo "case_id=${case_id}"
-    "$@"
-  } >"${result_dir}/raw/${group}/${case_id}.log" 2>&1 || true
+    /usr/bin/time -f 'user_seconds=%U\nsystem_seconds=%S\nmax_rss_kib=%M\nwall_seconds=%e\nexit_code=%x' \
+      -o "${result_dir}/metrics/${case_id}-client.txt" "$@"
+  } >"${result_dir}/raw/${group}/${case_id}.log" 2>&1
   capture_metrics "$case_id" after
 }
 
@@ -428,6 +476,7 @@ PY
 }
 
 run_b1() {
+  echo "[fault] B1: Region Leader SIGKILL and recovery verification"
   restore_checkpoint b1
   capture_metrics b1 before
   workload_log="${result_dir}/faults/b1-workload.log"
@@ -505,19 +554,22 @@ run_b1() {
 }
 
 run_b3() {
-  "${repo_dir}/bin/stratakv-test-b3-recovery-check" >"${result_dir}/faults/b3-recovery.log" 2>&1
-  local status=$?
+  echo "[check] B3: in-memory simulated coordinator recovery"
+  local status=0
+  "${repo_dir}/bin/stratakv-test-b3-recovery-check" >"${result_dir}/faults/b3-recovery.log" 2>&1 || status=$?
   local result="FAIL"
   if [ $status -eq 0 ]; then result="PASS"; fi
   {
     echo "case_id=b3"
     echo "fault=2pc-coordinator-crash"
+    echo "execution=memory-simulated-exception"
     echo "result=${result}"
   } >"${result_dir}/faults/b3-summary.txt"
   [ "$result" = PASS ]
 }
 
 run_checks() {
+  echo "[check] C1 transfers and C2 register histories (without fault injection)"
   local c1_ops=1000
   local c2_ops=300
   if [ "$profile" = "interview-full" ]; then
@@ -562,13 +614,30 @@ case "$command" in
   all)
     init_run
     build_programs
+    python3 - "$repo_dir" "$result_dir" <<'PY'
+import hashlib, json, os, sys
+from pathlib import Path
+repo, root = map(Path, sys.argv[1:])
+path = root / 'manifest.json'
+manifest = json.loads(path.read_text())
+names = ['stratakv-node', 'stratakv-tso', 'stratakv-gateway', 'stratakv-test-kv-workload',
+         'stratakv-test-region-2pc-benchmark', 'stratakv-test-txn-contention',
+         'stratakv-test-reliability', 'stratakv-test-b3-recovery-check']
+manifest['binary_sha256'] = {name: hashlib.sha256((repo / 'bin' / name).read_bytes()).hexdigest() for name in names}
+manifest['b3_execution'] = 'memory-simulated-exception'
+manifest['c1_c2_fault_combination'] = False
+manifest['measurement_repetitions'] = 1 if manifest['profile'] == 'interview-smoke' else 3
+tmp = path.with_suffix('.tmp')
+tmp.write_text(json.dumps(manifest, indent=2) + '\n')
+os.replace(tmp, path)
+PY
     prepare_suite
     run_performance
     run_b1
     run_b3
     run_checks
-    report_suite
     down_cluster
+    report_suite
     echo "${profile} complete: ${result_dir}"
     ;;
   prepare) init_run; build_programs; prepare_suite ;;
