@@ -6,7 +6,9 @@
 #include <cstdint>
 
 struct RaftLogGcConfig {
-  uint64_t threshold = 50;
+  // A snapshot serializes the complete Region state. Compacting every few
+  // dozen entries turns a bulk load into quadratic scan/write amplification.
+  uint64_t threshold = 10000;
   uint64_t countLimit = 196608;
   uint64_t sizeLimitBytes = 192ULL * 1024ULL * 1024ULL;
   std::chrono::milliseconds tickInterval{3000};
@@ -31,10 +33,10 @@ struct RaftLogGcDecision {
   bool Forced() const { return countLimit || sizeLimit; }
 };
 
-// A soft collection stays behind the least replicated peer so a healthy
-// follower can continue with AppendEntries. Hard limits prioritize bounding
-// local log growth and compact to the applied state; a lagging follower then
-// catches up through InstallSnapshot.
+// Soft GC waits until every peer has replicated enough reclaimable entries.
+// Both paths must snapshot at the local applied index: the storage snapshot is
+// a view of the current state, not of an earlier follower match index. A peer
+// behind that exact boundary catches up through InstallSnapshot.
 inline RaftLogGcDecision EvaluateRaftLogGc(const RaftLogGcConfig& config,
                                            const RaftLogGcState& state) {
   RaftLogGcDecision decision;
@@ -55,8 +57,8 @@ inline RaftLogGcDecision EvaluateRaftLogGc(const RaftLogGcConfig& config,
   const uint64_t reclaimable =
       static_cast<uint64_t>(replicatedIndex - state.truncatedIndex);
   if (config.threshold > 0 && reclaimable >= config.threshold) {
-    decision.compactIndex = replicatedIndex;
-    decision.reclaimableCount = reclaimable;
+    decision.compactIndex = appliedIndex;
+    decision.reclaimableCount = static_cast<uint64_t>(appliedIndex - state.truncatedIndex);
     decision.softThreshold = true;
   }
   return decision;

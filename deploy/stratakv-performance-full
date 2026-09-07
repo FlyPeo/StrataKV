@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# One-command entry point for the complete interview performance suite.
+set -euo pipefail
+
+deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+profile=interview-full
+run_id="full-$(date +%Y%m%d-%H%M%S)"
+forward_args=()
+has_run_id=false
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      cat <<'EOF'
+Usage: bash deploy/stratakv-performance-full [--lite] [options]
+
+Runs build, Load, A1-A4, B1/B3, C1/C2, cleanup and report with one command.
+  --lite          Use interview-full-10pct: 10,000 records and 1/10 operations.
+                  Keeps the complete matrix, three repetitions and fault checks.
+  --no-build      Reuse current Release binaries.
+  --run-id ID     Choose the result directory name.
+
+Other options are forwarded to deploy/stratakv-performance; see its --help.
+Without --lite, uses interview-full (100,000 records).
+EOF
+      exit 0
+      ;;
+    --profile)
+      echo "stratakv-performance-full fixes --profile ${profile}; add --lite for the 1/10-scale profile or use stratakv-performance for another profile." >&2
+      exit 2
+      ;;
+    --lite)
+      profile=interview-full-10pct
+      run_id="full10-$(date +%Y%m%d-%H%M%S)"
+      shift
+      ;;
+    --run-id)
+      has_run_id=true
+      forward_args+=("$1" "${2:?--run-id requires a value}")
+      shift 2
+      ;;
+    *)
+      forward_args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ "$has_run_id" = false ]; then
+  forward_args+=(--run-id "$run_id")
+fi
+
+exec bash "${deploy_dir}/stratakv-performance" all \
+  --profile "$profile" "${forward_args[@]}"

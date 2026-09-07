@@ -44,6 +44,32 @@ bool HasBinaryPersistMagic(const std::string& data) {
   return data.size() >= kRaftPersistMagicSize &&
          std::memcmp(data.data(), kRaftPersistMagic, kRaftPersistMagicSize) == 0;
 }
+
+std::string EncodePersistData(int currentTerm, int votedFor, int snapshotIndex,
+                              int snapshotTerm,
+                              const std::vector<raftRpcProctoc::LogEntry>& logs) {
+  size_t estimatedSize = kRaftPersistMagicSize + sizeof(int32_t) * 4 + sizeof(uint64_t);
+  for (const auto& item : logs) {
+    estimatedSize += sizeof(int32_t) * 2 + sizeof(uint64_t) + item.command().size();
+  }
+
+  std::string data;
+  data.reserve(estimatedSize);
+  data.append(kRaftPersistMagic, kRaftPersistMagicSize);
+  AppendInt32(&data, currentTerm);
+  AppendInt32(&data, votedFor);
+  AppendInt32(&data, snapshotIndex);
+  AppendInt32(&data, snapshotTerm);
+  AppendUint64(&data, static_cast<uint64_t>(logs.size()));
+  for (const auto& item : logs) {
+    const std::string& command = item.command();
+    AppendInt32(&data, item.logterm());
+    AppendInt32(&data, item.logindex());
+    AppendUint64(&data, static_cast<uint64_t>(command.size()));
+    data.append(command);
+  }
+  return data;
+}
 }  // namespace
 
 void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpcProctoc::AppendEntriesReply* reply) {
@@ -720,7 +746,7 @@ void Raft::persist() {
     return;
   }
   auto data = persistData();
-  m_persister->SaveRaftState(data);
+  m_persister->SaveRaftState(std::move(data));
   m_persistCount.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -1203,27 +1229,8 @@ void Raft::Activate() {
 }
 
 std::string Raft::persistData() {
-  size_t estimatedSize = kRaftPersistMagicSize + sizeof(int32_t) * 4 + sizeof(uint64_t);
-  for (const auto& item : m_logs) {
-    estimatedSize += sizeof(int32_t) * 2 + sizeof(uint64_t) + item.command().size();
-  }
-
-  std::string data;
-  data.reserve(estimatedSize);
-  data.append(kRaftPersistMagic, kRaftPersistMagicSize);
-  AppendInt32(&data, m_currentTerm);
-  AppendInt32(&data, m_votedFor);
-  AppendInt32(&data, m_lastSnapshotIncludeIndex);
-  AppendInt32(&data, m_lastSnapshotIncludeTerm);
-  AppendUint64(&data, static_cast<uint64_t>(m_logs.size()));
-  for (const auto& item : m_logs) {
-    const std::string& command = item.command();
-    AppendInt32(&data, item.logterm());
-    AppendInt32(&data, item.logindex());
-    AppendUint64(&data, static_cast<uint64_t>(command.size()));
-    data.append(command);
-  }
-  return data;
+  return EncodePersistData(m_currentTerm, m_votedFor, m_lastSnapshotIncludeIndex,
+                           m_lastSnapshotIncludeTerm, m_logs);
 }
 
 void Raft::readPersist(std::string data) {
@@ -1286,9 +1293,18 @@ void Raft::readPersist(std::string data) {
 }
 
 bool Raft::Snapshot(int index, std::string snapshot) {
+  // Snapshot serialization already happened outside the state-machine lock.
+  // Stage the remaining large disk write before taking the Raft mutex so
+  // heartbeats and elections do not pause behind snapshot I/O.
+  std::string stagedSnapshot;
+  if (!m_persister || !m_persister->StageSnapshot(snapshot, &stagedSnapshot)) {
+    return false;
+  }
+
   std::lock_guard<std::mutex> lg(m_mtx);
 
   if (m_lastSnapshotIncludeIndex >= index || index > m_commitIndex) {
+    m_persister->DiscardStagedSnapshot(stagedSnapshot);
     DPrintf(
         "[func-Snapshot-rf{%d}] rejects replacing log with snapshotIndex %d as current snapshotIndex %d is larger or "
         "smaller ",
@@ -1304,13 +1320,19 @@ bool Raft::Snapshot(int index, std::string snapshot) {
   for (int i = index + 1; i <= getLastLogIndex(); i++) {
     trunckedLogs.push_back(m_logs[getSlicesIndexFromLogIndex(i)]);
   }
+  const std::string compactedState =
+      EncodePersistData(m_currentTerm, m_votedFor, newLastSnapshotIncludeIndex,
+                        newLastSnapshotIncludeTerm, trunckedLogs);
+  if (!m_persister->CommitStagedSnapshot(compactedState, stagedSnapshot)) {
+    DPrintf("[Raft::Snapshot] failed to publish staged snapshot at index %d", index);
+    return false;
+  }
+
   m_lastSnapshotIncludeIndex = newLastSnapshotIncludeIndex;
   m_lastSnapshotIncludeTerm = newLastSnapshotIncludeTerm;
-  m_logs = trunckedLogs;
+  m_logs = std::move(trunckedLogs);
   m_commitIndex = std::max(m_commitIndex, index);
   m_lastApplied = std::max(m_lastApplied, index);
-
-  m_persister->Save(persistData(), snapshot);
 
   DPrintf("[SnapShot]Server %d snapshot snapshot index {%d}, term {%d}, loglen {%d}", m_me, index,
           m_lastSnapshotIncludeTerm, m_logs.size());

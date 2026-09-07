@@ -130,6 +130,19 @@ class IndeterminateCommitStorage final : public MvccStorage {
   }
 };
 
+class LockedPrimaryRetryStorage final : public MvccStorage {
+ public:
+  LockedPrimaryRetryStorage() : MvccStorage(std::make_shared<MemoryEngine>()) {}
+  TxnStatus Commit(const std::string& key, uint64_t startTs, uint64_t commitTs) override {
+    if (commitCalls_++ == 0) return TxnStatus::StorageError;
+    return MvccStorage::Commit(key, startTs, commitTs);
+  }
+  int CommitCalls() const { return commitCalls_; }
+
+ private:
+  int commitCalls_ = 0;
+};
+
 class RolledBackCommitStorage final : public MvccStorage {
  public:
   RolledBackCommitStorage() : MvccStorage(std::make_shared<MemoryEngine>()) {}
@@ -137,6 +150,26 @@ class RolledBackCommitStorage final : public MvccStorage {
     const TxnStatus rolledBack = MvccStorage::Rollback(key, startTs);
     return rolledBack == TxnStatus::Ok ? TxnStatus::StorageError : rolledBack;
   }
+};
+
+class PrewriteResponseLossStorage final : public MvccStorage {
+ public:
+  PrewriteResponseLossStorage() : MvccStorage(std::make_shared<MemoryEngine>()) {}
+  TxnStatus BatchPrewrite(const std::vector<MvccMutation>& mutations,
+                          const std::string& primaryKey, uint64_t startTs,
+                          uint64_t ttlMs, uint64_t forUpdateTs,
+                          uint64_t remainingBudgetMs) override {
+    const TxnStatus applied = MvccStorage::BatchPrewrite(
+        mutations, primaryKey, startTs, ttlMs, forUpdateTs, remainingBudgetMs);
+    if (!lost_ && applied == TxnStatus::Ok) {
+      lost_ = true;
+      return TxnStatus::ResultUnknown;
+    }
+    return applied;
+  }
+
+ private:
+  bool lost_ = false;
 };
 
 void Require(bool condition, const char* message) {
@@ -298,6 +331,20 @@ void CheckDeadlineAndUnknownCommit() {
               expired.State() == TransactionState::AbortOnly,
           "hard transaction deadline must transition to abort-only");
 
+  auto lostPrewrite = std::make_shared<PrewriteResponseLossStorage>();
+  Fixture aborted({lostPrewrite});
+  Transaction lost = aborted.coordinator->Begin();
+  lost.Put("key", "value");
+  Require(aborted.coordinator->Commit(&lost) == TxnStatus::Timeout &&
+              lost.State() == TransactionState::AbortOnly,
+          "confirmed rollback after a lost Prewrite reply must be a retryable abort");
+  TxnRecordStatus abortedRecord;
+  Require(aborted.coordinator->QueryStatus(lost, &abortedRecord) == TxnStatus::Ok &&
+              abortedRecord.state == TxnRecordState::RolledBack,
+          "retryable abort must be backed by an authoritative rollback record");
+  aborted.PutCommitted("key", "retried");
+  Require(aborted.Read("key") == "retried", "a fresh transaction must be safe after rollback");
+
   auto responseLoss = std::make_shared<CommitResponseLossStorage>();
   Fixture recovered({responseLoss});
   responseLoss->Arm();
@@ -306,6 +353,15 @@ void CheckDeadlineAndUnknownCommit() {
   Require(recovered.coordinator->Commit(&committed) == TxnStatus::Ok,
           "lost Primary response must resolve through committed status");
   Require(recovered.Read("key") == "value", "resolved commit must retain data");
+
+  auto lockedPrimary = std::make_shared<LockedPrimaryRetryStorage>();
+  Fixture retried({lockedPrimary});
+  Transaction pending = retried.coordinator->Begin();
+  pending.Put("key", "value");
+  Require(retried.coordinator->Commit(&pending) == TxnStatus::Ok &&
+              lockedPrimary->CommitCalls() == 2,
+          "an acknowledged locked Primary must retry the same commit after response loss");
+  Require(retried.Read("key") == "value", "retried Primary commit must retain data");
 
   auto rolledBackStorage = std::make_shared<RolledBackCommitStorage>();
   Fixture rolledBack({rolledBackStorage});
@@ -319,7 +375,9 @@ void CheckDeadlineAndUnknownCommit() {
   Fixture unknown({unavailable});
   Transaction uncertain = unknown.coordinator->Begin();
   uncertain.Put("key", "value");
-  Require(unknown.coordinator->Commit(&uncertain) == TxnStatus::ResultUnknown &&
+  TxnOptions shortResolution;
+  shortResolution.rpcBudgetMs = 20;
+  Require(unknown.coordinator->Commit(&uncertain, shortResolution) == TxnStatus::ResultUnknown &&
               uncertain.State() == TransactionState::ResultUnknown,
           "unavailable status check must remain ResultUnknown, never NotFound");
   Require(unknown.coordinator->Rollback(&uncertain) == TxnStatus::ResultUnknown,

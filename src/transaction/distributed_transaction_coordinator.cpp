@@ -2,9 +2,11 @@
 #include "distributed_transaction_coordinator.h"
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <future>
 #include <limits>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -29,6 +31,14 @@ uint64_t SaturatingAdd(uint64_t value, uint64_t delta) {
   return value > std::numeric_limits<uint64_t>::max() - delta
              ? std::numeric_limits<uint64_t>::max()
              : value + delta;
+}
+
+uint64_t RemainingBudgetMs(const std::chrono::steady_clock::time_point& deadline) {
+  const auto now = std::chrono::steady_clock::now();
+  if (now >= deadline) return 0;
+  return std::max<uint64_t>(
+      1, static_cast<uint64_t>(
+             std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count()));
 }
 
 const char* TxnStatusName(TxnStatus status) {
@@ -427,7 +437,10 @@ TxnStatus DistributedTransactionCoordinator::Commit(Transaction* txn,
       txn->MarkCleanupPending();
       return TxnStatus::CleanupPending;
     }
-    return prewriteStatus;
+    // No Primary Commit has been sent, and rollback was acknowledged for
+    // every key. A lost Prewrite reply is now a known abort, so the caller can
+    // safely retry a fresh transaction instead of retaining ResultUnknown.
+    return prewriteStatus == TxnStatus::ResultUnknown ? TxnStatus::Timeout : prewriteStatus;
   }
 
   stratakv::transaction::failpoint::MaybeTrigger(
@@ -449,23 +462,58 @@ TxnStatus DistributedTransactionCoordinator::Commit(Transaction* txn,
     return TxnStatus::StorageError;
   }
 
-  TxnStatus primaryStatus =
-      router_->Route(primaryKey)->Commit(primaryKey, txn->StartTs(), commitTs);
+  const std::shared_ptr<MvccStorage> primaryStorage = router_->Route(primaryKey);
+  TxnStatus primaryStatus = primaryStorage->CommitWithBudget(
+      primaryKey, txn->StartTs(), commitTs, options.rpcBudgetMs);
   if (!IsCommitSuccess(primaryStatus)) {
-    TxnRecordStatus authoritative;
-    const TxnStatus query = QueryStatus(*txn, &authoritative, options);
-    if (query == TxnStatus::Ok && authoritative.state == TxnRecordState::Committed) {
-      commitTs = authoritative.commitTs;
-      primaryStatus = TxnStatus::Ok;
-    } else if (query == TxnStatus::Ok && authoritative.state == TxnRecordState::RolledBack) {
-      txn->MarkAbortOnly();
-      const TxnStatus cleanup = CleanupTransaction(txn);
-      if (cleanup != TxnStatus::Ok) {
-        txn->MarkCleanupPending();
-        return TxnStatus::CleanupPending;
+    // A leader change can lose the reply while leaving the authoritative
+    // Primary either committed or still locked.  Keep the original timestamps
+    // and finish that same commit idempotently for one RPC budget instead of
+    // turning the valid Locked state into RESULT_UNKNOWN.
+    const auto resolutionDeadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(options.rpcBudgetMs);
+    while (!IsCommitSuccess(primaryStatus)) {
+      const uint64_t remainingMs = RemainingBudgetMs(resolutionDeadline);
+      if (remainingMs == 0) break;
+
+      TxnOptions queryOptions = options;
+      queryOptions.rpcBudgetMs = remainingMs;
+      TxnRecordStatus authoritative;
+      const TxnStatus query = QueryStatus(*txn, &authoritative, queryOptions);
+      if (query == TxnStatus::Ok && authoritative.state == TxnRecordState::Committed) {
+        commitTs = authoritative.commitTs;
+        primaryStatus = TxnStatus::Ok;
+        break;
       }
-      return TxnStatus::WriteConflict;
-    } else {
+      if (query == TxnStatus::Ok && authoritative.state == TxnRecordState::RolledBack) {
+        txn->MarkAbortOnly();
+        const TxnStatus cleanup = CleanupTransaction(txn);
+        if (cleanup != TxnStatus::Ok) {
+          txn->MarkCleanupPending();
+          return TxnStatus::CleanupPending;
+        }
+        return TxnStatus::WriteConflict;
+      }
+
+      // Locked is the normal state when the original Commit never reached
+      // Apply. NotFound is also safe to retry because every Primary prewrite
+      // in this path was acknowledged before Commit began.
+      if (query == TxnStatus::Ok &&
+          (authoritative.state == TxnRecordState::Locked ||
+           authoritative.state == TxnRecordState::NotFound)) {
+        const uint64_t commitBudgetMs = RemainingBudgetMs(resolutionDeadline);
+        if (commitBudgetMs == 0) break;
+        primaryStatus = primaryStorage->CommitWithBudget(
+            primaryKey, txn->StartTs(), commitTs, commitBudgetMs);
+        if (IsCommitSuccess(primaryStatus)) break;
+      }
+
+      const uint64_t pauseBudgetMs = RemainingBudgetMs(resolutionDeadline);
+      if (pauseBudgetMs == 0) break;
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(std::min<uint64_t>(10, pauseBudgetMs)));
+    }
+    if (!IsCommitSuccess(primaryStatus)) {
       txn->MarkResultUnknown();
       return TxnStatus::ResultUnknown;
     }

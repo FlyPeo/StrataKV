@@ -60,6 +60,9 @@ class RegionPeer : public TxnRegionExecutor {
   std::atomic<uint64_t> m_raftLogGcLastDurationMicros{0};
   std::atomic<uint64_t> m_raftLogGcTotalDurationMicros{0};
   std::atomic<uint64_t> m_raftLogGcMaxDurationMicros{0};
+  // A new leader is not allowed to serve MVCC prepare/status decisions until
+  // a current-term ReadIndex has reached the local state machine.
+  std::atomic<int> m_txnReadyTerm{-1};
 
   // The apply loop and the GC snapshotter share one state-machine boundary.
   // This prevents a snapshot labelled N from observing part of command N+1.
@@ -223,19 +226,41 @@ class RegionPeer : public TxnRegionExecutor {
     ar &m_lastRequestId;
   }
 
-  std::string getSnapshotData() {
-    m_serializedKVData = m_kvEngine->Dump();
+  struct SnapshotPayload {
+    std::string kvData;
+    std::unordered_map<std::string, int> lastRequestId;
+
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+      ar &kvData;
+      ar &lastRequestId;
+    }
+  };
+
+  std::string encodeSnapshotData(std::string kvData,
+                                 std::unordered_map<std::string, int> lastRequestId) {
+    SnapshotPayload payload{std::move(kvData), std::move(lastRequestId)};
     std::stringstream ss;
     boost::archive::text_oarchive oa(ss);
-    oa << *this;
-    m_serializedKVData.clear();
-    return ss.str();
+    oa << payload;
+    return "STRATAKV_REGION_SNAPSHOT_V2\n" + ss.str();
   }
 
   void parseFromString(const std::string &str) {
-    std::stringstream ss(str);
-    boost::archive::text_iarchive ia(ss);
-    ia >> *this;
+    static constexpr char kSnapshotV2Prefix[] = "STRATAKV_REGION_SNAPSHOT_V2\n";
+    if (str.rfind(kSnapshotV2Prefix, 0) == 0) {
+      SnapshotPayload payload;
+      std::stringstream ss(str.substr(sizeof(kSnapshotV2Prefix) - 1));
+      boost::archive::text_iarchive ia(ss);
+      ia >> payload;
+      m_serializedKVData = std::move(payload.kvData);
+      m_lastRequestId = std::move(payload.lastRequestId);
+    } else {
+      // Read snapshots created before the V2 envelope was introduced.
+      std::stringstream ss(str);
+      boost::archive::text_iarchive ia(ss);
+      ia >> *this;
+    }
     if (!m_mvccStorage->RestoreSnapshot(m_serializedKVData)) {
       throw std::runtime_error("failed to restore MVCC state from Raft snapshot");
     }

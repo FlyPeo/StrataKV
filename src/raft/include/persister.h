@@ -2,6 +2,7 @@
 #define STRATAKV_RAFT_PERSISTER_H
 #include <fstream>
 #include <mutex>
+#include <string>
 class Persister {
  private:
   std::mutex m_mtx;
@@ -31,8 +32,13 @@ class Persister {
 
  public:
   void Save(std::string raftstate, std::string snapshot);
+  // Write the large snapshot payload without holding Raft's state mutex. The
+  // staged file is published together with the compacted Raft state later.
+  bool StageSnapshot(const std::string& snapshot, std::string* stagedPath);
+  bool CommitStagedSnapshot(const std::string& raftstate, const std::string& stagedPath);
+  void DiscardStagedSnapshot(const std::string& stagedPath);
   std::string ReadSnapshot();
-  void SaveRaftState(const std::string& data);
+  void SaveRaftState(std::string data);
   long long RaftStateSize();
   std::string ReadRaftState();
   explicit Persister(int me);

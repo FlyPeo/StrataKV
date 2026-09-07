@@ -35,7 +35,7 @@ Options:
   --gateway-request-workers N
                      Native blocking-request workers in fiber mode. Default: 16.
   --raft-log-gc-threshold N
-                     Soft GC threshold in reclaimable entries. Default: 50.
+                     Soft GC threshold in reclaimable entries. Default: 10000.
   --raft-log-gc-count-limit N
                      Force GC at this many log entries. Default: 196608.
   --raft-log-gc-size-limit B
@@ -67,7 +67,7 @@ tso_range_size=4096
 gateway_runtime=thread
 gateway_workers=4
 gateway_request_workers=16
-raft_log_gc_threshold=50
+raft_log_gc_threshold=10000
 raft_log_gc_count_limit=196608
 raft_log_gc_size_limit=201326592
 raft_log_gc_tick_interval_ms=3000
@@ -379,6 +379,16 @@ stop_process() {
   done
   if managed_pid "$name" >/dev/null 2>&1; then
     kill -KILL "$pid" 2>/dev/null || true
+    # SIGKILL is delivered asynchronously. Returning before the process has
+    # actually disappeared lets a restart start the replacement while the old
+    # process still owns the RPC port and the RocksDB directory; the new process
+    # then died right after printing "RpcProvider start service", and the
+    # reliability monitor reported every member as crashed.
+    attempt=0
+    while [ "$attempt" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+      sleep 1
+      attempt=$((attempt + 1))
+    done
   fi
   rm -f "$file"
 }
@@ -490,6 +500,13 @@ generate() {
 start_all() {
   generate
   build_programs
+  # A previous run can leave orphaned members behind (for example TSO processes
+  # that were never stopped). Under `set -eu` start_tso_node then returns
+  # non-zero for the orphan and aborts the whole start; starting on top of
+  # orphans would also mix ports and Raft state from different generations,
+  # which is what made a single node restart report every process as crashed.
+  # Recycle them first so every process belongs to one fresh start.
+  recycle_stale_members
   # Upgrade an existing single-node TSO deployment before binding tso-0 to its port.
   stop_process tso
   migrate_legacy_tso_state
@@ -511,6 +528,20 @@ stop_all() {
   stop_process tso-1
   stop_process tso-0
   stop_process tso
+}
+
+# Orphans left by a previous run make `up` assemble a half-old cluster, so stop
+# any surviving member before starting a fresh one.
+recycle_stale_members() {
+  stale=
+  for name in gateway node-0 node-1 node-2 tso-0 tso-1 tso-2 tso; do
+    if managed_pid "$name" >/dev/null 2>&1; then
+      stale="${stale}${stale:+ }${name}"
+    fi
+  done
+  [ -n "$stale" ] || return 0
+  echo "Recycling stale ${project} process(es): ${stale}" >&2
+  stop_all
 }
 
 show_status() {

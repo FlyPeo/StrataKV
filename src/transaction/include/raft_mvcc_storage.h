@@ -41,6 +41,8 @@ class RaftMvccStorage : public MvccStorage {
       uint64_t ttlMs, uint64_t forUpdateTs, uint64_t expireAtPhysicalMs,
       uint64_t remainingBudgetMs = 0) override;
   TxnStatus Commit(const std::string& key, uint64_t startTs, uint64_t commitTs) override;
+  TxnStatus CommitWithBudget(const std::string& key, uint64_t startTs,
+                             uint64_t commitTs, uint64_t remainingBudgetMs) override;
   TxnStatus BatchCommit(const std::vector<std::string>& keys, uint64_t startTs,
                         uint64_t commitTs, uint64_t remainingBudgetMs = 0) override;
   TxnStatus Rollback(const std::string& key, uint64_t startTs) override;

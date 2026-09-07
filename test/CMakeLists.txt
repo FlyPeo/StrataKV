@@ -30,6 +30,10 @@ add_executable(stratakv-test-raft-log-gc unit/raft_log_gc_check.cpp)
 target_link_libraries(stratakv-test-raft-log-gc PRIVATE pthread)
 add_test(NAME stratakv-test-raft-log-gc COMMAND stratakv-test-raft-log-gc)
 
+add_executable(stratakv-test-rocksdb-snapshot unit/rocksdb_snapshot_check.cpp)
+target_link_libraries(stratakv-test-rocksdb-snapshot PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-rocksdb-snapshot COMMAND stratakv-test-rocksdb-snapshot)
+
 add_library(stratakv-test-performance-support STATIC
     support/performance/performance_support.cpp
     support/performance/workload_runner.cpp
@@ -149,4 +153,3 @@ add_test(NAME stratakv-test-d1-compare
     COMMAND python3 ${PROJECT_SOURCE_DIR}/test/integration/d1_compare_check.py)
 add_test(NAME stratakv-test-gateway-smoke
     COMMAND bash ${PROJECT_SOURCE_DIR}/test/integration/gateway_smoke_check.sh)
-

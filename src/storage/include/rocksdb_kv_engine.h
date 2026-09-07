@@ -22,6 +22,7 @@ class RocksDbKVEngine : public IKVEngine {
   std::vector<std::pair<std::string, std::string>> ScanPrefix(const std::string& prefix) override;
 
   std::string Dump() override;
+  std::unique_ptr<IKVSnapshot> CaptureSnapshot() override;
   bool Load(const std::string& snapshot) override;
   void DebugPrint() override;
 
@@ -38,7 +39,6 @@ class RocksDbKVEngine : public IKVEngine {
   };
 
   bool Open();
-  bool ResetDatabase();
 
  private:
   std::string dbPath_;

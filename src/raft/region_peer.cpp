@@ -529,32 +529,60 @@ void RegionPeer::ReleaseWaitApplyQueue(const std::string& reqKey, const WaitAppl
 }
 
 void RegionPeer::RaftLogGcLoop() {
+  bool firstRun = true;
   while (true) {
-    std::this_thread::sleep_for(m_raftLogGcConfig.tickInterval);
+    auto delay = m_raftLogGcConfig.tickInterval;
+    if (firstRun) {
+      // Nine Region peers otherwise begin full-state serialization together.
+      // Spread their first pass across one tick to avoid periodic CPU and disk
+      // bursts; later passes naturally retain the offset.
+      const int slot = std::max(0, m_physicalNodeId) * 3 + (m_regionId % 100);
+      delay += m_raftLogGcConfig.tickInterval * slot / 9;
+      firstRun = false;
+    }
+    std::this_thread::sleep_for(delay);
 
-    std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
+    RaftLogGcDecision decision;
+    std::unique_ptr<IKVSnapshot> kvSnapshot;
+    std::unordered_map<std::string, int> lastRequestId;
     int appliedIndex = 0;
     bool healthy = false;
     {
-      std::lock_guard<std::mutex> progressLock(m_applyProgressMutex);
-      appliedIndex = m_stateMachineAppliedIndex;
-      healthy = m_stateMachineHealthy;
-    }
-    if (!healthy) continue;
+      // Capture the RocksDB sequence and request de-duplication map at one
+      // applied-index boundary. RocksDB keeps that view stable while the slow
+      // scan and serialization continue without blocking state-machine apply.
+      std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
+      {
+        std::lock_guard<std::mutex> progressLock(m_applyProgressMutex);
+        appliedIndex = m_stateMachineAppliedIndex;
+        healthy = m_stateMachineHealthy;
+      }
+      if (!healthy) continue;
 
-    const RaftLogGcDecision decision =
-        m_raftNode->EvaluateLogGc(appliedIndex, m_raftLogGcConfig);
-    if (!decision.ShouldGc()) continue;
+      decision = m_raftNode->EvaluateLogGc(appliedIndex, m_raftLogGcConfig);
+      if (!decision.ShouldGc()) continue;
+
+      kvSnapshot = m_kvEngine->CaptureSnapshot();
+      {
+        std::lock_guard<std::mutex> stateLock(m_mtx);
+        lastRequestId = m_lastRequestId;
+      }
+    }
 
     const auto gcStartedAt = std::chrono::steady_clock::now();
-    std::string snapshot = MakeSnapShot();
+    std::string snapshot = encodeSnapshotData(kvSnapshot->Serialize(), std::move(lastRequestId));
     if (!m_raftNode->Snapshot(decision.compactIndex, std::move(snapshot))) continue;
     const uint64_t gcDurationMicros = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - gcStartedAt)
             .count());
 
-    m_lastSnapShotRaftLogIndex = decision.compactIndex;
+    {
+      // Apply reads this boundary under the execution mutex. An incoming
+      // snapshot may have advanced it while the local GC was serializing.
+      std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
+      m_lastSnapShotRaftLogIndex = std::max(m_lastSnapShotRaftLogIndex, decision.compactIndex);
+    }
     m_raftLogGcRuns.fetch_add(1, std::memory_order_relaxed);
     m_raftLogGcReclaimedEntries.fetch_add(decision.reclaimableCount,
                                           std::memory_order_relaxed);
@@ -590,9 +618,15 @@ void RegionPeer::GetSnapShotFromRaft(ApplyMsg message) {
 }
 
 std::string RegionPeer::MakeSnapShot() {
-  std::lock_guard<std::mutex> lg(m_mtx);
-  std::string snapshotData = getSnapshotData();
-  return snapshotData;
+  std::unique_ptr<IKVSnapshot> kvSnapshot;
+  std::unordered_map<std::string, int> lastRequestId;
+  {
+    std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
+    kvSnapshot = m_kvEngine->CaptureSnapshot();
+    std::lock_guard<std::mutex> stateLock(m_mtx);
+    lastRequestId = m_lastRequestId;
+  }
+  return encodeSnapshotData(kvSnapshot->Serialize(), std::move(lastRequestId));
 }
 
 void RegionPeer::PutAppend(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::PutAppendArgs *request,
@@ -678,7 +712,16 @@ bool RegionPeer::IsTxnLeader() {
   int term = -1;
   bool isLeader = false;
   m_raftNode->GetState(&term, &isLeader);
-  return isLeader;
+  if (!isLeader) return false;
+  if (m_txnReadyTerm.load(std::memory_order_acquire) == term) return true;
+
+  int confirmedTerm = -1;
+  if (!LinearizableReadBarrier(RequestDeadline(0), &confirmedTerm) ||
+      confirmedTerm != term) {
+    return false;
+  }
+  m_txnReadyTerm.store(term, std::memory_order_release);
+  return true;
 }
 
 PreparedMvccWrite RegionPeer::PrepareTxn(const TxnCommand& command) {

@@ -211,6 +211,13 @@ class MvccStorage {
       uint64_t ttlMs, uint64_t forUpdateTs, uint64_t expireAtPhysicalMs,
       uint64_t remainingBudgetMs = 0);
   virtual TxnStatus Commit(const std::string& key, uint64_t startTs, uint64_t commitTs);
+  // The default keeps in-process/test engines source-compatible while remote
+  // implementations can honor an end-to-end retry budget.
+  virtual TxnStatus CommitWithBudget(const std::string& key, uint64_t startTs,
+                                     uint64_t commitTs, uint64_t remainingBudgetMs) {
+    (void)remainingBudgetMs;
+    return Commit(key, startTs, commitTs);
+  }
   virtual TxnStatus Rollback(const std::string& key, uint64_t startTs);
   virtual std::optional<MvccLock> GetLock(const std::string& key);
   virtual std::optional<uint64_t> FindCommitTs(const std::string& key, uint64_t startTs);

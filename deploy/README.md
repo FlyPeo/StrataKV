@@ -60,7 +60,7 @@ Raft 和 RocksDB 仍在原生线程或有界线程池中执行；请求队列满
 ```bash
 bash deploy/stratakv-server up \
   --project my-db \
-  --raft-log-gc-threshold 50 \
+  --raft-log-gc-threshold 10000 \
   --raft-log-gc-count-limit 196608 \
   --raft-log-gc-size-limit 201326592 \
   --raft-log-gc-tick-interval-ms 3000

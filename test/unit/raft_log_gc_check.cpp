@@ -2,8 +2,8 @@
  * 测试目标：验证 TiKV 风格 Raft Log GC 的软阈值、条数/大小硬阈值和安全压缩边界。
  * 测试策略：向纯 GC 决策器输入可控的 snapshot、applied、replicated、日志条数和字节数，
  *           分别覆盖正常 Follower、落后 Follower、强制回收和没有已 Apply 日志的情况。
- * 测试规模：固定 8 个决策场景，默认阈值为 50 条、196608 条、192 MiB。
- * 验证内容：软 GC 不越过最慢复制位置，硬 GC 不越过已 Apply 位置，未 Apply 日志永不回收。
+ * 测试规模：固定 9 个决策场景，显式使用 50 条软阈值和默认硬阈值。
+ * 验证内容：软 GC 由最慢复制位置触发，快照标记必须对应当前 Apply 位置，未 Apply 日志永不回收。
  */
 #include <iostream>
 #include <stdexcept>
@@ -25,7 +25,8 @@ RaftLogGcState State(int truncated, int applied, int replicated, uint64_t count,
 
 int main() {
   try {
-    const RaftLogGcConfig config;
+    RaftLogGcConfig config;
+    config.threshold = 50;
 
     const auto belowSoft = EvaluateRaftLogGc(config, State(100, 149, 149, 49, 4096));
     Require(!belowSoft.ShouldGc(), "49 reclaimable entries must stay below the soft threshold");
@@ -37,6 +38,13 @@ int main() {
 
     const auto lagging = EvaluateRaftLogGc(config, State(100, 200, 149, 100, 8192));
     Require(!lagging.ShouldGc(), "soft GC must not strand a follower below the threshold");
+
+    const auto snapshotAheadOfFollower =
+        EvaluateRaftLogGc(config, State(100, 200, 160, 100, 8192));
+    Require(snapshotAheadOfFollower.ShouldGc() &&
+                snapshotAheadOfFollower.compactIndex == 200 &&
+                snapshotAheadOfFollower.reclaimableCount == 100,
+            "a current-state snapshot must never be labelled with an older follower index");
 
     const auto countForced =
         EvaluateRaftLogGc(config, State(100, 200, 110, config.countLimit, 8192));

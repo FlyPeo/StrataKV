@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-测试目标：把 interview-smoke 的分散原始输出汇总为可追溯的 CSV/JSON/Markdown 报告。
-测试策略：只读取 run 目录内的 JSON 与 key=value 日志，检查必选 case 后原子发布汇总。
-测试规模：smoke 固定汇总 A1 4 点、A2 2 点、A3 2 点、A4 4 点、B1、C1、C2。
+测试目标：把 interview-smoke/interview-full 的分散原始输出汇总为可追溯的 CSV/JSON/Markdown 报告。
+测试策略：只读取 run 目录内的 JSON 与 key=value 日志，检查必选 case 后原子发布汇总；full 按三轮聚合中位数并保留原值。
+测试规模：smoke 汇总 14 个必选 case；full 汇总 A1/A2/A3/A4 的三轮矩阵、B1、B3、C1、C2。
 验证内容：缺文件或正确性失败时保持 incomplete；完整时每个报告数字可回溯到 raw/metrics/history。
 """
 
@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import os
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -94,12 +95,122 @@ def pct_change(current: float, baseline: float) -> str:
     return f"{(current / baseline - 1.0) * 100:+.1f}%"
 
 
+def full_report(
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    required: set[str],
+    rows: list[dict[str, Any]],
+    missing: list[str],
+    failures: list[str],
+    load_pass: bool,
+    checkpoint_pass: bool,
+    cleanup_pass: bool,
+    b1_pass: bool,
+    b3_pass: bool,
+    c1_pass: bool,
+    c2_pass: bool,
+    performance_success: bool,
+) -> str:
+    points = [f"a1-{wl}-w{w}" for wl in "ABCF" for w in (1, 4, 8, 16, 32)]
+    points += [f"a1-zipfian-{wl}-w8" for wl in "AB"]
+    points += [f"a1-direct-{wl}-w8" for wl in "AC"]
+    points += [f"a2-cross-{v}" for v in (0, 15, 100)]
+    points += [f"a3-regions-{v}" for v in (1, 2, 3)]
+    points += [f"a4-{mode}-{v}" for mode in ("optimistic", "pessimistic") for v in (0, 5, 20)]
+
+    unstable: list[str] = []
+    for point in points:
+        values = [number(cases.get(f"{point}-r{rep}", {}),
+                         "successful_per_second", "throughput_committed_txn_per_sec",
+                         "throughput_commits_per_sec") for rep in (1, 2, 3)]
+        median = statistics.median(values) if values else 0.0
+        if median and any(abs(value - median) / median > 0.10 for value in values):
+            unstable.append(point)
+
+    complete = not missing and not failures and load_pass and checkpoint_pass and cleanup_pass \
+        and b1_pass and b3_pass and c1_pass and c2_pass and performance_success
+    lines = [
+        f"# StrataKV {manifest.get('profile', 'interview-full')} 报告", "",
+        "> 本结果来自客户端与服务共置的 WSL，仅是 development baseline，不能作为生产容量。", "",
+        f"- 总体结论：**{'PASS' if complete else 'FAIL'}**",
+        f"- 数据规模：{manifest.get('record_count')} records × {manifest.get('value_size_bytes')} B",
+        f"- Git commit：`{manifest.get('git_commit', 'unknown')}`（dirty={manifest.get('git_dirty', True)}）",
+        "- 每个性能点运行 3 次；表格同时保留三轮原值和中位数。单点样本少于 100,000 时，P99.9 不作为有效结论。",
+        f"- 三轮吞吐偏离中位数超过 10% 的点：{len(unstable)} 个。" +
+        (f" 例：{', '.join(unstable[:12])}。" if unstable else ""), "",
+        "## A1 Gateway/Direct 并发矩阵", "",
+        "| Case | r1 OPS | r2 OPS | r3 OPS | median OPS | median P99 (us) | 状态 |",
+        "|---|---:|---:|---:|---:|---:|---|",
+    ]
+    for point in points[:24]:
+        values = [number(cases.get(f"{point}-r{rep}", {}), "successful_per_second") for rep in (1, 2, 3)]
+        # A1 JSON stores percentile data under latency_us; retrieve it explicitly.
+        p99_values = [number(cases.get(f"{point}-r{rep}", {}).get("latency_us", {}), "p99") for rep in (1, 2, 3)]
+        p99 = statistics.median(p99_values) if p99_values else 0.0
+        lines.append(f"| {point} | {values[0]:.2f} | {values[1]:.2f} | {values[2]:.2f} | "
+                     f"{statistics.median(values):.2f} | {p99:.0f} | "
+                     f"{'unstable' if point in unstable else 'stable'} |")
+
+    lines += ["", "## A2/A3 跨 Region 事务", "",
+              "| Case | r1 TPS | r2 TPS | r3 TPS | median TPS | median P99 (us) |", "|---|---:|---:|---:|---:|---:|"]
+    for point in points[24:30]:
+        raw = [number(cases.get(f"{point}-r{rep}", {}), "throughput_committed_txn_per_sec") for rep in (1, 2, 3)]
+        p99 = statistics.median([number(cases.get(f"{point}-r{rep}", {}), "latency_p99_us") for rep in (1, 2, 3)])
+        lines.append(f"| {point} | {raw[0]:.2f} | {raw[1]:.2f} | {raw[2]:.2f} | {statistics.median(raw):.2f} | {p99:.0f} |")
+
+    lines += ["", "## A4 争用策略", "",
+              "| Case | r1 committed TPS | r2 committed TPS | r3 committed TPS | median TPS | median conflict | median success |",
+              "|---|---:|---:|---:|---:|---:|---:|"]
+    for point in points[30:]:
+        raw = [number(cases.get(f"{point}-r{rep}", {}), "throughput_commits_per_sec") for rep in (1, 2, 3)]
+        conflicts = [number(cases.get(f"{point}-r{rep}", {}), "actual_conflict_rate") for rep in (1, 2, 3)]
+        success = [number(cases.get(f"{point}-r{rep}", {}), "success_rate") for rep in (1, 2, 3)]
+        lines.append(f"| {point} | {raw[0]:.2f} | {raw[1]:.2f} | {raw[2]:.2f} | {statistics.median(raw):.2f} | "
+                     f"{statistics.median(conflicts):.4f} | {statistics.median(success):.4f} |")
+
+    lines += ["", "## B1/B3/C1/C2 正确性门禁", "",
+              f"- B1 Region Leader SIGKILL、追赶与完整重启校验：**{'PASS' if b1_pass else 'FAIL'}**；证据 `faults/`。",
+              f"- B3 内存模拟恢复单元测试（并非真实进程 SIGKILL）：**{'PASS' if b3_pass else 'FAIL'}**；证据 `faults/`。",
+              f"- C1 并发转账总额守恒：**{'PASS' if c1_pass else 'FAIL'}**；证据 `{cases.get('c1-transfer', {}).get('source', 'missing')}`。",
+              f"- C2 bounded register linearizability：**{'PASS' if c2_pass else 'FAIL'}**；证据 `{cases.get('c2-register', {}).get('source', 'missing')}`。",
+              "", "## 边界", "",
+              "- A1 每次操作只访问一个 Region；A2/A3 是完整三 mutation transaction，单位为 TPS。",
+              "- C1/C2 在无故障集群运行；B3 是内存模拟恢复证据。",
+              "- unstable 点保留三轮原值，不能只用中位数宣称稳定性能。",
+              "- 本报告是 development baseline，不能作为生产容量或与 TiKV 官方硬件横向比较。",
+              "", "## 完整测量表", "",
+              "| Case | 尝试 | 成功 | 成功 OPS/TPS | P50 | P95 | P99 | Max |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for row in rows:
+        if row["case_id"] in required:
+            lines.append("| " + " | ".join(str(row[field]) for field in (
+                "case_id", "attempted", "successful", "successful_per_second",
+                "p50_us", "p95_us", "p99_us", "max_us")) + " |")
+    lines += ["", "## 验收与资源证据", "",
+              f"- 完整 Load：{load_pass}；逐点全量 checkpoint 校验：{checkpoint_pass}；进程清理：{cleanup_pass}。",
+              "- 客户端 CPU 时间和峰值 RSS：`metrics/*-client.txt`；服务 CPU/IO/状态：各点 before/after 目录。",
+              "- 二进制 SHA-256：`manifest.json`；固定 seed=20260904。"]
+    if missing:
+        lines += ["", "缺失 case：`" + "`, `".join(missing) + "`。"]
+    if failures:
+        lines += ["", "验收失败："] + [f"- {failure}" for failure in failures]
+    return "\n".join(lines) + "\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--profile", default="interview-smoke")
     args = parser.parse_args()
     run_dir: Path = args.run_dir.resolve()
+    full_family = args.profile in ("interview-full", "interview-full-10pct")
+    # Expected attempted work per case, kept in sync with deploy/stratakv-performance.
+    scales = {
+        "interview-smoke": {"a1": 10000, "c2_register": 300, "a4": 1000, "other": 1000},
+        "interview-full": {"a1": 20000, "c2_register": 1000, "a4": 5000, "other": 10000},
+        "interview-full-10pct": {"a1": 2000, "c2_register": 100, "a4": 500, "other": 1000},
+    }
+    scale = scales[args.profile]
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     cases = load_cases(run_dir)
@@ -110,7 +221,7 @@ def main() -> int:
         "a4-optimistic-0", "a4-optimistic-20", "a4-pessimistic-0", "a4-pessimistic-20",
         "c1-transfer", "c2-register",
     }
-    if args.profile == "interview-full":
+    if full_family:
         points = [f"a1-{wl}-w{w}" for wl in "ABCF" for w in (1, 4, 8, 16, 32)]
         points += [f"a1-zipfian-{wl}-w8" for wl in "AB"]
         points += [f"a1-direct-{wl}-w8" for wl in "AC"]
@@ -122,9 +233,9 @@ def main() -> int:
     failures: list[str] = []
     for name in sorted(required & cases.keys()):
         case = cases[name]
-        expected = (20000 if args.profile == "interview-full" else 10000) if name.startswith("a1") else (
-            (1000 if args.profile == "interview-full" else 300) if name == "c2-register" else
-            (5000 if name.startswith("a4") else 10000) if args.profile == "interview-full" else 1000)
+        expected = (scale["a1"] if name.startswith("a1") else
+                    scale["c2_register"] if name == "c2-register" else
+                    scale["a4"] if name.startswith("a4") else scale["other"])
         attempted = number(case, "attempted", "transactions_attempted", "transactions_total")
         if attempted != expected:
             failures.append(f"{name}: attempted={attempted:g}, expected={expected}")
@@ -138,8 +249,11 @@ def main() -> int:
                 if number(case, "reads") != reads or number(case, "updates") != expected - reads:
                     failures.append(f"{name}: incorrect read/update mix")
     load = cases.get("load", {})
-    expected_records = 100000 if args.profile == "interview-full" else 3000
-    load_pass = number(load, "attempted") == expected_records and number(load, "successful") == expected_records
+    expected_records = int(manifest.get("record_count") or 0)
+    load_attempted = number(load, "attempted")
+    load_pass = (load_attempted == expected_records
+                 and number(load, "successful") == load_attempted
+                 and number(load, "result_unknown") == 0)
     checkpoint_pass = True
     checkpoint_cases = {name for name in required if name.startswith("a")} | {"b1", "c1", "c2"}
     for name in sorted(checkpoint_cases):
@@ -167,7 +281,13 @@ def main() -> int:
                 and b1_pass and b3_pass and c1_pass and c2_pass and performance_success)
 
     rows: list[dict[str, Any]] = []
-    for case_id, case in sorted(cases.items()):
+    row_case_ids = set(cases)
+    if full_family:
+        # load_cases also creates convenience aliases without -rN for smoke.
+        # Full CSV output must remain an exact raw repetition inventory.
+        row_case_ids = required | {"load", "c1-transfer", "c2-register"}
+    for case_id in sorted(row_case_ids):
+        case = cases.get(case_id, {})
         latency = case.get("latency_us", {}) if isinstance(case.get("latency_us"), dict) else {}
         rows.append({
             "case_id": case_id,
@@ -206,6 +326,22 @@ def main() -> int:
         "cases": cases,
     }
     atomic_json(run_dir / "summary.json", summary)
+
+    if full_family:
+        # Full runs have repetition-suffixed case IDs.  Keep the raw rows in
+        # summary.csv, while REPORT.md presents the three values and median for
+        # each logical point.
+        report_text = full_report(
+            manifest, cases, required, rows, missing, failures, load_pass,
+            checkpoint_pass, cleanup_pass, b1_pass, b3_pass, c1_pass, c2_pass,
+            performance_success,
+        )
+        atomic_text(run_dir / "REPORT.md", report_text)
+        manifest["state"] = "complete" if not missing and not failures and load_pass and checkpoint_pass \
+            and cleanup_pass and b1_pass and b3_pass and c1_pass and c2_pass and performance_success else "incomplete"
+        manifest["overall"] = "PASS" if manifest["state"] == "complete" else "FAIL"
+        atomic_json(manifest_path, manifest)
+        return 0 if manifest["state"] == "complete" else 1
 
     lines = [
         f"# StrataKV {args.profile} 报告",

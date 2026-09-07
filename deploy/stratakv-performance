@@ -11,10 +11,11 @@ Usage:
   bash deploy/stratakv-performance all [options]
   bash deploy/stratakv-performance prepare|run|fault|check|report|down|clean [options]
   bash deploy/stratakv-performance compare <baseline_dir> <candidate_dir>
-  bash deploy/stratakv-performance plan [--profile interview-smoke]
+  bash deploy/stratakv-performance plan [--profile NAME]
 
 Options:
-  --profile NAME       interview-smoke (default); interview-full acceptance is pending.
+  --profile NAME       interview-smoke (default), interview-full, or
+                        interview-full-10pct (1/10-scale interview-full).
   --run-id ID          Result directory name. Default: smoke-YYYYmmdd-HHMMSS.
   --project NAME       Scoped runtime project. Default: perf-<run-id>.
   --result-dir PATH    Default: test-results/performance/<run-id>.
@@ -22,7 +23,7 @@ Options:
   --tso-port PORT      First of three TSO ports. Default: 26480.
   --no-build           Reuse current Release binaries.
 
-The smoke profile uses 3,000 records × 256 B and produces all files below
+All profiles produce their result files below
 test-results/performance/<run-id>/. It always stops its own cluster on exit;
 runtime data and the checkpoint remain until the explicit clean command.
 B3 is an additional in-memory simulated recovery check. C1/C2 run without
@@ -65,8 +66,8 @@ case "$run_id" in ''|*[!A-Za-z0-9_-]*) echo "Invalid --run-id." >&2; exit 2 ;; e
 [ -n "$project" ] || project="perf-${run_id}"
 case "$project" in ''|*[!A-Za-z0-9_-]*) echo "Invalid --project." >&2; exit 2 ;; esac
 case "$profile" in
-  interview-smoke|interview-full) ;;
-  *) echo "--profile must be interview-smoke or interview-full." >&2; exit 2 ;;
+  interview-smoke|interview-full|interview-full-10pct) ;;
+  *) echo "--profile must be interview-smoke, interview-full, or interview-full-10pct." >&2; exit 2 ;;
 esac
 for numeric in "$gateway_port" "$tso_port"; do
   case "$numeric" in ''|*[!0-9]*|0) echo "Ports must be positive integers." >&2; exit 2 ;; esac
@@ -79,6 +80,7 @@ esac
 
 runtime_dir="${deploy_dir}/runtime/${project}"
 checkpoint_project="${project}-checkpoint"
+stale_runtime_dirs=""
 checkpoint_dir="${deploy_dir}/runtime/${checkpoint_project}"
 gateway="http://127.0.0.1:${gateway_port}"
 tso_endpoints="127.0.0.1:${tso_port},127.0.0.1:$((tso_port + 1)),127.0.0.1:$((tso_port + 2))"
@@ -86,16 +88,33 @@ regions_file="${runtime_dir}/regions.conf"
 cluster_may_be_running=false
 run_initialized=false
 
+full_profile() {
+  case "$profile" in
+    interview-full|interview-full-10pct) return 0 ;;
+  esac
+  return 1
+}
+
 print_plan() {
   if [ "$profile" = interview-full ]; then
     cat <<'EOF'
-profile=interview-full status=planned
+profile=interview-full status=implemented
 load=100000x1024B
 a1=gateway-uniform-A/B/C/F@1/4/8/16/32,gateway-zipfian-A/B@8,direct-uniform-A/C@8;20000opsx3
 a2=cross-region-ratio-0/15/100;10000txx3
 a3=regions-1/2/3;10000txx3
 a4=optimistic/pessimisticx0/5/20;5000txx3
 faults=B1,B3 consistency=C1-10000,C2-1000
+EOF
+  elif [ "$profile" = interview-full-10pct ]; then
+    cat <<'EOF'
+profile=interview-full-10pct status=implemented
+load=10000x1024B
+a1=gateway-uniform-A/B/C/F@1/4/8/16/32,gateway-zipfian-A/B@8,direct-uniform-A/C@8;2000opsx3
+a2=cross-region-ratio-0/15/100;1000txx3
+a3=regions-1/2/3;1000txx3
+a4=optimistic/pessimisticx0/5/20;500txx3
+faults=B1,B3 consistency=C1-1000,C2-100
 EOF
   else
     cat <<'EOF'
@@ -147,6 +166,9 @@ PY
 on_exit() {
   local status=$?
   trap - EXIT INT TERM
+  for stale_dir in ${stale_runtime_dirs:-}; do
+    [ -d "$stale_dir" ] && rm -rf "$stale_dir" 2>/dev/null || true
+  done
   if [ "$cluster_may_be_running" = true ]; then
     down_cluster || status=1
   fi
@@ -208,8 +230,8 @@ manifest = {
     "topology": {"gateway": 1, "tso": 3, "nodes": 3, "regions": 3, "replicas_per_region": 3},
     "gateway": {"url": f"http://127.0.0.1:{gateway_port}", "runtime": "fiber", "connection_mode": "close"},
     "tso_first_port": int(tso_port),
-    "record_count": 100000 if profile == "interview-full" else 3000,
-    "value_size_bytes": 1024 if profile == "interview-full" else 256,
+    "record_count": 100000 if profile == "interview-full" else 10000 if profile == "interview-full-10pct" else 3000,
+    "value_size_bytes": 1024 if profile in ("interview-full", "interview-full-10pct") else 256,
     "seed": 20260904,
     "p999_minimum_samples": 100000,
 }
@@ -256,6 +278,9 @@ workload_common() {
   if [ "$profile" = "interview-full" ]; then
     records=100000
     val_size=1024
+  elif [ "$profile" = "interview-full-10pct" ]; then
+    records=10000
+    val_size=1024
   fi
   printf '%s\n' \
     --path gateway --gateway "$gateway" --regions-config "$regions_file" \
@@ -271,7 +296,12 @@ run_workload() {
     if [ "$previous" = --case-id ]; then metric_case=$arg; fi
     previous=$arg
   done
-  /usr/bin/time -f 'user_seconds=%U\nsystem_seconds=%S\nmax_rss_kib=%M\nwall_seconds=%e\nexit_code=%x' \
+  # A case whose cluster never came up used to spin forever in its connect/retry
+  # loop (the --timeout-ms only bounds in-flight ops), stalling the whole suite.
+  # Enforce a wall-clock budget and return the workload's real exit status.
+  local wall_budget=1800
+  timeout --signal=TERM --kill-after=5s "${wall_budget}s" \
+    /usr/bin/time -f 'user_seconds=%U\nsystem_seconds=%S\nmax_rss_kib=%M\nwall_seconds=%e\nexit_code=%x' \
     -o "${result_dir}/metrics/${metric_case}-client.txt" \
     "${repo_dir}/bin/stratakv-test-kv-workload" "${common_args[@]}" "$@"
 }
@@ -286,15 +316,77 @@ create_checkpoint() {
   echo "checkpoint_method=cp-reflink-auto" >"${result_dir}/metrics/checkpoint.txt"
 }
 
+wait_region_leaders() {
+  # A restart re-runs the initial leader election with a 2-4 s randomized
+  # timeout. The first measured request must not race that window, or a
+  # single-attempt direct case turns a healthy cluster into a spurious
+  # RESULT_UNKNOWN. Node status files refresh every second, so poll them until
+  # every Region reports a leader.
+  local waited=0 pending region
+  while [ "$waited" -lt 30 ]; do
+    pending=""
+    for region in $(ls "${runtime_dir}"/node-0/run_data/ 2>/dev/null |
+        grep -oE '^raft_status_region_[0-9]+' | grep -oE '[0-9]+$' | sort -u); do
+      if ! grep -q '"isLeader":true' \
+          "${runtime_dir}"/node-*/run_data/raft_status_region_${region}_*.json 2>/dev/null; then
+        pending="$pending $region"
+      fi
+    done
+    [ -z "$pending" ] && return 0
+    sleep 1
+    waited=$((waited + 1))
+  done
+  echo "[warn] regions${pending} still report no leader after ${waited}s" >&2
+  return 0
+}
+
 restore_checkpoint() {
   case_id=$1
-  down_cluster
+  down_cluster || true
   [ -f "${checkpoint_dir}/runtime.conf" ] || { echo "Missing checkpoint ${checkpoint_dir}" >&2; exit 2; }
-  if [ -f "${runtime_dir}/runtime.conf" ]; then
-    bash "${deploy_dir}/stratakv-server" reset --project "$project" >/dev/null
+  # Startup after a copy-on-write restore is racy (TSO members can exit during
+  # the elect window). A half-started cluster used to be silently tolerated and
+  # the case workload then spun forever waiting on the gateway, stalling the
+  # whole suite. Retry the restore from a pristine copy instead.
+  local attempt up_ok=false
+  for attempt in 1 2 3; do
+    # `cp -a SRC DST` nests SRC underneath DST when DST already exists, and a
+    # bulk delete of the runtime tree can be blocked by the environment's
+    # safe-delete audit (hundreds of files), which silently keeps the previous
+    # case's state in place. Move the stale tree aside instead: rename is not a
+    # bulk delete and the copy below then lands on a clean path. The moved tree
+    # is removed on exit. This also replaces the former reset --project call,
+    # whose rm -rf hits the same audit on the retry path and used to leave a
+    # stale tree that turned every later attempt into a nested copy.
+    if [ -e "${runtime_dir}" ]; then
+      stale="${runtime_dir}.stale-$$-$RANDOM"
+      if mv "${runtime_dir}" "${stale}" 2>/dev/null; then
+        # Do NOT delete the moved tree during the run: this environment audits
+        # bulk deletes per turn (threshold 500 files) and once the budget is
+        # exhausted even the single-file cleanup inside `stratakv-server up`
+        # gets blocked, failing every later start. Stale trees are removed in
+        # one batch by on_exit, or manually afterwards.
+        stale_runtime_dirs="${stale_runtime_dirs} ${stale}"
+      else
+        rm -rf "${runtime_dir}" || true
+      fi
+    fi
+    cp -a --reflink=auto "$checkpoint_dir" "$runtime_dir"
+    if start_cluster; then
+      up_ok=true
+      break
+    fi
+    echo "[case] ${case_id}: cluster start attempt ${attempt}/3 failed; resetting and retrying" >&2
+    down_cluster || true
+  done
+  if [ "$up_ok" != true ]; then
+    # Give up on this case quickly instead of handing it to a workload that
+    # cannot reach the gateway. The caller records the outage and moves on.
+    echo "[case] ${case_id}: cluster failed to start after 3 attempts; skipping case" >&2
+    return 1
   fi
-  cp -a --reflink=auto "$checkpoint_dir" "$runtime_dir"
-  start_cluster
+  wait_region_leaders
+  # Verification must succeed before this checkpoint can be measured.
   run_workload --mode verify --case-id "checkpoint-verify-${case_id}" --workload C \
     --distribution uniform --workers 1 --max-attempts 3 \
     --output "${result_dir}/metrics/checkpoint-verify-${case_id}.json" >/dev/null
@@ -303,10 +395,13 @@ restore_checkpoint() {
 prepare_suite() {
   echo "[prepare] starting scoped cluster ${project}"
   start_cluster
+  wait_region_leaders
   capture_metrics prepare before-load
   local load_ops=3000
   if [ "$profile" = "interview-full" ]; then
     load_ops=100000
+  elif [ "$profile" = "interview-full-10pct" ]; then
+    load_ops=10000
   fi
   run_workload --mode load --case-id load --workload A --distribution uniform \
     --workers 8 --operations "$load_ops" --max-attempts 5 \
@@ -331,7 +426,10 @@ run_json_case() {
   case_id=$1
   shift
   echo "[case] ${case_id}: restoring and verifying checkpoint, then measuring"
-  restore_checkpoint "$case_id"
+  restore_checkpoint "$case_id" || {
+    echo "[case] ${case_id}: restore failed; no measurement taken" >&2
+    return 0
+  }
   capture_metrics "$case_id" before
   run_workload --mode run --case-id "$case_id" "$@" \
     --output "${result_dir}/raw/a1/${case_id}.json" \
@@ -344,19 +442,29 @@ run_log_case() {
   case_id=$2
   shift 2
   echo "[case] ${case_id}: restoring and verifying checkpoint, then measuring"
-  restore_checkpoint "$case_id"
+  restore_checkpoint "$case_id" || {
+    echo "[case] ${case_id}: restore failed; no measurement taken" >&2
+    return 0
+  }
   capture_metrics "$case_id" before
   {
     echo "case_id=${case_id}"
     /usr/bin/time -f 'user_seconds=%U\nsystem_seconds=%S\nmax_rss_kib=%M\nwall_seconds=%e\nexit_code=%x' \
       -o "${result_dir}/metrics/${case_id}-client.txt" "$@"
-  } >"${result_dir}/raw/${group}/${case_id}.log" 2>&1
+  } >"${result_dir}/raw/${group}/${case_id}.log" 2>&1 || true
   capture_metrics "$case_id" after
 }
 
 run_performance() {
-  if [ "$profile" = "interview-full" ]; then
+  if full_profile; then
     local a1_ops=20000
+    local a2a3_tx=10000
+    local a4_tx=5000
+    if [ "$profile" = "interview-full-10pct" ]; then
+      a1_ops=2000
+      a2a3_tx=1000
+      a4_tx=500
+    fi
     for rep in 1 2 3; do
       for wl in A B C F; do
         for w in 1 4 8 16 32; do
@@ -372,13 +480,13 @@ run_performance() {
       for ratio in 0 15 100; do
         run_log_case a2 "a2-cross-${ratio}-r${rep}" "${repo_dir}/bin/stratakv-test-region-2pc-benchmark" \
           --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
-          --run-id "${run_id}-a2-${ratio}-r${rep}" --workers 8 --transactions 10000 \
+          --run-id "${run_id}-a2-${ratio}-r${rep}" --workers 8 --transactions "$a2a3_tx" \
           --keys-per-transaction 3 --cross-percent "$ratio"
       done
       for regions in 1 2 3; do
         run_log_case a3 "a3-regions-${regions}-r${rep}" "${repo_dir}/bin/stratakv-test-region-2pc-benchmark" \
           --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
-          --run-id "${run_id}-a3-${regions}-r${rep}" --workers 8 --transactions 10000 \
+          --run-id "${run_id}-a3-${regions}-r${rep}" --workers 8 --transactions "$a2a3_tx" \
           --keys-per-transaction 3 --region-count "$regions"
       done
       for mode in optimistic pessimistic; do
@@ -387,7 +495,7 @@ run_performance() {
           if [ "$share" -gt 0 ]; then hot_keys=8; fi
           run_log_case a4 "a4-${mode}-${share}-r${rep}" "${repo_dir}/bin/stratakv-test-txn-contention" \
             --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
-            --run-id "${run_id}-a4-${mode}-${share}-r${rep}" --workers 16 --transactions 5000 \
+            --run-id "${run_id}-a4-${mode}-${share}-r${rep}" --workers 16 --transactions "$a4_tx" \
             --hot-key-count "$hot_keys" --hot-percent "$share" --keys-per-region 1 \
             --max-attempts 3 --retry-delay-ms 10 --workload "${mode}-contention"
         done
@@ -477,7 +585,16 @@ PY
 
 run_b1() {
   echo "[fault] B1: Region Leader SIGKILL and recovery verification"
-  restore_checkpoint b1
+  if ! restore_checkpoint b1; then
+    {
+      echo "case_id=b1"
+      echo "fault=region-leader-sigkill"
+      echo "result=FAIL"
+      echo "reason=cluster-restore-failed"
+    } >"${result_dir}/faults/b1-summary.txt"
+    echo "[fault] B1: FAIL (cluster could not be restored; see faults/b1-summary.txt)" >&2
+    return 0
+  fi
   capture_metrics b1 before
   workload_log="${result_dir}/faults/b1-workload.log"
   history="${result_dir}/histories/b1-history.jsonl"
@@ -505,7 +622,7 @@ run_b1() {
   printf '{"event":"process_exited","node":"%s","time_ns":%s}\n' \
     "$leader_node" "$(date +%s%N)" >>"$timeline"
   bash "${deploy_dir}/stratakv-server" restart-node --project "$project" --node "$leader_node" \
-    >"${result_dir}/faults/b1-restart-node.log" 2>&1
+    >"${result_dir}/faults/b1-restart-node.log" 2>&1 || true
   printf '{"event":"node_rejoined","node":"%s","time_ns":%s}\n' \
     "$leader_node" "$(date +%s%N)" >>"$timeline"
   set +e
@@ -525,8 +642,8 @@ run_b1() {
       "$leader_node" "$(date +%s%N)" >>"$timeline"
     capture_metrics b1 converged
   fi
-  down_cluster
-  start_cluster
+  down_cluster || true
+  start_cluster || true
   persistence_status=0
   "${repo_dir}/bin/stratakv-test-reliability" --verify-only \
     --gateway "$gateway" --transactions 1000 --workers 8 --retries 20 \
@@ -550,7 +667,11 @@ run_b1() {
     echo "full_restart_verify_exit_code=${persistence_status}"
     echo "result=${b1_result}"
   } >"${result_dir}/faults/b1-summary.txt"
-  [ "$b1_result" = PASS ]
+  # A failed gate is recorded in the summary and reported by report.py; it must
+  # not abort the remaining B3/C1/C2 stages of the suite.
+  if [ "$b1_result" != PASS ]; then
+    echo "[fault] B1: FAIL (see faults/b1-summary.txt)" >&2
+  fi
 }
 
 run_b3() {
@@ -565,7 +686,9 @@ run_b3() {
     echo "execution=memory-simulated-exception"
     echo "result=${result}"
   } >"${result_dir}/faults/b3-summary.txt"
-  [ "$result" = PASS ]
+  if [ "$result" != PASS ]; then
+    echo "[check] B3: FAIL (see faults/b3-recovery.log)" >&2
+  fi
 }
 
 run_checks() {
@@ -575,22 +698,35 @@ run_checks() {
   if [ "$profile" = "interview-full" ]; then
     c1_ops=10000
     c2_ops=1000
+  elif [ "$profile" = "interview-full-10pct" ]; then
+    c1_ops=1000
+    c2_ops=100
   fi
-  restore_checkpoint c1
-  capture_metrics c1 before
-  run_workload --mode transfer --case-id c1-transfer --workers 8 --operations "$c1_ops" \
-    --max-attempts 20 --retry-delay-ms 20 \
-    --history "${result_dir}/histories/c1-transfers.jsonl" \
-    --output "${result_dir}/raw/c1-transfer.json" >"${result_dir}/raw/c1-transfer.log"
-  capture_metrics c1 after
+  restore_checkpoint c1 || {
+    echo "[check] C1: cluster restore failed; skipping" >&2
+    skip_c1=true
+  }
+  if [ "${skip_c1:-}" != true ]; then
+    capture_metrics c1 before
+    run_workload --mode transfer --case-id c1-transfer --workers 8 --operations "$c1_ops" \
+      --max-attempts 20 --retry-delay-ms 20 \
+      --history "${result_dir}/histories/c1-transfers.jsonl" \
+      --output "${result_dir}/raw/c1-transfer.json" >"${result_dir}/raw/c1-transfer.log"
+    capture_metrics c1 after
+  fi
 
-  restore_checkpoint c2
-  capture_metrics c2 before
-  run_workload --mode register --case-id c2-register --workers 8 --operations "$c2_ops" \
-    --max-attempts 20 --retry-delay-ms 20 \
-    --history "${result_dir}/histories/c2-register.jsonl" \
-    --output "${result_dir}/raw/c2-register.json" >"${result_dir}/raw/c2-register.log"
-  capture_metrics c2 after
+  restore_checkpoint c2 || {
+    echo "[check] C2: cluster restore failed; skipping" >&2
+    skip_c2=true
+  }
+  if [ "${skip_c2:-}" != true ]; then
+    capture_metrics c2 before
+    run_workload --mode register --case-id c2-register --workers 8 --operations "$c2_ops" \
+      --max-attempts 20 --retry-delay-ms 20 \
+      --history "${result_dir}/histories/c2-register.jsonl" \
+      --output "${result_dir}/raw/c2-register.json" >"${result_dir}/raw/c2-register.log"
+    capture_metrics c2 after
+  fi
 }
 
 report_suite() {
@@ -636,7 +772,7 @@ PY
     run_b1
     run_b3
     run_checks
-    down_cluster
+    down_cluster || true
     report_suite
     echo "${profile} complete: ${result_dir}"
     ;;

@@ -22,6 +22,11 @@ namespace {
     return deadline != RpcDeadline::max() && std::chrono::steady_clock::now() >= deadline;
   }
 
+  bool RetryBudgetExhausted(const RpcDeadline& deadline, int attempt) {
+    if (deadline == RpcDeadline::max()) return attempt >= kMaxRpcAttempts;
+    return RpcBudgetExpired(deadline);
+  }
+
   uint64_t RemainingRpcBudgetMs(const RpcDeadline& deadline) {
     if (deadline == RpcDeadline::max()) return 0;
     const auto now = std::chrono::steady_clock::now();
@@ -199,7 +204,7 @@ TxnStatus RaftMvccStorage::Prewrite(const std::string& key, const std::string& v
       if (RpcBudgetExpired(deadline)) return TxnStatus::ResultUnknown;
       ExponentialBackoff(attempt);
       LogRpcRetry(shardId_, "Prewrite", failedServer, attempt, controller, reply.err());
-      if (attempt >= kMaxRpcAttempts) {
+      if (RetryBudgetExhausted(deadline, attempt)) {
         return TxnStatus::ResultUnknown;
       }
       continue;
@@ -243,7 +248,7 @@ TxnStatus RaftMvccStorage::PrewriteDelete(const std::string& key, const std::str
       server = (server + 1) % stubs_.size();
       if (RpcBudgetExpired(deadline)) return TxnStatus::ResultUnknown;
       ExponentialBackoff(attempt);
-      if (attempt >= kMaxRpcAttempts) {
+      if (RetryBudgetExhausted(deadline, attempt)) {
         return TxnStatus::ResultUnknown;
       }
       continue;
@@ -284,7 +289,7 @@ TxnStatus RaftMvccStorage::PrewriteLock(const std::string& key, const std::strin
       server = (server + 1) % stubs_.size();
       if (RpcBudgetExpired(deadline)) return TxnStatus::ResultUnknown;
       ExponentialBackoff(attempt);
-      if (attempt >= kMaxRpcAttempts) return TxnStatus::ResultUnknown;
+      if (RetryBudgetExhausted(deadline, attempt)) return TxnStatus::ResultUnknown;
       continue;
     }
     recentLeaderId_.store(server, std::memory_order_relaxed);
@@ -328,7 +333,7 @@ TxnStatus RaftMvccStorage::BatchPrewrite(const std::vector<MvccMutation>& mutati
       server = (server + 1) % stubs_.size();
       if (RpcBudgetExpired(deadline)) return TxnStatus::ResultUnknown;
       ExponentialBackoff(attempt);
-      if (attempt >= kMaxRpcAttempts) return TxnStatus::ResultUnknown;
+      if (RetryBudgetExhausted(deadline, attempt)) return TxnStatus::ResultUnknown;
       continue;
     }
     recentLeaderId_.store(server, std::memory_order_relaxed);
@@ -383,7 +388,7 @@ PessimisticLockResult RaftMvccStorage::AcquirePessimisticLockForUpdate(
         return unknown;
       }
       ExponentialBackoff(attempt);
-      if (attempt >= kMaxRpcAttempts) {
+      if (RetryBudgetExhausted(deadline, attempt)) {
         PessimisticLockResult unknown;
         unknown.status = TxnStatus::ResultUnknown;
         return unknown;
@@ -403,10 +408,17 @@ PessimisticLockResult RaftMvccStorage::AcquirePessimisticLockForUpdate(
 }
 
 TxnStatus RaftMvccStorage::Commit(const std::string& key, uint64_t startTs, uint64_t commitTs) {
+  return CommitWithBudget(key, startTs, commitTs, 0);
+}
+
+TxnStatus RaftMvccStorage::CommitWithBudget(const std::string& key, uint64_t startTs,
+                                            uint64_t commitTs,
+                                            uint64_t remainingBudgetMs) {
   MutationLane& lane = PickMutationLane();
   std::lock_guard<std::mutex> mutationLock(lane.mutex);
   const int reqId = ++lane.requestId;
   int server = recentLeaderId_.load(std::memory_order_relaxed);
+  const RpcDeadline deadline = MakeRpcDeadline(remainingBudgetMs);
 
   int attempt = 0;
   while (true) {
@@ -425,10 +437,11 @@ TxnStatus RaftMvccStorage::Commit(const std::string& key, uint64_t startTs, uint
     if (controller.Failed() || reply.err() == "ErrWrongLeader") {
       const int failedServer = server;
       server = (server + 1) % stubs_.size();
+      if (RpcBudgetExpired(deadline)) return TxnStatus::ResultUnknown;
       ExponentialBackoff(attempt);
       LogRpcRetry(shardId_, "Commit", failedServer, attempt, controller, reply.err());
-      if (attempt >= kMaxRpcAttempts) {
-        return TxnStatus::StorageError;
+      if (RetryBudgetExhausted(deadline, attempt)) {
+        return remainingBudgetMs == 0 ? TxnStatus::StorageError : TxnStatus::ResultUnknown;
       }
       continue;
     }
@@ -464,7 +477,7 @@ TxnStatus RaftMvccStorage::BatchCommit(const std::vector<std::string>& keys, uin
       server = (server + 1) % stubs_.size();
       if (RpcBudgetExpired(deadline)) return TxnStatus::ResultUnknown;
       ExponentialBackoff(attempt);
-      if (attempt >= kMaxRpcAttempts) return TxnStatus::ResultUnknown;
+      if (RetryBudgetExhausted(deadline, attempt)) return TxnStatus::ResultUnknown;
       continue;
     }
     recentLeaderId_.store(server, std::memory_order_relaxed);
@@ -530,7 +543,7 @@ TxnStatus RaftMvccStorage::BatchRollback(const std::vector<std::string>& keys, u
       server = (server + 1) % stubs_.size();
       if (RpcBudgetExpired(deadline)) return TxnStatus::ResultUnknown;
       ExponentialBackoff(attempt);
-      if (attempt >= kMaxRpcAttempts) return TxnStatus::ResultUnknown;
+      if (RetryBudgetExhausted(deadline, attempt)) return TxnStatus::ResultUnknown;
       continue;
     }
     recentLeaderId_.store(server, std::memory_order_relaxed);
@@ -632,7 +645,7 @@ TxnStatus RaftMvccStorage::CheckTxnStatus(const std::string& primaryKey, uint64_
       server = (server + 1) % stubs_.size();
       if (RpcBudgetExpired(deadline)) return TxnStatus::Timeout;
       ExponentialBackoff(attempt);
-      if (attempt >= kMaxRpcAttempts) return TxnStatus::StorageError;
+      if (RetryBudgetExhausted(deadline, attempt)) return TxnStatus::Timeout;
       continue;
     }
 
