@@ -7,14 +7,6 @@ Primary-First 2PC，并提供 HTTP/JSON Gateway、命令行客户端和 C++ SDK�
 当前版本定位为 **Developer Edition**：适合 Linux/WSL 本地部署、功能演示、
 源码学习和故障测试，不应直接承载生产数据。
 
-## 来源与第三方代码
-
-项目不是从空目录开始的原创实现。Raft、RPC 和 Pulsar 均包含公开教学项目或
-开源项目的历史基线，当前仓库在此基础上继续实现事务、存储、运行时优化和
-工程验证。已知来源线索及仍需补齐的版本、许可证信息记录在
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)；在归属审计完成前，不应将
-相关基础模块描述为“完全从零实现”。
-
 ## 1. 架构与能力
 
 ```text
@@ -59,16 +51,16 @@ StrataKV 当前不使用 Docker、Compose、Kubernetes 或 Helm。
 
 #### 直接链接依赖
 
-| 依赖 | CMake/链接名称 | 项目中的用途 | 获取方式 |
-| --- | --- | --- | --- |
-| Pulsar | `Pulsar::pulsar` | Fiber、per-worker deque/work stealing 调度器、epoll、Timer 和 Hook I/O | Git submodule：`src/pulsar` |
-| Boost.Context | `Boost::context` | Pulsar Fiber 的原生 `fcontext` 上下文切换 | `libboost-context-dev` |
-| Protobuf | `find_package(Protobuf REQUIRED)`、`${Protobuf_LIBRARIES}` | Raft/KV RPC 消息、Service、Stub 和反射分发 | `libprotobuf-dev`；修改 `.proto` 时还需要 `protoc` |
-| RocksDB | `rocksdb` | 唯一的本地 KV 持久化引擎、WriteBatch 和前缀扫描 | `librocksdb-dev` |
-| Boost.Serialization | `boost_serialization` | Raft 状态、快照和 RocksDB 快照数据的序列化 | `libboost-serialization-dev` |
-| Muduo | `muduo_net`、`muduo_base` | TCP Server、EventLoop、连接与 Buffer | 安装 Muduo 头文件及 `libmuduo_net/base` |
-| POSIX Threads | `pthread` | 节点、Gateway、SDK 和测试的多线程执行 | Linux 系统线程库 |
-| Dynamic Loader | `dl` | Pulsar 使用 `dlsym` 解析被 Hook 的原始系统调用 | Linux `libdl` |
+| 依赖                | CMake/链接名称                                                 | 项目中的用途                                                           | 获取方式                                                 |
+| ------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------- |
+| Pulsar              | `Pulsar::pulsar`                                             | Fiber、per-worker deque/work stealing 调度器、epoll、Timer 和 Hook I/O | Git submodule：`src/pulsar`                            |
+| Boost.Context       | `Boost::context`                                             | Pulsar Fiber 的原生`fcontext` 上下文切换                             | `libboost-context-dev`                                 |
+| Protobuf            | `find_package(Protobuf REQUIRED)`、`${Protobuf_LIBRARIES}` | Raft/KV RPC 消息、Service、Stub 和反射分发                             | `libprotobuf-dev`；修改 `.proto` 时还需要 `protoc` |
+| RocksDB             | `rocksdb`                                                    | 唯一的本地 KV 持久化引擎、WriteBatch 和前缀扫描                        | `librocksdb-dev`                                       |
+| Boost.Serialization | `boost_serialization`                                        | Raft 状态、快照和 RocksDB 快照数据的序列化                             | `libboost-serialization-dev`                           |
+| Muduo               | `muduo_net`、`muduo_base`                                  | TCP Server、EventLoop、连接与 Buffer                                   | 安装 Muduo 头文件及`libmuduo_net/base`                 |
+| POSIX Threads       | `pthread`                                                    | 节点、Gateway、SDK 和测试的多线程执行                                  | Linux 系统线程库                                         |
+| Dynamic Loader      | `dl`                                                         | Pulsar 使用`dlsym` 解析被 Hook 的原始系统调用                        | Linux`libdl`                                           |
 
 Pulsar 是仓库内的子模块，直接依赖 Boost.Context；默认使用原生 `fcontext`，
 不会配置 `BOOST_USE_UCONTEXT`。C++ 标准库、Linux socket/epoll、文件系统和
@@ -80,13 +72,13 @@ Pulsar 在 StrataKV 中的边界是“可选 Gateway HTTP 网络运行时”。
 
 #### 构建与运行工具
 
-| 工具 | 是否必需 | 用途 |
-| --- | --- | --- |
-| C++17 编译器、CMake、Make/Ninja | 构建必需 | 配置和编译所有目标 |
+| 工具                            | 是否必需     | 用途                                        |
+| ------------------------------- | ------------ | ------------------------------------------- |
+| C++17 编译器、CMake、Make/Ninja | 构建必需     | 配置和编译所有目标                          |
 | Bash、GNU coreutils、util-linux | 本地部署必需 | 脚本、`setsid`、`taskset`、`lscpu` 等 |
-| curl | 本地部署必需 | Gateway 健康检查、指标和可靠性测试 |
-| iproute2 (`ss`) | 排障可选 | 检查端口占用 |
-| GDB | 调试可选 | 线程、堆栈和崩溃分析 |
+| curl                            | 本地部署必需 | Gateway 健康检查、指标和可靠性测试          |
+| iproute2 (`ss`)               | 排障可选     | 检查端口占用                                |
+| GDB                             | 调试可选     | 线程、堆栈和崩溃分析                        |
 
 当前 CMake 要求 Boost.Context 1.61 或更新版本；没有为 RocksDB、Muduo
 设置项目自定义的最低版本，README 因此不声明未经验证的版本下限。
@@ -269,38 +261,38 @@ bash deploy/stratakv-server reset --project my-db
 
 ### 3.1 可执行程序
 
-| 程序 | 用途 |
-| --- | --- |
-| `bin/stratakv-node` | 数据节点，承载 Region、Raft 副本和 RocksDB |
-| `bin/stratakv-tso` | TSO 控制层成员，以 Raft 提交 high-water range 并在有效 fence 内发号 |
-| `bin/stratakv-gateway` | 面向业务的 HTTP/JSON 事务入口 |
-| `bin/stratakv-client` | 业务 CLI，支持单条命令和交互事务 |
-| `bin/stratakv-admin` | 直连内部 RPC 的开发与运维工具 |
-| `bin/stratakv-test-fiber-sync` | Pulsar 同步原语正确性测试 |
-| `bin/stratakv-test-bounded-thread-pool` | 有界线程池与过载背压正确性测试 |
-| `bin/stratakv-test-tso` | 多客户端全局时间戳与崩溃重启测试 |
-| `bin/stratakv-test-tso-range-benchmark` | range=1/4096 的三成员 TSO 同条件 A/B |
-| `bin/stratakv-test-fiber-benchmark` | Pulsar 性能与压力基准 |
-| `bin/stratakv-test-reliability` | 集群事务与持久化验证负载 |
+| 程序                                      | 用途                                                                |
+| ----------------------------------------- | ------------------------------------------------------------------- |
+| `bin/stratakv-node`                     | 数据节点，承载 Region、Raft 副本和 RocksDB                          |
+| `bin/stratakv-tso`                      | TSO 控制层成员，以 Raft 提交 high-water range 并在有效 fence 内发号 |
+| `bin/stratakv-gateway`                  | 面向业务的 HTTP/JSON 事务入口                                       |
+| `bin/stratakv-client`                   | 业务 CLI，支持单条命令和交互事务                                    |
+| `bin/stratakv-admin`                    | 直连内部 RPC 的开发与运维工具                                       |
+| `bin/stratakv-test-fiber-sync`          | Pulsar 同步原语正确性测试                                           |
+| `bin/stratakv-test-bounded-thread-pool` | 有界线程池与过载背压正确性测试                                      |
+| `bin/stratakv-test-tso`                 | 多客户端全局时间戳与崩溃重启测试                                    |
+| `bin/stratakv-test-tso-range-benchmark` | range=1/4096 的三成员 TSO 同条件 A/B                                |
+| `bin/stratakv-test-fiber-benchmark`     | Pulsar 性能与压力基准                                               |
+| `bin/stratakv-test-reliability`         | 集群事务与持久化验证负载                                            |
 
 ### 3.2 源码目录
 
-| 目录 | 职责 |
-| --- | --- |
-| `src/storage` | RocksDB 适配与存储抽象 |
-| `src/raft` | Raft 共识、状态机和 Raft 持久化 |
-| `src/transaction` | MVCC、锁、时间戳、路由和 2PC |
-| `src/rpc` | 自研 Protobuf RPC 传输与服务分发 |
-| `src/proto` | Raft 与 KV 的 Protobuf 契约及生成代码 |
-| `src/server` | 存储节点入口 |
-| `src/admin` | 内部管理工具入口 |
-| `src/sdk` | C++ 事务客户端 SDK |
-| `src/gateway` | HTTP/JSON Gateway 入口 |
-| `src/cli` | 业务命令行客户端入口 |
-| `src/common` | 公共配置和工具 |
-| `src/pulsar` | Pulsar 协程运行时子模块 |
-| `test` | 正确性、基准和可靠性测试源码 |
-| `deploy` | 本地部署、客户端和测试脚本 |
+| 目录                | 职责                                  |
+| ------------------- | ------------------------------------- |
+| `src/storage`     | RocksDB 适配与存储抽象                |
+| `src/raft`        | Raft 共识、状态机和 Raft 持久化       |
+| `src/transaction` | MVCC、锁、时间戳、路由和 2PC          |
+| `src/rpc`         | 自研 Protobuf RPC 传输与服务分发      |
+| `src/proto`       | Raft 与 KV 的 Protobuf 契约及生成代码 |
+| `src/server`      | 存储节点入口                          |
+| `src/admin`       | 内部管理工具入口                      |
+| `src/sdk`         | C++ 事务客户端 SDK                    |
+| `src/gateway`     | HTTP/JSON Gateway 入口                |
+| `src/cli`         | 业务命令行客户端入口                  |
+| `src/common`      | 公共配置和工具                        |
+| `src/pulsar`      | Pulsar 协程运行时子模块               |
+| `test`            | 正确性、基准和可靠性测试源码          |
+| `deploy`          | 本地部署、客户端和测试脚本            |
 
 ## 4. 开发构建
 
@@ -368,10 +360,10 @@ bash deploy/stratakv-client batch \
 
 Gateway 常用地址：
 
-| 接口 | 地址 |
-| --- | --- |
-| Gateway | `http://127.0.0.1:8080` |
-| 健康检查 | `http://127.0.0.1:8080/healthz` |
+| 接口            | 地址                              |
+| --------------- | --------------------------------- |
+| Gateway         | `http://127.0.0.1:8080`         |
+| 健康检查        | `http://127.0.0.1:8080/healthz` |
 | Prometheus 指标 | `http://127.0.0.1:8080/metrics` |
 
 C++ SDK 的入口为 `stratakv/client.h`：
@@ -443,13 +435,13 @@ deploy/runtime/<project>/
 当前 Raft 端口固定，因此同一台机器不能同时运行两套本地集群。修改
 `--gateway-port` 只会改变 Gateway 端口，不会改变 Raft 端口：
 
-| 服务 | 默认地址 |
-| --- | --- |
-| Gateway | `127.0.0.1:8080` |
+| 服务              | 默认地址                       |
+| ----------------- | ------------------------------ |
+| Gateway           | `127.0.0.1:8080`             |
 | TSO control plane | `127.0.0.1:26300`～`26302` |
-| node-0 shared RPC | `127.0.0.1:26200` |
-| node-1 shared RPC | `127.0.0.1:26201` |
-| node-2 shared RPC | `127.0.0.1:26202` |
+| node-0 shared RPC | `127.0.0.1:26200`            |
+| node-1 shared RPC | `127.0.0.1:26201`            |
+| node-2 shared RPC | `127.0.0.1:26202`            |
 
 三个 Region 在同一物理节点上共享一个 `NodeServer`、监听端口和 Muduo
 `RpcProvider`；KV 与 Raft 请求通过协议中的 `RegionId` 分发到对应的轻量
@@ -567,15 +559,15 @@ deploy/（deploy/runtime/ 除外）
 
 ## 9. 常见问题
 
-| 现象 | 检查与处理 |
-| --- | --- |
-| `muduo_net` 或 `muduo_base` 找不到 | 确认 Muduo 已安装，并检查动态库或静态库搜索路径 |
-| `src/pulsar` 为空 | 执行 `git submodule update --init --recursive` |
-| Gateway 端口被占用 | 使用 `ss -ltnp` 检查，或指定其他 `--gateway-port` |
-| Raft 端口被占用 | 先停止同机运行的其他 StrataKV 集群 |
-| 上次运行被强制中断 | 执行 `down` 清理受管进程；该命令不会删除数据 |
-| 修改源码后仍运行旧逻辑 | 先 `down`，再执行 `rebuild` |
-| 可靠性测试没有进度 | 检查 Leader、RPC timeout 和 `test-results` 中的运行日志 |
+| 现象                                   | 检查与处理                                               |
+| -------------------------------------- | -------------------------------------------------------- |
+| `muduo_net` 或 `muduo_base` 找不到 | 确认 Muduo 已安装，并检查动态库或静态库搜索路径          |
+| `src/pulsar` 为空                    | 执行`git submodule update --init --recursive`          |
+| Gateway 端口被占用                     | 使用`ss -ltnp` 检查，或指定其他 `--gateway-port`     |
+| Raft 端口被占用                        | 先停止同机运行的其他 StrataKV 集群                       |
+| 上次运行被强制中断                     | 执行`down` 清理受管进程；该命令不会删除数据            |
+| 修改源码后仍运行旧逻辑                 | 先`down`，再执行 `rebuild`                           |
+| 可靠性测试没有进度                     | 检查 Leader、RPC timeout 和`test-results` 中的运行日志 |
 
 查看完整部署说明：[deploy/README.md](deploy/README.md)。
 
