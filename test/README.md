@@ -127,30 +127,9 @@ cmake --build --preset release --target stratakv-test-tso-range-benchmark
 bash deploy/stratakv-performance all --profile interview-smoke
 ```
 
-全量面试测试可以直接使用一键入口；它固定使用 `interview-full`，自动生成唯一
-`full-日期-时间` run-id，并执行构建、Load、全部性能矩阵、故障/一致性检查、清理和报告：
-
-```bash
-bash deploy/stratakv-performance-full
-```
-
-保留完整矩阵和三次重复、将数据与主要操作量缩小到 1/10：
-
-```bash
-bash deploy/stratakv-performance-full --lite
-```
-
-`--lite` 使用 `interview-full-10pct`：Load 为 10,000 条 × 1 KiB，A1 每点
-2,000 operations，A2/A3 每点 1,000 transactions，A4 每点 500 transactions，
-C1/C2 为 1,000/100 次。它仍逐点重启并校验 checkpoint，因此总耗时不会缩短到
-原来的 1/10。B1/B3 故障与恢复检查保持完整；只快速确认整条链路时用上面的 smoke。
-
-也可以给它传入 `--no-build` 或显式 `--run-id`。需要查看或清理某次运行时，仍使用
-主编排器的 `report`、`down`、`clean` 子命令。
-
 该命令自动进行 Release 构建、启动专用集群、Load、逐点 checkpoint 恢复及全量键值校验、
 施压、故障/一致性检查、集群停止和报告生成。需要 Bash、CMake/C++ 构建依赖、Python 3、
-curl、GNU `timeout` 和 `/usr/bin/time`。本地节点使用 26200–26202 端口，测试前请确保没有另一套集群占用。
+curl 和 GNU `/usr/bin/time`。本地节点使用 26200–26202 端口，测试前请确保没有另一套集群占用。
 运行时间包含构建及多次集群重启，不承诺固定分钟数。
 
 Smoke 的固定规模如下：
@@ -184,9 +163,8 @@ bash deploy/stratakv-performance clean --project perf-smoke-my-check
 未完成时保持 `incomplete`。验收检查必选点规模、完整 Load、checkpoint 校验、错误计数、
 B1/B3/C1/C2 和清理结果；不能仅凭“有成功请求”判为 PASS。
 
-`interview-full` 会对每个逻辑性能点执行三次，并在 `REPORT.md` 中同时保留三轮原值、
-中位数和超过 10% 偏离的 unstable 标记。它仍然是 WSL development baseline，不能作为
-生产容量或硬件横向比较依据；D1 比较器也不属于这条一键测试命令。
+`interview-full` 的执行矩阵已存在，但完整验收和报告能力仍待补齐。D1 比较器也仍有待修复的
+采样/正确性门禁问题，目前不要把它们的 PASS 当作完整变更验收证据。
 
 ### 3. 结果目录结构
 
