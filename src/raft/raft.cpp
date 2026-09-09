@@ -769,7 +769,8 @@ void Raft::RequestVote(const raftRpcProctoc::RequestVoteArgs* args, raftRpcProct
     // immediately help a disconnected peer form a competing higher-term
     // majority. Every two Raft majorities intersect, so retaining the current
     // term until the minimum election timeout makes a shorter bounded leader
-    // lease safe. TSO deliberately uses only half of this interval (150 ms).
+    // lease safe. TSO deliberately uses only a fraction of this interval
+    // (150 ms, roughly 1/13 of minRandomizedElectionTime).
     reply->set_term(m_currentTerm);
     reply->set_votestate(Expire);
     reply->set_votegranted(false);

@@ -30,9 +30,10 @@ namespace {
 constexpr size_t kConnectionPoolSize = 4;
 constexpr uint32_t kMaxRpcResponseBytes = 64 * 1024 * 1024;
 constexpr std::chrono::milliseconds kConnectTimeout{500};
-// The server-side consensus wait is 500 ms. Five seconds leaves ample room for
-// a snapshot while preventing one dead socket from blocking a Region mutation
-// queue for 30 seconds.
+// The server-side consensus wait is 3000 ms (CONSENSUS_TIMEOUT in
+// src/common/include/config.h). Five seconds leaves room for a snapshot while
+// preventing one dead socket from blocking a Region mutation queue for 30
+// seconds.
 constexpr std::chrono::milliseconds kIoTimeout{5000};
 bool SetSocketTimeouts(int fd, std::string* errMsg) {
   const timeval timeout{static_cast<time_t>(kIoTimeout.count() / 1000),

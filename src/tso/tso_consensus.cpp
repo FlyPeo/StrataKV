@@ -212,7 +212,7 @@ void TsoConsensusNode::RefreshFenceLocked() {
 
   // The deadline is measured from before the quorum round. Followers reset
   // their election timers after that point, so a duration below the minimum
-  // 300 ms election timeout is conservative even when a reply is delayed.
+  // 2000 ms election timeout is conservative even when a reply is delayed.
   const auto fenceDeadline = startedAt + kFenceDuration;
   if (fenceDeadline <= std::chrono::steady_clock::now()) {
     fenceDeadlineNanos_.store(0, std::memory_order_release);
