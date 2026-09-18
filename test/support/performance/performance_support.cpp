@@ -81,7 +81,7 @@ Distribution ParseDistribution(const std::string& value) {
 }
 
 void WorkloadSpec::Validate() const {
-  if (path != "gateway" && path != "direct") throw std::invalid_argument("path must be gateway or direct");
+  if (path != "direct") throw std::invalid_argument("path must be direct (only native C++ SDK is supported)");
   if (recordCount == 0 || operationCount == 0 || valueSize == 0 || workers <= 0 || maxAttempts <= 0 ||
       retryDelayMs < 0 || timeoutMs <= 0) {
     throw std::invalid_argument("workload counts, value size, workers, attempts and timeout must be positive");
@@ -395,14 +395,14 @@ std::vector<A1Point> StandardA1Matrix() {
   std::vector<A1Point> matrix;
   matrix.reserve(24);
 
-  // 1. Gateway Uniform: A, B, C, F x workers {1, 4, 8, 16, 32} = 20 points
+  // 1. Direct Uniform: A, B, C, F x workers {1, 4, 8, 16, 32} = 20 points
   const std::vector<Workload> uniformWorkloads = {Workload::kA, Workload::kB, Workload::kC, Workload::kF};
   const std::vector<int> workerCounts = {1, 4, 8, 16, 32};
   for (const auto wl : uniformWorkloads) {
     for (const int w : workerCounts) {
       A1Point point;
       point.caseId = "a1-" + std::string(WorkloadName(wl)) + "-w" + std::to_string(w);
-      point.path = "gateway";
+      point.path = "direct";
       point.workload = wl;
       point.distribution = Distribution::kUniform;
       point.workers = w;
@@ -410,19 +410,19 @@ std::vector<A1Point> StandardA1Matrix() {
     }
   }
 
-  // 2. Gateway Zipfian: A, B x workers {8} = 2 points
+  // 2. Direct Zipfian: A, B x workers {8} = 2 points
   const std::vector<Workload> zipfianWorkloads = {Workload::kA, Workload::kB};
   for (const auto wl : zipfianWorkloads) {
     A1Point point;
     point.caseId = "a1-zipfian-" + std::string(WorkloadName(wl)) + "-w8";
-    point.path = "gateway";
+    point.path = "direct";
     point.workload = wl;
     point.distribution = Distribution::kZipfian;
     point.workers = 8;
     matrix.push_back(std::move(point));
   }
 
-  // 3. Direct Uniform: A, C x workers {8} = 2 points
+  // 3. Direct Uniform baseline: A, C x workers {8} = 2 points
   const std::vector<Workload> directWorkloads = {Workload::kA, Workload::kC};
   for (const auto wl : directWorkloads) {
     A1Point point;
@@ -444,7 +444,7 @@ std::vector<A1Point> SmokeA1Matrix() {
     for (const int w : {1, 8}) {
       A1Point point;
       point.caseId = "a1-" + std::string(WorkloadName(wl)) + "-w" + std::to_string(w);
-      point.path = "gateway";
+      point.path = "direct";
       point.workload = wl;
       point.distribution = Distribution::kUniform;
       point.workers = w;

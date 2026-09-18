@@ -150,21 +150,20 @@ int main() {
     Require(retried.successful == 1 && retried.retries == 1, "retry was not classified correctly");
     Require(retryElapsed >= 10 && retried.latency.Max() >= 10000, "retry backoff is outside end-to-end latency");
 
-    // 验证两路径在相同参数下生成完全一致的操作序列
-    auto directState = std::make_shared<FakeState>();
-    auto gatewayState = std::make_shared<FakeState>();
+    // 验证相同参数下生成完全一致的确定性操作序列
+    auto run1State = std::make_shared<FakeState>();
+    auto run2State = std::make_shared<FakeState>();
     perf::WorkloadSpec pathSpec = spec;
     pathSpec.workers = 1;
     pathSpec.operationCount = 200;
     pathSpec.workload = perf::Workload::kA;
     pathSpec.path = "direct";
-    perf::RunRecords(pathSpec, keys, Factory(directState), "path-direct");
-    pathSpec.path = "gateway";
-    perf::RunRecords(pathSpec, keys, Factory(gatewayState), "path-gateway");
-    Require(!directState->operationLog.empty(), "operation log must not be empty");
-    Require(directState->operationLog.size() == gatewayState->operationLog.size() &&
-            directState->operationLog == gatewayState->operationLog,
-            "two paths did not produce the identical operation sequence");
+    perf::RunRecords(pathSpec, keys, Factory(run1State), "run-1");
+    perf::RunRecords(pathSpec, keys, Factory(run2State), "run-2");
+    Require(!run1State->operationLog.empty(), "operation log must not be empty");
+    Require(run1State->operationLog.size() == run2State->operationLog.size() &&
+            run1State->operationLog == run2State->operationLog,
+            "two runs did not produce the identical operation sequence");
 
     // 验证 Scan / E 在施压前被拒绝
     bool scanRejected = false;

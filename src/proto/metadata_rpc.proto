@@ -1,0 +1,326 @@
+syntax = "proto3";
+
+package metadataRpcProtocol;
+
+import "region.proto";
+
+option cc_generic_services = true;
+
+enum MetadataErrorCode {
+  METADATA_OK = 0;
+  METADATA_NOT_LEADER = 1;
+  METADATA_TIMEOUT = 2;
+  METADATA_UNAVAILABLE = 3;
+  METADATA_INVALID_ARGUMENT = 4;
+  METADATA_REVISION_MISMATCH = 5;
+  METADATA_ALREADY_BOOTSTRAPPED = 6;
+  METADATA_NOT_FOUND = 7;
+  METADATA_CORRUPT = 8;
+  METADATA_CONFLICT = 9;
+}
+
+enum IdNamespace {
+  ID_NAMESPACE_REGION = 0;
+  ID_NAMESPACE_PEER = 1;
+  ID_NAMESPACE_STORE = 2;
+}
+
+message BootstrapClusterMutation {
+  bytes ConfigDigest = 1;
+  repeated stratakv.region.RegionDescriptor Regions = 2;
+  repeated stratakv.region.StoreDescriptor Stores = 3;
+}
+
+message ReplaceRegionsMutation {
+  repeated uint64 RemoveRegionIds = 1;
+  repeated stratakv.region.RegionDescriptor AddRegions = 2;
+}
+
+message AllocateIdsMutation {
+  IdNamespace Namespace = 1;
+  uint64 Count = 2;
+}
+
+message PutStoreMutation {
+  stratakv.region.StoreDescriptor Store = 1;
+}
+
+message PrepareSplitMutation {
+  uint64 RegionId = 1;
+  bytes SplitKey = 2;
+  stratakv.region.RegionEpoch ExpectedEpoch = 3;
+}
+
+message CommitSplitMutation {
+  uint64 RegionId = 1;
+}
+
+message AckSplitMutation {
+  uint64 ParentRegionId = 1;
+  repeated uint64 ChildRegionIds = 2;
+}
+
+message PrepareMovePeerMutation {
+  uint64 RegionId = 1;
+  uint64 FromStoreId = 2;
+  uint64 ToStoreId = 3;
+  stratakv.region.RegionEpoch ExpectedEpoch = 4;
+}
+
+message CommitMovePeerMutation {
+  uint64 RegionId = 1;
+  uint64 NewPeerId = 2;
+  stratakv.region.RegionEpoch ExpectedEpoch = 3;
+}
+
+message CancelMovePeerMutation {
+  uint64 RegionId = 1;
+  uint64 NewPeerId = 2;
+}
+
+message RegionSchedulingObservation {
+  uint64 RegionId = 1;
+  uint64 PeerId = 2;
+  stratakv.region.RegionEpoch Epoch = 3;
+  uint64 ApproximateBytes = 4;
+  uint64 RequestCount = 5;
+  bool IsLeader = 6;
+  bool TopologyOperationActive = 7;
+  uint64 SplitCandidateGeneration = 8;
+}
+
+message StoreHeartbeat {
+  uint64 StoreId = 1;
+  uint64 Sequence = 2;
+  uint64 ObservedAtMs = 3;
+  uint64 ExpiresAtMs = 4;
+  uint64 CapacityBytes = 5;
+  uint64 AvailableBytes = 6;
+  uint64 RequestCount = 7;
+  repeated RegionSchedulingObservation Regions = 8;
+}
+
+message AutoBalancerConfig {
+  bool Enabled = 1;
+  bool Paused = 2;
+  uint64 Version = 3;
+  uint64 EvaluationIntervalMs = 4;
+  uint64 HeartbeatTimeoutMs = 5;
+  uint64 MinimumFreeBytes = 6;
+  double MaximumDiskUsedRatio = 7;
+  uint32 ReplicationFactor = 8;
+  double ImbalanceThreshold = 9;
+  uint64 SplitSizeBytes = 10;
+  uint64 SplitRequestThreshold = 11;
+  uint32 SplitConsecutiveWindows = 12;
+  uint64 RegionCooldownMs = 13;
+  uint32 MaximumActiveOperators = 14;
+  uint32 MaximumActivePerStore = 15;
+}
+
+enum SchedulingOperatorType {
+  SCHEDULING_OPERATOR_MOVE_PEER = 0;
+  SCHEDULING_OPERATOR_SPLIT_REGION = 1;
+}
+
+enum SchedulingOperatorPhase {
+  SCHEDULING_OPERATOR_PENDING = 0;
+  SCHEDULING_OPERATOR_DISPATCHING = 1;
+  SCHEDULING_OPERATOR_WAITING = 2;
+  SCHEDULING_OPERATOR_SUCCEEDED = 3;
+  SCHEDULING_OPERATOR_CANCELLING = 4;
+  SCHEDULING_OPERATOR_CANCELLED = 5;
+  SCHEDULING_OPERATOR_FAILED = 6;
+}
+
+message SchedulingOperator {
+  bytes OperatorId = 1;
+  SchedulingOperatorType Type = 2;
+  uint64 RegionId = 3;
+  uint64 SourceRevision = 4;
+  stratakv.region.RegionEpoch RegionEpoch = 5;
+  uint64 SourceStoreId = 6;
+  uint64 TargetStoreId = 7;
+  uint64 SplitCandidateGeneration = 8;
+  SchedulingOperatorPhase Phase = 9;
+  uint32 Attempts = 10;
+  uint64 DeadlineMs = 11;
+  bytes LastError = 12;
+  bool CancelRequested = 13;
+  bool Irreversible = 14;
+  uint64 CreatedAtMs = 15;
+  uint64 UpdatedAtMs = 16;
+}
+
+message ReportStoreHeartbeatMutation {
+  StoreHeartbeat Heartbeat = 1;
+}
+
+message UpdateAutoBalancerConfigMutation {
+  AutoBalancerConfig Config = 1;
+}
+
+message CreateSchedulingOperatorMutation {
+  SchedulingOperator Operator = 1;
+}
+
+message UpdateSchedulingOperatorMutation {
+  bytes OperatorId = 1;
+  SchedulingOperatorPhase ExpectedPhase = 2;
+  SchedulingOperatorPhase Phase = 3;
+  uint32 Attempts = 4;
+  bytes LastError = 5;
+  bool Irreversible = 6;
+  uint64 UpdatedAtMs = 7;
+}
+
+message CancelSchedulingOperatorMutation {
+  bytes OperatorId = 1;
+  uint64 UpdatedAtMs = 2;
+}
+
+message MetadataCommand {
+  bytes MutationId = 1;
+  uint64 ExpectedRevision = 2;
+  oneof Command {
+    BootstrapClusterMutation Bootstrap = 3;
+    ReplaceRegionsMutation ReplaceRegions = 4;
+    AllocateIdsMutation AllocateIds = 5;
+    PutStoreMutation PutStore = 6;
+    PrepareSplitMutation PrepareSplit = 7;
+    CommitSplitMutation CommitSplit = 8;
+    AckSplitMutation AckSplit = 9;
+    PrepareMovePeerMutation PrepareMovePeer = 10;
+    CommitMovePeerMutation CommitMovePeer = 11;
+    CancelMovePeerMutation CancelMovePeer = 12;
+    ReportStoreHeartbeatMutation ReportStoreHeartbeat = 13;
+    UpdateAutoBalancerConfigMutation UpdateAutoBalancerConfig = 14;
+    CreateSchedulingOperatorMutation CreateSchedulingOperator = 15;
+    UpdateSchedulingOperatorMutation UpdateSchedulingOperator = 16;
+    CancelSchedulingOperatorMutation CancelSchedulingOperator = 17;
+  }
+}
+
+message MetadataCommandResult {
+  MetadataErrorCode Error = 1;
+  bytes Message = 2;
+  uint64 Revision = 3;
+  uint64 FirstAllocatedId = 4;
+  uint64 AllocatedCount = 5;
+  // Split results: prepare returns the marked parent; commit returns the
+  // shrunken parent and the published child.
+  repeated stratakv.region.RegionDescriptor Regions = 6;
+  stratakv.region.ReplicaMigrationStatus Migration = 7;
+  StoreHeartbeat Heartbeat = 8;
+  AutoBalancerConfig BalancerConfig = 9;
+  SchedulingOperator Operator = 10;
+}
+
+message MutationRecord {
+  bytes MutationId = 1;
+  MetadataCommandResult Result = 2;
+  uint64 AppliedRevision = 3;
+}
+
+message MetadataSnapshot {
+  uint32 FormatVersion = 1;
+  uint64 Revision = 2;
+  repeated stratakv.region.RegionDescriptor Regions = 3;
+  repeated stratakv.region.StoreDescriptor Stores = 4;
+  uint64 RegionIdHighWater = 5;
+  uint64 PeerIdHighWater = 6;
+  uint64 StoreIdHighWater = 7;
+  bytes BootstrapDigest = 8;
+  repeated MutationRecord RecentMutations = 9;
+  repeated stratakv.region.ReplicaMigrationStatus Migrations = 10;
+  repeated StoreHeartbeat StoreHeartbeats = 11;
+  AutoBalancerConfig BalancerConfig = 12;
+  repeated SchedulingOperator SchedulingOperators = 13;
+}
+
+message MutateRequest {
+  MetadataCommand Command = 1;
+  uint64 TimeoutMs = 2;
+}
+
+message MutateReply {
+  MetadataCommandResult Result = 1;
+  int32 LeaderId = 2;
+}
+
+message LookupKeyRequest {
+  bytes Key = 1;
+  uint64 TimeoutMs = 2;
+}
+
+message LookupRegionRequest {
+  uint64 RegionId = 1;
+  uint64 TimeoutMs = 2;
+}
+
+message ScanRegionsRequest {
+  bytes StartKey = 1;
+  uint32 Limit = 2;
+  uint64 TimeoutMs = 3;
+}
+
+message RegionReply {
+  MetadataErrorCode Error = 1;
+  bytes Message = 2;
+  uint64 Revision = 3;
+  stratakv.region.RegionDescriptor Region = 4;
+  int32 LeaderId = 5;
+}
+
+message ScanRegionsReply {
+  MetadataErrorCode Error = 1;
+  bytes Message = 2;
+  uint64 Revision = 3;
+  repeated stratakv.region.RegionDescriptor Regions = 4;
+  int32 LeaderId = 5;
+}
+
+message MetadataStatusRequest {}
+
+message MetadataStatusReply {
+  int32 NodeId = 1;
+  int32 Term = 2;
+  bool IsLeader = 3;
+  uint64 Revision = 4;
+  int32 CommitIndex = 5;
+  int32 AppliedIndex = 6;
+  uint64 RegionCount = 7;
+  uint64 StoreCount = 8;
+  uint64 ValidationRejects = 9;
+  uint64 DedupHits = 10;
+  uint64 SnapshotCount = 11;
+  uint64 HeartbeatAccepted = 12;
+  uint64 HeartbeatIgnored = 13;
+  uint64 OperatorAdmissions = 14;
+  uint64 ActiveOperatorCount = 15;
+  bool BalancerEnabled = 16;
+  bool BalancerPaused = 17;
+}
+
+message BalancerStatusRequest {
+  uint64 TimeoutMs = 1;
+}
+
+message BalancerStatusReply {
+  MetadataErrorCode Error = 1;
+  bytes Message = 2;
+  uint64 Revision = 3;
+  int32 LeaderId = 4;
+  AutoBalancerConfig Config = 5;
+  repeated StoreHeartbeat StoreHeartbeats = 6;
+  repeated SchedulingOperator Operators = 7;
+}
+
+service metadataRpc {
+  rpc Mutate(MutateRequest) returns (MutateReply);
+  rpc LookupKey(LookupKeyRequest) returns (RegionReply);
+  rpc LookupRegion(LookupRegionRequest) returns (RegionReply);
+  rpc ScanRegions(ScanRegionsRequest) returns (ScanRegionsReply);
+  rpc Status(MetadataStatusRequest) returns (MetadataStatusReply);
+  rpc BalancerStatus(BalancerStatusRequest) returns (BalancerStatusReply);
+}

@@ -34,7 +34,7 @@ def create_fixture(root: Path) -> None:
         for workers in (1, 8):
             case = f"a1-{workload}-w{workers}"
             write_json(root / "raw/a1" / f"{case}.json", {
-                "case_id": case, "subject": "record", "path": "gateway", "workers": workers,
+                "case_id": case, "subject": "record", "path": "direct", "workers": workers,
                 "workload": workload, "reads": 5000 if workload == "A" else 10000,
                 "updates": 5000 if workload == "A" else 0,
                 "attempted": 10000, "successful": 10000, "successful_per_second": 100.0 * workers,

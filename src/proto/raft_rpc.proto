@@ -7,6 +7,8 @@ package raftRpcProctoc; //所在的命名空间
 
 option cc_generic_services = true;  //开启stub服务
 
+import "region.proto";
+
 // 日志实体
 message LogEntry{
     bytes Command  =1;
@@ -26,6 +28,7 @@ message AppendEntriesArgs  {
 	// Non-zero only for a linearizable ReadIndex round. It is carried by
 	// AppendEntries and never creates a Raft log entry.
 	uint64 ReadContext = 8;
+	stratakv.region.RaftPeerHeader Header = 100;
 }
 
 // AppendEntriesReply 论文中没有提及返回要设置哪些状态
@@ -36,6 +39,7 @@ message AppendEntriesReply {
 	int32 AppState        =4; // 用来标识节点（网络）状态
 	uint64 ReadContextAck = 5;
 	bool ReadContextAccepted = 6;
+	stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message RequestVoteArgs  {
@@ -44,6 +48,7 @@ message RequestVoteArgs  {
 	int32 LastLogIndex =3;
 	int32 LastLogTerm  =4;
 	int32 RegionId = 5;
+	stratakv.region.RaftPeerHeader Header = 100;
 }
 
 // Result of a RequestVote RPC.
@@ -51,6 +56,7 @@ message RequestVoteReply  {
 	int32 Term        =1;
 	bool VoteGranted  =2;
 	int32 VoteState   =3;
+	stratakv.region.RegionResponseHeader Header = 100;
 }
 
 
@@ -61,11 +67,15 @@ message InstallSnapshotRequest  {
 	int32 LastSnapShotIncludeTerm  =4;
 	bytes Data                     =5;//快照信息，当然是用bytes来传递
 	int32 RegionId                 =6;
+	uint64 ChunkOffset             =7;
+	bool ChunkDone                 =8;
+	stratakv.region.RaftPeerHeader Header = 100;
 }
 
 // InstallSnapshotResponse 只用返回Term，因为对于快照只要Term是符合的就是无条件接受的
 message InstallSnapshotResponse  {
 	int32 Term  = 1;
+	stratakv.region.RegionResponseHeader Header = 100;
 }
 //只有raft节点之间才会涉及rpc通信
 service raftRpc  

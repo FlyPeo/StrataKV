@@ -1,15 +1,10 @@
 /*
- * 测试目标：让 Direct SDK 与 Gateway 使用完全相同的 YCSB-compatible 操作流和统计边界。
+ * 测试目标：验证原生 C++ Direct SDK 的 YCSB-compatible 操作流和统计边界。
  * 测试策略：worker 从全局序号领取任务，在独占 adapter 上执行单键事务并聚合线程局部指标。
  * 测试规模：smoke 为 3,000-record Load 与每点 10,000 operations，最大并发 8；full 可到 32。
  * 验证内容：Read/Update/RMW 的事务边界正确，失败不计成功，重试与退避包含在端到端延迟。
  */
 #include "support/performance/workload_runner.h"
-
-#include <netdb.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -29,228 +24,6 @@
 
 namespace stratakv::test::performance {
 namespace {
-
-struct Endpoint {
-  std::string host;
-  std::string port;
-};
-
-struct HttpResponse {
-  int status = 0;
-  std::string body;
-};
-
-std::optional<std::string> JsonString(const std::string& json, const std::string& key) {
-  const std::string marker = "\"" + key + "\"";
-  size_t position = json.find(marker);
-  if (position == std::string::npos) return std::nullopt;
-  position = json.find(':', position + marker.size());
-  if (position == std::string::npos) return std::nullopt;
-  position = json.find('"', position + 1);
-  if (position == std::string::npos) return std::nullopt;
-  ++position;
-  std::string value;
-  bool escaped = false;
-  for (; position < json.size(); ++position) {
-    const char character = json[position];
-    if (escaped) {
-      switch (character) {
-        case 'n': value += '\n'; break;
-        case 'r': value += '\r'; break;
-        case 't': value += '\t'; break;
-        default: value += character; break;
-      }
-      escaped = false;
-    } else if (character == '\\') {
-      escaped = true;
-    } else if (character == '"') {
-      return value;
-    } else {
-      value += character;
-    }
-  }
-  return std::nullopt;
-}
-
-std::string UrlEncode(const std::string& value) {
-  static constexpr char hex[] = "0123456789ABCDEF";
-  std::string result;
-  for (const unsigned char character : value) {
-    if (std::isalnum(character) || character == '-' || character == '_' || character == '.' || character == '~') {
-      result += static_cast<char>(character);
-    } else {
-      result += '%';
-      result += hex[(character >> 4U) & 0x0fU];
-      result += hex[character & 0x0fU];
-    }
-  }
-  return result;
-}
-
-Endpoint ParseEndpoint(std::string value) {
-  constexpr const char* prefix = "http://";
-  if (value.rfind(prefix, 0) != 0) throw std::invalid_argument("Gateway URL must start with http://");
-  value.erase(0, std::char_traits<char>::length(prefix));
-  if (value.find('/') != std::string::npos) throw std::invalid_argument("Gateway URL must not contain a path");
-  const size_t separator = value.rfind(':');
-  if (separator == std::string::npos || separator == 0 || separator + 1 == value.size()) {
-    throw std::invalid_argument("Gateway URL must contain host:port");
-  }
-  return {value.substr(0, separator), value.substr(separator + 1)};
-}
-
-int Connect(const Endpoint& endpoint, int timeoutMs) {
-  addrinfo hints{};
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  addrinfo* addresses = nullptr;
-  if (getaddrinfo(endpoint.host.c_str(), endpoint.port.c_str(), &hints, &addresses) != 0) {
-    throw std::runtime_error("cannot resolve Gateway host");
-  }
-  int socketFd = -1;
-  for (addrinfo* address = addresses; address != nullptr; address = address->ai_next) {
-    socketFd = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-    if (socketFd < 0) continue;
-    const timeval timeout{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
-    setsockopt(socketFd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(socketFd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-    if (connect(socketFd, address->ai_addr, address->ai_addrlen) == 0) break;
-    close(socketFd);
-    socketFd = -1;
-  }
-  freeaddrinfo(addresses);
-  if (socketFd < 0) throw std::runtime_error("cannot connect to Gateway");
-  return socketFd;
-}
-
-HttpResponse Request(const Endpoint& endpoint, int timeoutMs, const std::string& method,
-                     const std::string& path, const std::string& body = {}) {
-  const int socketFd = Connect(endpoint, timeoutMs);
-  std::ostringstream request;
-  request << method << ' ' << path << " HTTP/1.1\r\n"
-          << "Host: " << endpoint.host << ':' << endpoint.port << "\r\n"
-          << "Connection: close\r\n";
-  if (!body.empty()) request << "Content-Type: application/json\r\n";
-  request << "Content-Length: " << body.size() << "\r\n\r\n" << body;
-  const std::string encoded = request.str();
-  size_t sent = 0;
-  while (sent < encoded.size()) {
-    const ssize_t written = send(socketFd, encoded.data() + sent, encoded.size() - sent, MSG_NOSIGNAL);
-    if (written <= 0) {
-      close(socketFd);
-      throw std::runtime_error("failed to send Gateway request");
-    }
-    sent += static_cast<size_t>(written);
-  }
-
-  std::string response;
-  char buffer[8192];
-  while (true) {
-    const ssize_t received = recv(socketFd, buffer, sizeof(buffer), 0);
-    if (received == 0) break;
-    if (received < 0) {
-      close(socketFd);
-      throw std::runtime_error("failed or timed out reading Gateway response");
-    }
-    response.append(buffer, static_cast<size_t>(received));
-    if (response.size() > 4U * 1024U * 1024U) {
-      close(socketFd);
-      throw std::runtime_error("Gateway response is too large");
-    }
-  }
-  close(socketFd);
-  const size_t lineEnd = response.find("\r\n");
-  const size_t bodyStart = response.find("\r\n\r\n");
-  if (lineEnd == std::string::npos || bodyStart == std::string::npos) {
-    throw std::runtime_error("invalid Gateway HTTP response");
-  }
-  std::istringstream statusLine(response.substr(0, lineEnd));
-  std::string version;
-  HttpResponse parsed;
-  if (!(statusLine >> version >> parsed.status)) throw std::runtime_error("invalid Gateway status line");
-  parsed.body = response.substr(bodyStart + 4);
-  return parsed;
-}
-
-AdapterStatus StatusFromName(const std::string& name) {
-  if (name == "OK" || name == "ALREADY_COMMITTED") return AdapterStatus::kOk;
-  if (name == "NOT_FOUND") return AdapterStatus::kNotFound;
-  if (name == "LOCK_CONFLICT" || name == "WRITE_CONFLICT") return AdapterStatus::kConflict;
-  if (name == "TIMEOUT") return AdapterStatus::kTimeout;
-  if (name == "CLEANUP_PENDING") return AdapterStatus::kCleanupPending;
-  if (name == "RESULT_UNKNOWN") return AdapterStatus::kResultUnknown;
-  if (name == "INVALID_TRANSACTION" || name == "ABORT_ONLY") return AdapterStatus::kInvalid;
-  return AdapterStatus::kUnavailable;
-}
-
-bool Retryable(AdapterStatus status) {
-  return status == AdapterStatus::kConflict || status == AdapterStatus::kTimeout ||
-         status == AdapterStatus::kUnavailable;
-}
-
-AdapterResult GatewayResult(const HttpResponse& response) {
-  const std::string statusName = JsonString(response.body, "status").value_or("UNAVAILABLE");
-  AdapterResult result;
-  result.status = StatusFromName(statusName);
-  result.value = JsonString(response.body, "value").value_or("");
-  result.found = result.status == AdapterStatus::kOk && response.status == 200 &&
-                 response.body.find("\"value\"") != std::string::npos;
-  result.retryable = Retryable(result.status);
-  result.message = JsonString(response.body, "message").value_or(statusName);
-  return result;
-}
-
-class GatewayTransaction final : public TransactionHandle {
- public:
-  explicit GatewayTransaction(std::string id) : id(std::move(id)) {}
-  std::string id;
-};
-
-class GatewayAdapter final : public ClientAdapter {
- public:
-  GatewayAdapter(Endpoint endpoint, int timeoutMs) : endpoint_(std::move(endpoint)), timeoutMs_(timeoutMs) {}
-
-  std::unique_ptr<TransactionHandle> Begin(uint64_t lockTtlMs) override {
-    const HttpResponse response = Request(endpoint_, timeoutMs_, "POST", "/v1/transactions",
-                                          "{\"lockTtlMs\":" + std::to_string(lockTtlMs) + "}");
-    const auto id = JsonString(response.body, "id");
-    if (response.status != 201 || !id || id->empty()) {
-      throw std::runtime_error("Gateway Begin failed: " + JsonString(response.body, "message").value_or("HTTP error"));
-    }
-    return std::make_unique<GatewayTransaction>(*id);
-  }
-
-  AdapterResult Get(TransactionHandle* transaction, const std::string& key) override {
-    return GatewayResult(Request(endpoint_, timeoutMs_, "GET", Path(transaction) + "/keys/" + UrlEncode(key)));
-  }
-
-  AdapterResult Put(TransactionHandle* transaction, const std::string& key,
-                    const std::string& value) override {
-    return GatewayResult(Request(endpoint_, timeoutMs_, "POST", Path(transaction) + "/mutations",
-                                 "{\"key\":\"" + JsonEscape(key) + "\",\"value\":\"" +
-                                     JsonEscape(value) + "\"}"));
-  }
-
-  AdapterResult Commit(TransactionHandle* transaction) override {
-    return GatewayResult(Request(endpoint_, timeoutMs_, "POST", Path(transaction) + "/commit"));
-  }
-
-  AdapterResult Rollback(TransactionHandle* transaction) override {
-    const HttpResponse response = Request(endpoint_, timeoutMs_, "POST", Path(transaction) + "/rollback");
-    if (response.status == 404) return {AdapterStatus::kOk};
-    return GatewayResult(response);
-  }
-
- private:
-  std::string Path(TransactionHandle* transaction) const {
-    auto* gateway = dynamic_cast<GatewayTransaction*>(transaction);
-    if (gateway == nullptr) throw std::invalid_argument("invalid Gateway transaction handle");
-    return "/v1/transactions/" + gateway->id;
-  }
-
-  Endpoint endpoint_;
-  int timeoutMs_;
-};
 
 AdapterStatus FromSdkStatus(stratakv::Status status) {
   switch (status) {
@@ -446,10 +219,17 @@ AdapterFactory DirectAdapterFactory(const std::string& regionsConfig, const std:
   };
 }
 
-AdapterFactory GatewayAdapterFactory(const std::string& gateway, int timeoutMs) {
-  const Endpoint endpoint = ParseEndpoint(gateway);
-  return [endpoint, timeoutMs]() { return std::make_unique<GatewayAdapter>(endpoint, timeoutMs); };
+AdapterFactory DynamicDirectAdapterFactory(const std::string& metadataEndpoints,
+                                           const std::string& tsoEndpoints) {
+  return [metadataEndpoints, tsoEndpoints]() {
+    stratakv::ConnectionOptions options;
+    options.topologyMode = stratakv::TopologyMode::kDynamic;
+    options.metadataEndpoints = metadataEndpoints;
+    options.tsoEndpoints = tsoEndpoints;
+    return std::make_unique<DirectAdapter>(stratakv::Client::Connect(options));
+  };
 }
+
 
 std::vector<RegionRange> LoadRegionRanges(const std::string& regionsConfig) {
   const RegionCatalog catalog = RegionCatalog::LoadFromConfig(regionsConfig);

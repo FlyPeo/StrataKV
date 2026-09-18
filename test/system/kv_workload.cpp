@@ -1,6 +1,6 @@
 /*
- * 测试目标：在真实三 Region 集群上执行 YCSB A/B/C/F、A1 性能矩阵、C1 转账和 C2 register history。
- * 测试策略：复用公共 Direct/Gateway adapter；Load 与 Run 分离，支持完整 A1 矩阵与单点执行，
+ * 测试目标：在真实 Region 集群（静态或动态拓扑）上执行 YCSB A/B/C/F、A1 性能矩阵、C1 转账和 C2 register history。
+ * 测试策略：复用公共 Direct SDK adapter；Load 与 Run 分离，支持完整 A1 矩阵与单点执行，
  *           C1 检查守恒，C2 按 quiescent epoch 对带 invocation/completion 时间的历史做有界线性化搜索。
  * 测试规模：interview-smoke 为 3,000×256 B、A/C 各 10,000 ops、1,000 transfers、
  *           300 register ops；interview-full 为 100,000×1 KiB、A1 完整 24 点 20,000 ops。
@@ -35,10 +35,10 @@ namespace {
 
 struct Options {
   std::string mode = "run";
-  std::string path = "gateway";
-  std::string gateway = "http://127.0.0.1:18080";
+  std::string path = "direct";
   std::string regionsConfig;
   std::string tsoEndpoints = "127.0.0.1:26380,127.0.0.1:26381,127.0.0.1:26382";
+  std::string metadataEndpoints;
   std::string profile = "interview-smoke";
   std::string runId = "smoke";
   std::string caseId = "case";
@@ -65,8 +65,8 @@ uint64_t Positive(const std::string& value, const std::string& option) {
 
 void Usage(const char* program) {
   std::cout << "Usage: " << program << " --mode load|verify|run|a1-matrix|transfer|register [options]\n"
-            << "  --path gateway|direct --regions-config PATH --run-id ID --case-id ID\n"
-            << "  --gateway URL --tso-endpoints CSV --profile NAME\n"
+            << "  --path direct --regions-config PATH --run-id ID --case-id ID\n"
+            << "  --tso-endpoints CSV --profile NAME\n"
             << "  --workload A|B|C|F --distribution uniform|zipfian\n"
             << "  --records N --operations N --value-size N --workers N --seed N\n"
             << "  --max-attempts N --retry-delay-ms N --timeout-ms N\n"
@@ -85,9 +85,9 @@ Options Parse(int argc, char** argv) {
     const std::string value = argv[++index];
     if (option == "--mode") options.mode = value;
     else if (option == "--path") options.path = value;
-    else if (option == "--gateway") options.gateway = value;
     else if (option == "--regions-config") options.regionsConfig = value;
     else if (option == "--tso-endpoints") options.tsoEndpoints = value;
+    else if (option == "--metadata-endpoints") options.metadataEndpoints = value;
     else if (option == "--profile") options.profile = value;
     else if (option == "--run-id") options.runId = value;
     else if (option == "--case-id") options.caseId = value;
@@ -112,8 +112,8 @@ Options Parse(int argc, char** argv) {
       options.mode != "transfer" && options.mode != "register") {
     throw std::invalid_argument("--mode must be load, verify, run, a1-matrix, transfer, or register");
   }
-  if (options.path != "gateway" && options.path != "direct") {
-    throw std::invalid_argument("--path must be gateway or direct");
+  if (options.path != "direct") {
+    throw std::invalid_argument("--path must be direct (only native C++ SDK is supported)");
   }
   return options;
 }
@@ -137,7 +137,9 @@ perf::WorkloadSpec MakeSpec(const Options& options) {
 }
 
 perf::AdapterFactory MakeFactory(const Options& options) {
-  if (options.path == "gateway") return perf::GatewayAdapterFactory(options.gateway, options.timeoutMs);
+  if (!options.metadataEndpoints.empty()) {
+    return perf::DynamicDirectAdapterFactory(options.metadataEndpoints, options.tsoEndpoints);
+  }
   return perf::DirectAdapterFactory(options.regionsConfig, options.tsoEndpoints);
 }
 
@@ -488,9 +490,9 @@ int main(int argc, char** argv) {
         pointOptions.distribution = perf::DistributionName(point.distribution);
         pointOptions.workers = point.workers;
 
-        const perf::AdapterFactory pointFactory = (point.path == "gateway")
-            ? perf::GatewayAdapterFactory(options.gateway, options.timeoutMs)
-            : perf::DirectAdapterFactory(options.regionsConfig, options.tsoEndpoints);
+        const perf::AdapterFactory pointFactory = (!options.metadataEndpoints.empty()
+            ? perf::DynamicDirectAdapterFactory(options.metadataEndpoints, options.tsoEndpoints)
+            : perf::DirectAdapterFactory(options.regionsConfig, options.tsoEndpoints));
 
         const auto summary = perf::RunRecords(pointSpec, keys, pointFactory, point.caseId);
         Publish(pointOptions, summary, "record");

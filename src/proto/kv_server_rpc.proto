@@ -7,12 +7,15 @@ package raftKVRpcProctoc; //所在的命名空间
 
 option cc_generic_services = true;  //开启stub服务
 
+import "region.proto";
+
 // 日志实体
 message GetArgs{
   bytes Key = 1 ;
   bytes ClientId = 2 ;
   int32 RequestId = 3;
   int32 RegionId = 4;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 
@@ -20,6 +23,7 @@ message GetReply  {
   //	下面几个参数和论文中相同
   bytes Err = 1;
   bytes Value = 2;
+  stratakv.region.RegionResponseHeader Header = 100;
 
 }
 
@@ -30,6 +34,7 @@ message ListArgs {
   // so an administrator can compare the physical replicas of one Region.
   bool AllowFollowerRead = 3;
   int32 RegionId = 4;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message KeyValue {
@@ -40,6 +45,7 @@ message KeyValue {
 message ListReply {
   bytes Err = 1;
   repeated KeyValue Entries = 2;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 
@@ -55,10 +61,12 @@ message PutAppendArgs  {
   bytes  ClientId = 4;
   int32  RequestId = 5;
   int32 RegionId = 6;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message PutAppendReply  {
   bytes Err = 1;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnGetArgs {
@@ -67,11 +75,13 @@ message TxnGetArgs {
   bytes ClientId = 3;
   int32 RequestId = 4;
   int32 RegionId = 5;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnGetReply {
   bytes Err = 1;
   bytes Value = 2;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnPrewriteArgs {
@@ -88,10 +98,12 @@ message TxnPrewriteArgs {
   uint32 ProtocolVersion = 11;
   uint64 RemainingBudgetMs = 12;
   bool IsLockOnly = 13;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnPrewriteReply {
   bytes Err = 1;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnBatchMutation {
@@ -112,10 +124,12 @@ message TxnBatchPrewriteArgs {
   uint64 MaxForUpdateTs = 8;
   uint32 ProtocolVersion = 9;
   uint64 RemainingBudgetMs = 10;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnBatchPrewriteReply {
   bytes Err = 1;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnCommitArgs {
@@ -125,10 +139,12 @@ message TxnCommitArgs {
   bytes ClientId = 4;
   int32 RequestId = 5;
   int32 RegionId = 6;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnCommitReply {
   bytes Err = 1;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnBatchCommitArgs {
@@ -140,10 +156,12 @@ message TxnBatchCommitArgs {
   int32 RegionId = 6;
   uint32 ProtocolVersion = 7;
   uint64 RemainingBudgetMs = 8;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnBatchCommitReply {
   bytes Err = 1;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnRollbackArgs {
@@ -152,10 +170,12 @@ message TxnRollbackArgs {
   bytes ClientId = 3;
   int32 RequestId = 4;
   int32 RegionId = 5;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnRollbackReply {
   bytes Err = 1;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnBatchRollbackArgs {
@@ -166,15 +186,18 @@ message TxnBatchRollbackArgs {
   int32 RegionId = 5;
   uint32 ProtocolVersion = 6;
   uint64 RemainingBudgetMs = 7;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnBatchRollbackReply {
   bytes Err = 1;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnGetLockArgs {
   bytes Key = 1;
   int32 RegionId = 2;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnGetLockReply {
@@ -191,6 +214,7 @@ message TxnGetLockReply {
   uint64 ExpireAtPhysicalMs = 11;
   bool LegacyExpiry = 12;
   bool IsLockOnly = 13;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnAcquirePessimisticLockArgs {
@@ -206,6 +230,7 @@ message TxnAcquirePessimisticLockArgs {
   uint64 RemainingBudgetMs = 10;
   uint32 ProtocolVersion = 11;
   bool ReturnValue = 12;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnAcquirePessimisticLockReply {
@@ -214,6 +239,7 @@ message TxnAcquirePessimisticLockReply {
   bytes Value = 3;
   uint64 ValueCommitTs = 4;
   bool Applied = 5;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 enum TxnRecordStateProto {
@@ -233,6 +259,7 @@ message TxnCheckStatusArgs {
   int32 RegionId = 7;
   uint64 RemainingBudgetMs = 8;
   uint32 ProtocolVersion = 9;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnCheckStatusReply {
@@ -241,6 +268,7 @@ message TxnCheckStatusReply {
   uint64 CommitTs = 3;
   TxnGetLockReply Lock = 4;
   bool Applied = 5;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnResolveLockArgs {
@@ -253,11 +281,13 @@ message TxnResolveLockArgs {
   int32 RegionId = 7;
   uint64 RemainingBudgetMs = 8;
   uint32 ProtocolVersion = 9;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnResolveLockReply {
   bytes Err = 1;
   bool Applied = 2;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnProtocolCapabilitiesArgs {}
@@ -274,23 +304,27 @@ message TxnFindCommitTsArgs {
   bytes Key = 1;
   uint64 StartTs = 2;
   int32 RegionId = 3;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnFindCommitTsReply {
   bytes Err = 1;
   bool Found = 2;
   uint64 CommitTs = 3;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnExpiredLocksArgs {
   uint64 NowMs = 1;
   int32 RegionId = 2;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnExpiredLocksReply {
   bytes Err = 1;
   repeated bytes Keys = 2;
   repeated TxnGetLockReply Locks = 3;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnGarbageCollectArgs {
@@ -298,20 +332,96 @@ message TxnGarbageCollectArgs {
   bytes ClientId = 2;
   int32 RequestId = 3;
   int32 RegionId = 4;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnGarbageCollectReply {
   bytes Err = 1;
   uint64 RemovedCount = 2;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 message TxnMaxObservedTsArgs {
   int32 RegionId = 1;
+  stratakv.region.RegionRequestHeader Header = 100;
 }
 
 message TxnMaxObservedTsReply {
   bytes Err = 1;
   uint64 MaxTs = 2;
+  stratakv.region.RegionResponseHeader Header = 100;
+}
+
+message ProposeAdminSplitArgs {
+  stratakv.region.AdminSplitCommand Split = 1;
+  int32 RegionId = 2;
+  stratakv.region.RegionRequestHeader Header = 100;
+}
+
+message ProposeAdminSplitReply {
+  bytes Err = 1;
+  stratakv.region.RegionResponseHeader Header = 100;
+}
+
+message RegionSplitStatusArgs {
+  int32 RegionId = 1;
+  stratakv.region.RegionRequestHeader Header = 100;
+}
+
+message RegionSplitStatusReply {
+  bytes Err = 1;
+  // Local split phase: 0 not started, 1 checkpointing, 2 child ready,
+  // 3 parent shrunk, 4 complete.
+  int32 Phase = 2;
+  stratakv.region.RegionResponseHeader Header = 100;
+}
+
+message ProposeConfChangeArgs {
+  stratakv.region.ConfChangeCommand ConfChange = 1;
+  int32 RegionId = 2;
+  stratakv.region.RegionRequestHeader Header = 100;
+}
+
+message ProposeConfChangeReply {
+  bytes Err = 1;
+  stratakv.region.RegionResponseHeader Header = 100;
+}
+
+message PrepareMigrationTargetArgs {
+  stratakv.region.RegionDescriptor Region = 1;
+  uint64 TargetPeerId = 2;
+}
+
+message PrepareMigrationTargetReply {
+  bytes Err = 1;
+  stratakv.region.ReplicaMigrationStatus Status = 2;
+  stratakv.region.RegionResponseHeader Header = 100;
+}
+
+message RetireMigrationSourceArgs {
+  int32 RegionId = 1;
+  uint64 PeerId = 2;
+  uint64 MetadataRevision = 3;
+  uint64 TimeoutMs = 4;
+}
+
+message RetireMigrationSourceReply {
+  bytes Err = 1;
+  bool Drained = 2;
+  uint64 RemainingRequests = 3;
+  stratakv.region.RegionResponseHeader Header = 100;
+}
+
+message RegionMigrationStatusArgs {
+  int32 RegionId = 1;
+  uint64 TargetPeerId = 2;
+}
+
+message RegionMigrationStatusReply {
+  bytes Err = 1;
+  stratakv.region.ReplicaMigrationStatus Status = 2;
+  stratakv.region.RegionDescriptor Region = 3;
+  stratakv.region.RegionResponseHeader Header = 100;
 }
 
 // Versioned physical MVCC mutations carried in a Raft log entry. Keeping the
@@ -369,4 +479,10 @@ service kvServerRpc
   rpc TxnExpiredLocks(TxnExpiredLocksArgs) returns (TxnExpiredLocksReply);
   rpc TxnGarbageCollect(TxnGarbageCollectArgs) returns (TxnGarbageCollectReply);
   rpc TxnMaxObservedTs(TxnMaxObservedTsArgs) returns (TxnMaxObservedTsReply);
+  rpc ProposeAdminSplit(ProposeAdminSplitArgs) returns (ProposeAdminSplitReply);
+  rpc RegionSplitStatus(RegionSplitStatusArgs) returns (RegionSplitStatusReply);
+  rpc ProposeConfChange(ProposeConfChangeArgs) returns (ProposeConfChangeReply);
+  rpc PrepareMigrationTarget(PrepareMigrationTargetArgs) returns (PrepareMigrationTargetReply);
+  rpc RetireMigrationSource(RetireMigrationSourceArgs) returns (RetireMigrationSourceReply);
+  rpc RegionMigrationStatus(RegionMigrationStatusArgs) returns (RegionMigrationStatusReply);
 }

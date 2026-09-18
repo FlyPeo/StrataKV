@@ -46,6 +46,12 @@ class IKVEngine {
   virtual std::vector<std::pair<std::string, std::string>> ScanPrefix(const std::string& prefix) = 0;
 
   virtual std::string Dump() = 0;
+  // Crash-consistent hard-link snapshot of the whole DB into a new directory
+  // (RocksDB Checkpoint). Used by Region split materialization.
+  virtual bool CreateCheckpoint(const std::string& checkpointDir) { return false; }
+  // Removes every key in the half-open range [begin, end) via a range
+  // tombstone; space is reclaimed by later compactions.
+  virtual bool DeleteRange(const std::string& begin, const std::string& end) { return false; }
   virtual std::unique_ptr<IKVSnapshot> CaptureSnapshot() {
     return std::make_unique<MaterializedKVSnapshot>(Dump());
   }

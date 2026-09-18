@@ -87,6 +87,11 @@ void RpcProvider::Run(int nodeIndex, short port) {
   m_eventLoop.loop();
 }
 
+// Standard muduo quit() is cross-thread safe: it sets the exit flag and wakes
+// the loop through its eventfd. The EventLoop itself must be constructed and
+// run on the same thread, so Run() and Stop() assume one owning loop thread.
+void RpcProvider::Stop() { m_eventLoop.quit(); }
+
 // 新的socket连接回调
 void RpcProvider::OnConnection(const muduo::net::TcpConnectionPtr &conn) {
   // 如果是新连接就什么都不干，即正常的接收连接即可

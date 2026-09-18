@@ -31,3 +31,7 @@
 /docs/
 
 /deploy/runtime/
+
+# Generated protobuf artifacts (built via protobuf_generate_cpp into build/)
+*.pb.cc
+*.pb.h

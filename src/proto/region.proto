@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+package stratakv.region;
+
+// Canonical topology messages shared by metadata, clients, storage dispatch,
+// and Raft transport. Key ranges are bytewise half-open intervals.
+message RegionEpoch {
+  uint64 Version = 1;
+  uint64 ConfVersion = 2;
+}
+
+message PeerDescriptor {
+  uint64 PeerId = 1;
+  uint64 StoreId = 2;
+  bytes Host = 3;
+  uint32 Port = 4;
+  bool IsLearner = 5;
+}
+
+message RegionDescriptor {
+  uint64 RegionId = 1;
+  bytes StartKey = 2;
+  bytes EndKey = 3;
+  repeated PeerDescriptor Peers = 4;
+  uint64 LeaderPeerId = 5;
+  RegionEpoch Epoch = 6;
+  uint64 MetadataRevision = 7;
+  // Set only on a parent descriptor between the split phases: the topology is
+  // prepared (child IDs allocated) but the child is not yet published.
+  SplitPendingInfo SplitPending = 8;
+}
+
+message SplitPendingInfo {
+  bytes SplitKey = 1;
+  // Fully allocated child descriptor; its epoch/metadata revision are stamped
+  // at commit time.
+  RegionDescriptor Child = 2;
+}
+
+// The data-plane split command carried in one parent Raft log entry. Every
+// replica applies it at the same log position.
+message AdminSplitCommand {
+  bytes SplitKey = 1;
+  uint64 MetadataRevision = 2;
+  RegionDescriptor Parent = 3;
+  RegionDescriptor Child = 4;
+}
+
+enum ConfChangeType {
+  CONF_CHANGE_ADD_PEER = 0;
+  CONF_CHANGE_REMOVE_PEER = 1;
+  CONF_CHANGE_ADD_LEARNER = 2;
+  CONF_CHANGE_PROMOTE_LEARNER = 3;
+}
+
+message ConfChangeCommand {
+  ConfChangeType ChangeType = 1;
+  PeerDescriptor Peer = 2;
+  RegionEpoch ExpectedEpoch = 3;
+  uint64 MetadataRevision = 4;
+}
+
+enum ReplicaMigrationPhase {
+  REPLICA_MIGRATION_NOT_STARTED = 0;
+  REPLICA_MIGRATION_PREPARING_TARGET = 1;
+  REPLICA_MIGRATION_CATCHING_UP = 2;
+  REPLICA_MIGRATION_PROMOTED = 3;
+  REPLICA_MIGRATION_RETIRING_SOURCE = 4;
+  REPLICA_MIGRATION_COMPLETE = 5;
+  REPLICA_MIGRATION_CANCELLED = 6;
+}
+
+// Durable control-plane state for one peer move. It contains identifiers and
+// progress only; raw user keys and values are intentionally never exposed.
+message ReplicaMigrationStatus {
+  uint64 RegionId = 1;
+  uint64 SourcePeerId = 2;
+  uint64 FromStoreId = 3;
+  PeerDescriptor TargetPeer = 4;
+  ReplicaMigrationPhase Phase = 5;
+  uint64 TransferredBytes = 6;
+  uint64 LogLag = 7;
+  bytes MutationId = 8;
+}
+
+message StoreDescriptor {
+  uint64 StoreId = 1;
+  bytes Host = 2;
+  uint32 Port = 3;
+  map<string, string> Labels = 4;
+}
+
+message RegionRequestHeader {
+  uint64 RegionId = 1;
+  uint64 PeerId = 2;
+  RegionEpoch Epoch = 3;
+  bytes ClientId = 4;
+  uint64 RequestId = 5;
+}
+
+message RaftPeerHeader {
+  uint64 RegionId = 1;
+  uint64 FromPeerId = 2;
+  uint64 ToPeerId = 3;
+  RegionEpoch Epoch = 4;
+}
+
+enum RegionErrorCode {
+  REGION_ERROR_NONE = 0;
+  REGION_ERROR_NOT_LEADER = 1;
+  REGION_ERROR_EPOCH_NOT_MATCH = 2;
+  REGION_ERROR_REGION_NOT_FOUND = 3;
+  REGION_ERROR_PEER_NOT_FOUND = 4;
+  REGION_ERROR_KEY_NOT_IN_REGION = 5;
+  REGION_ERROR_SERVER_OVERLOADED = 6;
+  REGION_ERROR_TIMEOUT = 7;
+  REGION_ERROR_UNAVAILABLE = 8;
+  REGION_ERROR_STORAGE = 9;
+  // Dynamic mode requires the typed header; a legacy headerless request is a
+  // routing error of its own so operators can count migrations separately.
+  REGION_ERROR_MISSING_HEADER = 10;
+  REGION_ERROR_CONF_CHANGE_IN_FLIGHT = 11;
+}
+
+message RegionError {
+  RegionErrorCode Code = 1;
+  bytes Message = 2;
+  PeerDescriptor Leader = 3;
+  repeated RegionDescriptor CurrentRegions = 4;
+  uint64 MetadataRevision = 5;
+}
+
+message RegionResponseHeader {
+  RegionError Error = 1;
+}

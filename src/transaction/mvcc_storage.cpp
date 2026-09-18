@@ -1386,3 +1386,22 @@ std::string MvccStorage::WriteKey(const std::string& key, uint64_t commitTs) {
 }
 
 std::string MvccStorage::RevisionKey(const std::string& key) { return "meta/revision/" + key; }
+
+void MvccStorage::DropKeysInRange(const std::string& rangeBegin, const std::string& rangeEnd) {
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+  auto inRange = [&](const std::string& key) {
+    return key >= rangeBegin && (rangeEnd.empty() || key < rangeEnd);
+  };
+  for (auto it = locks_.begin(); it != locks_.end(); ) {
+    if (inRange(it->first)) it = locks_.erase(it);
+    else ++it;
+  }
+  for (auto it = writes_.begin(); it != writes_.end(); ) {
+    if (inRange(it->first)) it = writes_.erase(it);
+    else ++it;
+  }
+  for (auto it = revisions_.begin(); it != revisions_.end(); ) {
+    if (inRange(it->first)) it = revisions_.erase(it);
+    else ++it;
+  }
+}

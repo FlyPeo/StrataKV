@@ -31,7 +31,7 @@ Distribution ParseDistribution(const std::string& value);
 
 struct WorkloadSpec {
   std::string profile = "interview-smoke";
-  std::string path = "gateway";
+  std::string path = "direct";
   Workload workload = Workload::kA;
   Distribution distribution = Distribution::kUniform;
   uint64_t seed = 20260904;
@@ -164,7 +164,7 @@ class ResultRun {
 
 struct A1Point {
   std::string caseId;
-  std::string path = "gateway";
+  std::string path = "direct";
   Workload workload = Workload::kA;
   Distribution distribution = Distribution::kUniform;
   int workers = 1;

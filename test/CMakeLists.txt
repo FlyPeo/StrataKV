@@ -34,6 +34,58 @@ add_executable(stratakv-test-rocksdb-snapshot unit/rocksdb_snapshot_check.cpp)
 target_link_libraries(stratakv-test-rocksdb-snapshot PRIVATE stratakv_core pthread)
 add_test(NAME stratakv-test-rocksdb-snapshot COMMAND stratakv-test-rocksdb-snapshot)
 
+add_executable(stratakv-test-raft-confchange unit/raft_confchange_check.cpp)
+target_link_libraries(stratakv-test-raft-confchange PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-raft-confchange COMMAND stratakv-test-raft-confchange)
+
+add_executable(stratakv-test-replica-catchup unit/replica_catchup_check.cpp)
+target_link_libraries(stratakv-test-replica-catchup PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-replica-catchup COMMAND stratakv-test-replica-catchup)
+
+add_executable(stratakv-test-node-migration unit/node_migration_check.cpp)
+target_include_directories(stratakv-test-node-migration PRIVATE ${PROJECT_SOURCE_DIR}/src/server ${PROJECT_SOURCE_DIR}/src/metadata/include)
+target_link_libraries(stratakv-test-node-migration PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-node-migration COMMAND stratakv-test-node-migration)
+
+add_executable(stratakv-test-auto-balancer-state unit/auto_balancer_state_check.cpp)
+target_include_directories(stratakv-test-auto-balancer-state PRIVATE ${PROJECT_SOURCE_DIR}/src/metadata/include)
+target_link_libraries(stratakv-test-auto-balancer-state PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-auto-balancer-state COMMAND stratakv-test-auto-balancer-state)
+
+add_executable(stratakv-test-auto-balancer-planner unit/auto_balancer_planner_check.cpp)
+target_include_directories(stratakv-test-auto-balancer-planner PRIVATE ${PROJECT_SOURCE_DIR}/src/metadata/include)
+target_link_libraries(stratakv-test-auto-balancer-planner PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-auto-balancer-planner COMMAND stratakv-test-auto-balancer-planner)
+
+add_executable(stratakv-test-auto-balancer-heartbeat unit/auto_balancer_heartbeat_check.cpp)
+target_include_directories(stratakv-test-auto-balancer-heartbeat PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/server
+    ${PROJECT_SOURCE_DIR}/src/metadata/include)
+target_link_libraries(stratakv-test-auto-balancer-heartbeat PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-auto-balancer-heartbeat COMMAND stratakv-test-auto-balancer-heartbeat)
+set_tests_properties(stratakv-test-auto-balancer-heartbeat PROPERTIES TIMEOUT 60)
+
+add_executable(stratakv-test-auto-balancer-recovery unit/auto_balancer_recovery_check.cpp)
+target_include_directories(stratakv-test-auto-balancer-recovery PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/server
+    ${PROJECT_SOURCE_DIR}/src/metadata/include)
+target_link_libraries(stratakv-test-auto-balancer-recovery PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-auto-balancer-recovery COMMAND stratakv-test-auto-balancer-recovery)
+set_tests_properties(stratakv-test-auto-balancer-recovery PROPERTIES TIMEOUT 60)
+
+add_executable(stratakv-test-online-migration integration/online_migration_integration_check.cpp)
+target_link_libraries(stratakv-test-online-migration PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-online-migration COMMAND stratakv-test-online-migration)
+set_tests_properties(stratakv-test-online-migration PROPERTIES TIMEOUT 60)
+
+add_executable(stratakv-test-auto-balancer-integration integration/auto_balancer_integration_check.cpp)
+target_include_directories(stratakv-test-auto-balancer-integration PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/server
+    ${PROJECT_SOURCE_DIR}/src/metadata/include)
+target_link_libraries(stratakv-test-auto-balancer-integration PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-auto-balancer-integration COMMAND stratakv-test-auto-balancer-integration)
+set_tests_properties(stratakv-test-auto-balancer-integration PROPERTIES TIMEOUT 60)
+
 add_library(stratakv-test-performance-support STATIC
     support/performance/performance_support.cpp
     support/performance/workload_runner.cpp
@@ -85,11 +137,22 @@ add_executable(stratakv-test-txn-scheduler unit/txn_scheduler_check.cpp)
 target_link_libraries(stratakv-test-txn-scheduler PRIVATE stratakv_core pthread)
 add_test(NAME stratakv-test-txn-scheduler COMMAND stratakv-test-txn-scheduler)
 
-add_executable(stratakv-test-tso integration/tso_integration_check.cpp)
-target_link_libraries(stratakv-test-tso PRIVATE stratakv_core pthread)
-add_dependencies(stratakv-test-tso stratakv-tso)
-add_test(NAME stratakv-test-tso COMMAND stratakv-test-tso)
-set_tests_properties(stratakv-test-tso PROPERTIES TIMEOUT 120)
+add_executable(stratakv-test-txn-recovery-dynamic unit/txn_recovery_dynamic_check.cpp)
+target_link_libraries(stratakv-test-txn-recovery-dynamic PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-txn-recovery-dynamic COMMAND stratakv-test-txn-recovery-dynamic)
+
+add_executable(stratakv-test-dynamic-cluster integration/dynamic_cluster_integration_check.cpp)
+target_include_directories(stratakv-test-dynamic-cluster PRIVATE ${PROJECT_SOURCE_DIR}/src/metadata/include ${PROJECT_SOURCE_DIR}/src/sdk/include ${PROJECT_SOURCE_DIR}/src/rpc/include ${PROJECT_SOURCE_DIR}/src/common/include)
+target_link_libraries(stratakv-test-dynamic-cluster PRIVATE stratakv_sdk stratakv_core pthread)
+add_dependencies(stratakv-test-dynamic-cluster stratakv-tso stratakv-meta stratakv-node)
+add_test(NAME stratakv-test-dynamic-cluster COMMAND stratakv-test-dynamic-cluster)
+set_tests_properties(stratakv-test-dynamic-cluster PROPERTIES TIMEOUT 420)
+
+add_executable(stratakv-test-tso-integration integration/tso_integration_check.cpp)
+target_link_libraries(stratakv-test-tso-integration PRIVATE stratakv_core pthread)
+add_dependencies(stratakv-test-tso-integration stratakv-tso)
+add_test(NAME stratakv-test-tso-integration COMMAND stratakv-test-tso-integration)
+set_tests_properties(stratakv-test-tso-integration PROPERTIES TIMEOUT 120)
 
 # Self-contained 3-member TSO A/B benchmark. It is intentionally not a CTest
 # because latency/throughput measurements are machine- and build-dependent.
@@ -113,6 +176,91 @@ add_executable(stratakv-test-region-batch-coordinator unit/region_batch_coordina
 target_link_libraries(stratakv-test-region-batch-coordinator PRIVATE stratakv_core pthread)
 add_test(NAME stratakv-test-region-batch-coordinator COMMAND stratakv-test-region-batch-coordinator)
 
+add_executable(stratakv-test-region-metadata unit/region_metadata_check.cpp)
+target_link_libraries(stratakv-test-region-metadata PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-region-metadata COMMAND stratakv-test-region-metadata)
+
+add_executable(stratakv-test-topology-config unit/topology_config_check.cpp)
+target_link_libraries(stratakv-test-topology-config PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-topology-config COMMAND stratakv-test-topology-config)
+
+add_executable(stratakv-test-region-cache unit/region_cache_check.cpp)
+target_link_libraries(stratakv-test-region-cache PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-region-cache COMMAND stratakv-test-region-cache)
+
+add_executable(stratakv-test-region-registry unit/region_registry_check.cpp)
+target_include_directories(stratakv-test-region-registry PRIVATE ${PROJECT_SOURCE_DIR}/src/server)
+target_link_libraries(stratakv-test-region-registry PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-region-registry COMMAND stratakv-test-region-registry)
+
+add_executable(stratakv-test-region-dispatcher unit/region_dispatcher_check.cpp)
+target_include_directories(stratakv-test-region-dispatcher PRIVATE ${PROJECT_SOURCE_DIR}/src/server)
+target_link_libraries(stratakv-test-region-dispatcher PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-region-dispatcher COMMAND stratakv-test-region-dispatcher)
+
+add_executable(stratakv-test-region-split unit/region_split_check.cpp)
+target_include_directories(stratakv-test-region-split PRIVATE ${PROJECT_SOURCE_DIR}/src/server)
+target_link_libraries(stratakv-test-region-split PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-region-split COMMAND stratakv-test-region-split)
+
+add_executable(stratakv-test-node-split unit/node_split_check.cpp)
+target_include_directories(stratakv-test-node-split PRIVATE ${PROJECT_SOURCE_DIR}/src/server)
+target_link_libraries(stratakv-test-node-split PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-node-split COMMAND stratakv-test-node-split)
+
+add_executable(stratakv-test-region-request-sender unit/region_request_sender_check.cpp)
+target_include_directories(stratakv-test-region-request-sender PRIVATE ${PROJECT_SOURCE_DIR}/src/transaction/include ${PROJECT_SOURCE_DIR}/src/rpc/include ${PROJECT_SOURCE_DIR}/src/common/include)
+target_link_libraries(stratakv-test-region-request-sender PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-region-request-sender COMMAND stratakv-test-region-request-sender)
+
+add_executable(stratakv-test-region-cache-stress unit/region_cache_stress_check.cpp)
+target_include_directories(stratakv-test-region-cache-stress PRIVATE ${PROJECT_SOURCE_DIR}/src/server ${PROJECT_SOURCE_DIR}/src/raft/include ${PROJECT_SOURCE_DIR}/src/transaction/include ${PROJECT_SOURCE_DIR}/src/rpc/include ${PROJECT_SOURCE_DIR}/src/common/include)
+target_link_libraries(stratakv-test-region-cache-stress PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-region-cache-stress COMMAND stratakv-test-region-cache-stress)
+
+add_executable(stratakv-test-region-envelope-compat unit/region_envelope_compat_check.cpp)
+target_include_directories(stratakv-test-region-envelope-compat PRIVATE ${PROJECT_SOURCE_DIR}/src/server ${PROJECT_SOURCE_DIR}/src/transaction/include ${PROJECT_SOURCE_DIR}/src/rpc/include ${PROJECT_SOURCE_DIR}/src/common/include)
+target_link_libraries(stratakv-test-region-envelope-compat PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-region-envelope-compat COMMAND stratakv-test-region-envelope-compat)
+
+add_executable(stratakv-test-metadata-consensus-fault unit/metadata_consensus_fault_check.cpp)
+target_include_directories(stratakv-test-metadata-consensus-fault PRIVATE ${PROJECT_SOURCE_DIR}/src/metadata/include ${PROJECT_SOURCE_DIR}/src/raft/include ${PROJECT_SOURCE_DIR}/src/rpc/include ${PROJECT_SOURCE_DIR}/src/common/include)
+target_link_libraries(stratakv-test-metadata-consensus-fault PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-metadata-consensus-fault COMMAND stratakv-test-metadata-consensus-fault)
+
+add_executable(stratakv-test-metadata-property unit/metadata_property_check.cpp)
+target_include_directories(stratakv-test-metadata-property PRIVATE ${PROJECT_SOURCE_DIR}/src/metadata/include ${PROJECT_SOURCE_DIR}/src/rpc/include ${PROJECT_SOURCE_DIR}/src/common/include)
+target_link_libraries(stratakv-test-metadata-property PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-metadata-property COMMAND stratakv-test-metadata-property)
+
+add_executable(stratakv-test-region-data-path unit/region_data_path_check.cpp)
+target_include_directories(stratakv-test-region-data-path PRIVATE ${PROJECT_SOURCE_DIR}/src/transaction/include ${PROJECT_SOURCE_DIR}/src/rpc/include ${PROJECT_SOURCE_DIR}/src/common/include)
+target_link_libraries(stratakv-test-region-data-path PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-region-data-path COMMAND stratakv-test-region-data-path)
+
+add_executable(stratakv-test-node-bootstrap unit/node_bootstrap_check.cpp)
+target_include_directories(stratakv-test-node-bootstrap PRIVATE ${PROJECT_SOURCE_DIR}/src/server)
+target_link_libraries(stratakv-test-node-bootstrap PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-node-bootstrap COMMAND stratakv-test-node-bootstrap)
+
+add_executable(stratakv-test-metadata-state-machine unit/metadata_state_machine_check.cpp)
+target_link_libraries(stratakv-test-metadata-state-machine PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-metadata-state-machine COMMAND stratakv-test-metadata-state-machine)
+
+add_executable(stratakv-test-metadata-consensus unit/metadata_consensus_check.cpp)
+target_link_libraries(stratakv-test-metadata-consensus PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-metadata-consensus COMMAND stratakv-test-metadata-consensus)
+
+add_executable(stratakv-test-metadata-client unit/metadata_client_check.cpp)
+target_link_libraries(stratakv-test-metadata-client PRIVATE stratakv_core pthread)
+add_test(NAME stratakv-test-metadata-client COMMAND stratakv-test-metadata-client)
+
+add_executable(stratakv-test-metadata-integration integration/metadata_integration_check.cpp)
+target_link_libraries(stratakv-test-metadata-integration PRIVATE stratakv_core pthread)
+add_dependencies(stratakv-test-metadata-integration stratakv-meta)
+add_test(NAME stratakv-test-metadata-integration COMMAND stratakv-test-metadata-integration)
+set_tests_properties(stratakv-test-metadata-integration PROPERTIES TIMEOUT 120)
+
 add_executable(stratakv-test-sdk-contract unit/sdk_contract_check.cpp)
 target_link_libraries(stratakv-test-sdk-contract PRIVATE stratakv_sdk pthread)
 add_test(NAME stratakv-test-sdk-contract COMMAND stratakv-test-sdk-contract)
@@ -122,6 +270,17 @@ target_link_libraries(stratakv-test-txn-contention PRIVATE stratakv_sdk pthread)
 
 add_executable(stratakv-test-region-2pc-benchmark benchmarks/region_2pc_benchmark.cpp)
 target_link_libraries(stratakv-test-region-2pc-benchmark PRIVATE stratakv_core pthread)
+
+add_executable(stratakv-test-dynamic-sharding-benchmark benchmarks/dynamic_sharding_benchmark.cpp)
+target_include_directories(stratakv-test-dynamic-sharding-benchmark PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/metadata/include
+    ${PROJECT_SOURCE_DIR}/src/sdk/include
+    ${PROJECT_SOURCE_DIR}/src/rpc/include
+    ${PROJECT_SOURCE_DIR}/src/common/include
+    ${PROJECT_SOURCE_DIR}/src/transaction/include
+    ${PROJECT_SOURCE_DIR}/src/server)
+target_link_libraries(stratakv-test-dynamic-sharding-benchmark PRIVATE
+    stratakv_sdk stratakv_core pthread)
 
 # Release-oriented coroutine benchmark. It is intentionally not registered in
 # CTest because the case sizes and CPU-affinity policy belong to the caller.
@@ -136,9 +295,9 @@ target_compile_definitions(stratakv-test-fiber-context-ab PRIVATE STRATAKV_AB_PU
 target_link_libraries(stratakv-test-fiber-context-ab PRIVATE Pulsar::pulsar pthread dl)
 
 # Cluster reliability workload. This is intentionally not registered in CTest:
-# it requires a live multi-node Gateway deployment and performs persistent I/O.
+# it requires a live multi-node deployment and performs persistent I/O via native C++ SDK.
 add_executable(stratakv-test-reliability system/reliability_check.cpp)
-target_link_libraries(stratakv-test-reliability PRIVATE pthread)
+target_link_libraries(stratakv-test-reliability PRIVATE stratakv_sdk pthread)
 
 # Unified YCSB-compatible/C1/C2 workload. It requires a live three-Region
 # deployment, so orchestration lives in deploy/stratakv-performance.
@@ -151,5 +310,3 @@ add_test(NAME stratakv-test-performance-report
     COMMAND python3 ${PROJECT_SOURCE_DIR}/test/integration/performance_report_check.py)
 add_test(NAME stratakv-test-d1-compare
     COMMAND python3 ${PROJECT_SOURCE_DIR}/test/integration/d1_compare_check.py)
-add_test(NAME stratakv-test-gateway-smoke
-    COMMAND bash ${PROJECT_SOURCE_DIR}/test/integration/gateway_smoke_check.sh)

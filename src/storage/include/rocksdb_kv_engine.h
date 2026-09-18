@@ -22,6 +22,8 @@ class RocksDbKVEngine : public IKVEngine {
   std::vector<std::pair<std::string, std::string>> ScanPrefix(const std::string& prefix) override;
 
   std::string Dump() override;
+  bool CreateCheckpoint(const std::string& checkpointDir) override;
+  bool DeleteRange(const std::string& begin, const std::string& end) override;
   std::unique_ptr<IKVSnapshot> CaptureSnapshot() override;
   bool Load(const std::string& snapshot) override;
   void DebugPrint() override;

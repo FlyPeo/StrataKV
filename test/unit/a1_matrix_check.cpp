@@ -99,26 +99,23 @@ int main() {
     Require(standardMatrix.size() == 24, "StandardA1Matrix must contain exactly 24 points");
 
     std::set<std::string> seenCaseIds;
-    int gatewayUniformCount = 0;
-    int gatewayZipfianCount = 0;
     int directUniformCount = 0;
+    int directZipfianCount = 0;
 
     for (const auto& point : standardMatrix) {
       Require(seenCaseIds.insert(point.caseId).second, "Duplicate caseId in matrix: " + point.caseId);
-      if (point.path == "gateway" && point.distribution == perf::Distribution::kUniform) {
-        ++gatewayUniformCount;
-      } else if (point.path == "gateway" && point.distribution == perf::Distribution::kZipfian) {
-        ++gatewayZipfianCount;
-      } else if (point.path == "direct" && point.distribution == perf::Distribution::kUniform) {
+      Require(point.path == "direct", "Expected direct C++ SDK path for point: " + point.caseId);
+      if (point.distribution == perf::Distribution::kUniform) {
         ++directUniformCount;
+      } else if (point.distribution == perf::Distribution::kZipfian) {
+        ++directZipfianCount;
       } else {
         Require(false, "Unexpected matrix point specification: " + point.caseId);
       }
     }
 
-    Require(gatewayUniformCount == 20, "Expected 20 Gateway Uniform points (4 workloads x 5 worker counts)");
-    Require(gatewayZipfianCount == 2, "Expected 2 Gateway Zipfian points (A/B at workers=8)");
-    Require(directUniformCount == 2, "Expected 2 Direct Uniform points (A/C at workers=8)");
+    Require(directUniformCount == 22, "Expected 22 Direct Uniform points (20 + 2 A/C baseline)");
+    Require(directZipfianCount == 2, "Expected 2 Direct Zipfian points (A/B at workers=8)");
 
     const std::vector<perf::RegionRange> ranges = {{100, "", "h"}, {101, "h", "p"}, {102, "p", ""}};
     const perf::RegionKeyCodec keys(ranges, "a1-check");

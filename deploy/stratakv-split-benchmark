@@ -1,0 +1,148 @@
+#!/usr/bin/env sh
+# StrataKV Dynamic Sharding Performance & Resilience Benchmark
+# Automated cluster bootstrap, online split workload, metrics collection and teardown.
+set -eu
+
+deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_dir=$(CDPATH= cd -- "${deploy_dir}/.." && pwd)
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bash deploy/stratakv-split-benchmark [options]
+
+Options:
+  --project NAME          Isolated local project name. Default: split-benchmark.
+  --workers N             Concurrent worker threads. Default: 8.
+  --duration S            Phase duration in seconds (pre/in/post). Default: 5.
+  --split-region ID       Target Region ID to split. Default: 100.
+  --split-key KEY         Key at which to split the Region. Default: d.
+  --read-ratio N          Percentage of read operations (0..100). Default: 50.
+  --results-dir DIR       Directory for benchmark output. Default: test-results/dynamic-split.
+  --no-build              Skip compiling executables before running.
+  --keep-cluster          Leave the dynamic cluster running after the test.
+  -h, --help              Show this help message.
+
+The benchmark boots a dynamic-topology StrataKV cluster (3 Metadata + 3 TSO + 3 Storage Nodes),
+drives continuous transactional traffic, triggers an online Region split at steady state,
+measures transient QPS dip, tail latency spike, transparent routing retries, and verifies
+100% zero data loss across the split boundary.
+EOF
+}
+
+project=split-benchmark
+workers=8
+duration=5
+split_region=100
+split_key=d
+read_ratio=50
+no_build=false
+keep_cluster=false
+results_dir="${repo_dir}/test-results/dynamic-split"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project) project=${2:?--project requires a value}; shift 2 ;;
+    --workers) workers=${2:?--workers requires a value}; shift 2 ;;
+    --duration) duration=${2:?--duration requires a value}; shift 2 ;;
+    --split-region) split_region=${2:?--split-region requires a value}; shift 2 ;;
+    --split-key) split_key=${2:?--split-key requires a value}; shift 2 ;;
+    --read-ratio) read_ratio=${2:?--read-ratio requires a value}; shift 2 ;;
+    --results-dir) results_dir=${2:?--results-dir requires a value}; shift 2 ;;
+    --no-build) no_build=true; shift ;;
+    --keep-cluster) keep_cluster=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+timestamp=$(date +%Y%m%d-%H%M%S)
+mkdir -p "${results_dir}"
+
+cleanup() {
+  rc=$?
+  if [ "$keep_cluster" = false ]; then
+    echo "\nCleaning up local cluster deployment (${project})..."
+    bash "${deploy_dir}/stratakv-server" reset --project "${project}" >/dev/null 2>&1 || true
+  else
+    echo "\nLeaving cluster running as requested (--keep-cluster)."
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT INT TERM
+
+echo "================================================================="
+echo "  StrataKV Dynamic Sharding Performance Benchmark Orchestrator   "
+echo "================================================================="
+echo "Project:        ${project}"
+echo "Concurrency:    ${workers} workers"
+echo "Phase Duration: ${duration}s"
+echo "Split Target:   Region ${split_region} @ key '${split_key}'"
+echo "Results Dir:    ${results_dir}"
+echo "================================================================="
+
+# 1. Build required binaries
+if [ "$no_build" = false ]; then
+  echo "\n[1/4] Building StrataKV binaries..."
+  build_dir="${repo_dir}/build/stratakv/release"
+  cmake -S "$repo_dir" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release
+  cmake --build "$build_dir" -j"$(nproc)" \
+    --target stratakv-node stratakv-tso stratakv-meta stratakv-admin stratakv-test-dynamic-sharding-benchmark
+fi
+
+# 2. Reset and boot fresh dynamic cluster
+echo "\n[2/4] Resetting and starting isolated dynamic cluster (${project})..."
+bash "${deploy_dir}/stratakv-server" reset --project "${project}" >/dev/null 2>&1 || true
+
+# Boot dynamic cluster with 3 nodes, 3 replicas, dynamic topology mode
+bash "${deploy_dir}/stratakv-server" up \
+  --project "${project}" \
+  --nodes 3 \
+  --replicas 3 \
+  --topology-mode dynamic \
+  --no-build
+
+# 3. Read runtime endpoints
+runtime_dir="${deploy_dir}/runtime/${project}"
+regions_conf="${runtime_dir}/regions.conf"
+metadata_endpoints="127.0.0.1:26580,127.0.0.1:26581,127.0.0.1:26582"
+tso_endpoints="127.0.0.1:26300,127.0.0.1:26301,127.0.0.1:26302"
+
+if [ -f "${runtime_dir}/runtime.conf" ]; then
+  meta_p=$(sed -n 's/^metadata_port=//p' "${runtime_dir}/runtime.conf" || echo "26580")
+  tso_p=$(sed -n 's/^tso_port=//p' "${runtime_dir}/runtime.conf" || echo "26300")
+  [ -n "$meta_p" ] && metadata_endpoints="127.0.0.1:${meta_p},127.0.0.1:$((meta_p+1)),127.0.0.1:$((meta_p+2))"
+  [ -n "$tso_p" ] && tso_endpoints="127.0.0.1:${tso_p},127.0.0.1:$((tso_p+1)),127.0.0.1:$((tso_p+2))"
+fi
+
+export STRATAKV_TOPOLOGY_MODE=dynamic
+export STRATAKV_METADATA_ENDPOINTS="${metadata_endpoints}"
+export STRATAKV_REGION_CONFIG="${regions_conf}"
+
+# 4. Run dynamic sharding benchmark binary
+echo "\n[3/4] Running dynamic sharding benchmark workload..."
+output_json="${results_dir}/split-benchmark-${timestamp}.json"
+output_md="${results_dir}/split-benchmark-${timestamp}.md"
+
+benchmark_bin="${repo_dir}/bin/stratakv-test-dynamic-sharding-benchmark"
+admin_bin="${repo_dir}/bin/stratakv-admin"
+
+"$benchmark_bin" \
+  --metadata-endpoints "${metadata_endpoints}" \
+  --tso-endpoints "${tso_endpoints}" \
+  --regions-config "${regions_conf}" \
+  --split-region "${split_region}" \
+  --split-key "${split_key}" \
+  --workers "${workers}" \
+  --pre-split-duration-sec "${duration}" \
+  --in-split-duration-sec "$((duration + 3))" \
+  --post-split-duration-sec "${duration}" \
+  --read-ratio "${read_ratio}" \
+  --admin-bin "${admin_bin}" \
+  --output-json "${output_json}" \
+  --output-md "${output_md}"
+
+echo "\n[4/4] Benchmark completed successfully!"
+echo "Summary report saved to: ${output_md}"
+echo "JSON metrics saved to:   ${output_json}"
+

@@ -1,8 +1,12 @@
+# StrataKV observability scrape config.
+#
+# The historical gateway /metrics endpoint was removed together with the HTTP
+# access layer. Current observability surfaces are the per-Region status JSON
+# files under deploy/runtime/<project>/ and the performance-suite reports under
+# test-results/. A Prometheus deployment is not wired yet; keep this file as a
+# placeholder until node-level exporters exist.
 global:
   scrape_interval: 5s
   evaluation_interval: 5s
 
-scrape_configs:
-  - job_name: stratakv-gateway
-    static_configs:
-      - targets: ["gateway:8080"]
+scrape_configs: []

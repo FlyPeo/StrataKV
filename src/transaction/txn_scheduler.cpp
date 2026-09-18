@@ -379,7 +379,13 @@ void NodeTxnScheduler::Schedule(TxnCommand command, Completion completion) {
   std::shared_ptr<TaskContext> task;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    task = tasks_.at(commandId);
+    const auto found = tasks_.find(commandId);
+    if (found == tasks_.end()) {
+      // The Region was unregistered between insertion and latch acquisition;
+      // OnRegionRemoved has already completed the waiters with WrongLeader.
+      return;
+    }
+    task = found->second;
   }
   const bool acquired = latches_.Acquire(commandId, task->command.regionId, task->command.keys,
                                          task->command.latchMode);
@@ -530,6 +536,12 @@ void NodeTxnScheduler::OnApplied(int regionId, const Op& appliedOp, int raftInde
     const auto request = requests_.find(requestKey);
     if (request == requests_.end()) {
       lateApplies_.fetch_add(1, std::memory_order_relaxed);
+      if (appliedOp.Operation.rfind("Txn", 0) == 0) {
+        std::cerr << "{\"trace\":\"on_applied_no_request\",\"region\":" << regionId
+                  << ",\"client\":\"" << appliedOp.ClientId << "\",\"req\":"
+                  << appliedOp.RequestId << ",\"op\":\"" << appliedOp.Operation << "\"}"
+                  << std::endl;
+      }
       return;
     }
     commandId = request->second;

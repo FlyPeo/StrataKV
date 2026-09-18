@@ -48,6 +48,52 @@ namespace {
     attempt++;
   }
 
+  // Fills the typed Region header from the descriptor the sender resolved, so
+  // the receiving peer validates the same epoch the client routed with.
+  void FillRegionHeader(stratakv::region::RegionRequestHeader* header,
+                        const RegionMetadata& descriptor, const RegionPeerLocation& target,
+                        const std::string& clientId, int requestId) {
+    header->set_regionid(static_cast<uint64_t>(descriptor.regionId));
+    header->set_peerid(target.peerId);
+    header->mutable_epoch()->set_version(descriptor.epoch.version);
+    header->mutable_epoch()->set_confversion(descriptor.epoch.confVersion);
+    header->set_clientid(clientId);
+    header->set_requestid(static_cast<uint64_t>(requestId));
+  }
+
+  // Legacy peers report leadership loss with the ErrWrongLeader string rather
+  // than a numeric TxnStatus. Map it (and any unparseable payload) to a
+  // routing outcome instead of throwing inside a dispatch callback.
+  RouteErrorKind ParseReplyStatus(const std::string& err, TxnStatus* status) {
+    if (err == ErrWrongLeader) return RouteErrorKind::NotLeader;
+    try {
+      *status = static_cast<TxnStatus>(std::stoi(err));
+    } catch (const std::exception&) {
+      return RouteErrorKind::Storage;
+    }
+    return RouteErrorKind::None;
+  }
+
+  // A structured Region error short-circuits legacy err parsing, so `parsed`
+  // can still be ResultUnknown even for a definitive sender answer; recover
+  // the caller-visible status from the routing kind instead of dropping it.
+  TxnStatus DefinitiveFailureStatus(const SendResult& result, TxnStatus parsed) {
+    if (parsed == TxnStatus::Ok) return TxnStatus::ResultUnknown;
+    if (parsed != TxnStatus::ResultUnknown) return parsed;
+    if (result.kind == RouteErrorKind::Storage ||
+        result.kind == RouteErrorKind::ServerOverloaded) {
+      return TxnStatus::StorageError;
+    }
+    return TxnStatus::ResultUnknown;
+  }
+
+  RetryContext MakeRetryContext(uint64_t budgetMs) {
+    RetryContext context;
+    context.deadline = MakeRpcDeadline(budgetMs);
+    context.maxAttempts = kMaxRpcAttempts;
+    return context;
+  }
+
   void LogRpcRetry(int shardId, const char* operation, int server, int attempt,
                    const MprpcController& controller, const std::string& replyError) {
     if (attempt != 1 && attempt != 6 && attempt != kMaxRpcAttempts) {
@@ -132,8 +178,45 @@ RaftMvccStorage::MutationLane& RaftMvccStorage::PickMutationLane() {
   return *mutationLanes_[index];
 }
 
+void RaftMvccStorage::AttachRequestSender(std::shared_ptr<RegionRequestSender> sender) {
+  sender_ = std::move(sender);
+}
+
 TxnStatus RaftMvccStorage::Get(const std::string& key, uint64_t readTs, std::string* value) {
   const int reqId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (sender_) {
+    TxnStatus status = TxnStatus::StorageError;
+    std::string observed;
+    const auto result = sender_->Send(
+        key, MakeRetryContext(0),
+        [&](raftKVRpcProctoc::kvServerRpc_Stub& stub, const RegionMetadata& descriptor, const RegionPeerLocation& peer,
+            uint64_t) -> DispatchOutcome {
+          raftKVRpcProctoc::TxnGetArgs args;
+          args.set_regionid(descriptor.regionId);
+          args.set_key(key);
+          args.set_readts(readTs);
+          args.set_clientid(clientId_);
+          args.set_requestid(reqId);
+          FillRegionHeader(args.mutable_header(), descriptor, peer, clientId_, reqId);
+          raftKVRpcProctoc::TxnGetReply reply;
+          MprpcController controller;
+          stub.TxnGet(&controller, &args, &reply, nullptr);
+          if (controller.Failed()) return {RouteErrorKind::Transport, 0};
+          if (const auto regionError = ClassifyRegionReply(reply);
+              regionError.kind != RouteErrorKind::None) {
+            return regionError;
+          }
+          if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &status);
+              parsed != RouteErrorKind::None) {
+            return {parsed, 0};
+          }
+          observed = reply.value();
+          return {RouteErrorKind::None, 0};
+        });
+    if (!result.ok()) return DefinitiveFailureStatus(result, status);
+    if (status == TxnStatus::Ok) *value = observed;
+    return status;
+  }
   int server = recentLeaderId_.load(std::memory_order_relaxed);
 
   int attempt = 0;
@@ -305,6 +388,55 @@ TxnStatus RaftMvccStorage::BatchPrewrite(const std::vector<MvccMutation>& mutati
   MutationLane& lane = PickMutationLane();
   std::lock_guard<std::mutex> mutationLock(lane.mutex);
   const int reqId = ++lane.requestId;
+  if (sender_) {
+    std::vector<std::string> keys;
+    keys.reserve(mutations.size());
+    for (const auto& mutation : mutations) keys.push_back(mutation.key);
+    TxnStatus status = TxnStatus::ResultUnknown;
+    lastRegroupRequired_.store(false, std::memory_order_relaxed);
+    const auto result = sender_->SendBatch(
+        keys, MakeRetryContext(remainingBudgetMs),
+        [&](raftKVRpcProctoc::kvServerRpc_Stub& stub, const RegionMetadata& descriptor, const RegionPeerLocation& peer,
+            const std::vector<std::string>&, uint64_t remainingMs) -> DispatchOutcome {
+          raftKVRpcProctoc::TxnBatchPrewriteArgs args;
+          args.set_regionid(descriptor.regionId);
+          args.set_primarykey(primaryKey);
+          args.set_startts(startTs);
+          args.set_ttlms(ttlMs);
+          args.set_maxforupdatets(forUpdateTs);
+          args.set_protocolversion(kTxnProtocolVersion);
+          args.set_remainingbudgetms(remainingMs);
+          args.set_clientid(lane.clientId);
+          args.set_requestid(reqId);
+          FillRegionHeader(args.mutable_header(), descriptor, peer, lane.clientId, reqId);
+          for (const auto& mutation : mutations) {
+            auto* encoded = args.add_mutations();
+            encoded->set_key(mutation.key);
+            encoded->set_value(mutation.value);
+            encoded->set_isdelete(mutation.isDelete);
+            encoded->set_islockonly(mutation.isLockOnly);
+          }
+          raftKVRpcProctoc::TxnBatchPrewriteReply reply;
+          MprpcController controller;
+          stub.TxnBatchPrewrite(&controller, &args, &reply, nullptr);
+          if (controller.Failed()) return {RouteErrorKind::Transport, 0};
+          if (const auto regionError = ClassifyRegionReply(reply);
+              regionError.kind != RouteErrorKind::None) {
+            return regionError;
+          }
+          if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &status);
+              parsed != RouteErrorKind::None) {
+            return {parsed, 0};
+          }
+          return {RouteErrorKind::None, 0};
+        });
+    if (result.regroupRequired) {
+      lastRegroupRequired_.store(true, std::memory_order_relaxed);
+      return TxnStatus::ResultUnknown;
+    }
+    if (!result.ok()) return DefinitiveFailureStatus(result, status);
+    return status;
+  }
   int server = recentLeaderId_.load(std::memory_order_relaxed);
   const RpcDeadline deadline = MakeRpcDeadline(remainingBudgetMs);
   int attempt = 0;
@@ -357,6 +489,53 @@ PessimisticLockResult RaftMvccStorage::AcquirePessimisticLockForUpdate(
   MutationLane& lane = PickMutationLane();
   std::lock_guard<std::mutex> mutationLock(lane.mutex);
   const int reqId = ++lane.requestId;
+  if (sender_) {
+    PessimisticLockResult pessimistic;
+    pessimistic.status = TxnStatus::ResultUnknown;
+    const auto result = sender_->Send(
+        key, MakeRetryContext(remainingBudgetMs),
+        [&](raftKVRpcProctoc::kvServerRpc_Stub& stub, const RegionMetadata& descriptor,
+            const RegionPeerLocation& peer, uint64_t remainingMs) -> DispatchOutcome {
+          raftKVRpcProctoc::TxnAcquirePessimisticLockArgs args;
+          args.set_regionid(descriptor.regionId);
+          args.set_key(key);
+          args.set_primarykey(primaryKey);
+          args.set_startts(startTs);
+          args.set_ttlms(ttlMs);
+          args.set_forupdatets(forUpdateTs);
+          args.set_expireatphysicalms(expireAtPhysicalMs);
+          args.set_remainingbudgetms(remainingMs);
+          args.set_protocolversion(kTxnProtocolVersion);
+          args.set_returnvalue(true);
+          args.set_clientid(lane.clientId);
+          args.set_requestid(reqId);
+          FillRegionHeader(args.mutable_header(), descriptor, peer, lane.clientId, reqId);
+          raftKVRpcProctoc::TxnAcquirePessimisticLockReply reply;
+          MprpcController controller;
+          stub.TxnAcquirePessimisticLock(&controller, &args, &reply, nullptr);
+          if (controller.Failed()) return {RouteErrorKind::Transport, 0};
+          if (const auto regionError = ClassifyRegionReply(reply);
+              regionError.kind != RouteErrorKind::None) {
+            return regionError;
+          }
+          if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &pessimistic.status);
+              parsed != RouteErrorKind::None) {
+            return {parsed, 0};
+          }
+          pessimistic.found = reply.found();
+          pessimistic.value = reply.value();
+          pessimistic.valueCommitTs = reply.valuecommitts();
+          pessimistic.applied = reply.applied();
+          return {RouteErrorKind::None, 0};
+        });
+    if (!result.ok()) {
+      PessimisticLockResult failed;
+      failed.status = pessimistic.status == TxnStatus::Ok ? TxnStatus::ResultUnknown
+                                                          : pessimistic.status;
+      return failed;
+    }
+    return pessimistic;
+  }
   int server = recentLeaderId_.load(std::memory_order_relaxed);
   const RpcDeadline deadline = MakeRpcDeadline(remainingBudgetMs);
 
@@ -417,6 +596,38 @@ TxnStatus RaftMvccStorage::CommitWithBudget(const std::string& key, uint64_t sta
   MutationLane& lane = PickMutationLane();
   std::lock_guard<std::mutex> mutationLock(lane.mutex);
   const int reqId = ++lane.requestId;
+  if (sender_) {
+    TxnStatus status =
+        remainingBudgetMs == 0 ? TxnStatus::StorageError : TxnStatus::ResultUnknown;
+    const auto result = sender_->Send(
+        key, MakeRetryContext(remainingBudgetMs),
+        [&](raftKVRpcProctoc::kvServerRpc_Stub& stub, const RegionMetadata& descriptor,
+            const RegionPeerLocation& peer, uint64_t remainingMs) -> DispatchOutcome {
+          raftKVRpcProctoc::TxnCommitArgs args;
+          args.set_regionid(descriptor.regionId);
+          args.set_key(key);
+          args.set_startts(startTs);
+          args.set_committs(commitTs);
+          args.set_clientid(lane.clientId);
+          args.set_requestid(reqId);
+          FillRegionHeader(args.mutable_header(), descriptor, peer, lane.clientId, reqId);
+          raftKVRpcProctoc::TxnCommitReply reply;
+          MprpcController controller;
+          stub.TxnCommit(&controller, &args, &reply, nullptr);
+          if (controller.Failed()) return {RouteErrorKind::Transport, 0};
+          if (const auto regionError = ClassifyRegionReply(reply);
+              regionError.kind != RouteErrorKind::None) {
+            return regionError;
+          }
+          if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &status);
+              parsed != RouteErrorKind::None) {
+            return {parsed, 0};
+          }
+          return {RouteErrorKind::None, 0};
+        });
+    if (!result.ok()) return status;
+    return status;
+  }
   int server = recentLeaderId_.load(std::memory_order_relaxed);
   const RpcDeadline deadline = MakeRpcDeadline(remainingBudgetMs);
 
@@ -457,6 +668,44 @@ TxnStatus RaftMvccStorage::BatchCommit(const std::vector<std::string>& keys, uin
   MutationLane& lane = PickMutationLane();
   std::lock_guard<std::mutex> mutationLock(lane.mutex);
   const int reqId = ++lane.requestId;
+  if (sender_) {
+    TxnStatus status = TxnStatus::ResultUnknown;
+    lastRegroupRequired_.store(false, std::memory_order_relaxed);
+    const auto result = sender_->SendBatch(
+        keys, MakeRetryContext(remainingBudgetMs),
+        [&](raftKVRpcProctoc::kvServerRpc_Stub& stub, const RegionMetadata& descriptor, const RegionPeerLocation& peer,
+            const std::vector<std::string>& batchKeys, uint64_t remainingMs) -> DispatchOutcome {
+          raftKVRpcProctoc::TxnBatchCommitArgs args;
+          args.set_regionid(descriptor.regionId);
+          for (const auto& key : batchKeys) args.add_keys(key);
+          args.set_startts(startTs);
+          args.set_committs(commitTs);
+          args.set_clientid(lane.clientId);
+          args.set_requestid(reqId);
+          args.set_protocolversion(kTxnProtocolVersion);
+          args.set_remainingbudgetms(remainingMs);
+          FillRegionHeader(args.mutable_header(), descriptor, peer, lane.clientId, reqId);
+          raftKVRpcProctoc::TxnBatchCommitReply reply;
+          MprpcController controller;
+          stub.TxnBatchCommit(&controller, &args, &reply, nullptr);
+          if (controller.Failed()) return {RouteErrorKind::Transport, 0};
+          if (const auto regionError = ClassifyRegionReply(reply);
+              regionError.kind != RouteErrorKind::None) {
+            return regionError;
+          }
+          if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &status);
+              parsed != RouteErrorKind::None) {
+            return {parsed, 0};
+          }
+          return {RouteErrorKind::None, 0};
+        });
+    if (result.regroupRequired) {
+      lastRegroupRequired_.store(true, std::memory_order_relaxed);
+      return TxnStatus::ResultUnknown;
+    }
+    if (!result.ok()) return DefinitiveFailureStatus(result, status);
+    return status;
+  }
   int server = recentLeaderId_.load(std::memory_order_relaxed);
   const RpcDeadline deadline = MakeRpcDeadline(remainingBudgetMs);
   int attempt = 0;
@@ -489,6 +738,36 @@ TxnStatus RaftMvccStorage::Rollback(const std::string& key, uint64_t startTs) {
   MutationLane& lane = PickMutationLane();
   std::lock_guard<std::mutex> mutationLock(lane.mutex);
   const int reqId = ++lane.requestId;
+  if (sender_) {
+    TxnStatus status = TxnStatus::StorageError;
+    const auto result = sender_->Send(
+        key, MakeRetryContext(0),
+        [&](raftKVRpcProctoc::kvServerRpc_Stub& stub, const RegionMetadata& descriptor,
+            const RegionPeerLocation& peer, uint64_t) -> DispatchOutcome {
+          raftKVRpcProctoc::TxnRollbackArgs args;
+          args.set_regionid(descriptor.regionId);
+          args.set_key(key);
+          args.set_startts(startTs);
+          args.set_clientid(lane.clientId);
+          args.set_requestid(reqId);
+          FillRegionHeader(args.mutable_header(), descriptor, peer, lane.clientId, reqId);
+          raftKVRpcProctoc::TxnRollbackReply reply;
+          MprpcController controller;
+          stub.TxnRollback(&controller, &args, &reply, nullptr);
+          if (controller.Failed()) return {RouteErrorKind::Transport, 0};
+          if (const auto regionError = ClassifyRegionReply(reply);
+              regionError.kind != RouteErrorKind::None) {
+            return regionError;
+          }
+          if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &status);
+              parsed != RouteErrorKind::None) {
+            return {parsed, 0};
+          }
+          return {RouteErrorKind::None, 0};
+        });
+    if (!result.ok()) return status;
+    return status;
+  }
   int server = recentLeaderId_.load(std::memory_order_relaxed);
 
   int attempt = 0;
@@ -524,6 +803,43 @@ TxnStatus RaftMvccStorage::BatchRollback(const std::vector<std::string>& keys, u
   MutationLane& lane = PickMutationLane();
   std::lock_guard<std::mutex> mutationLock(lane.mutex);
   const int reqId = ++lane.requestId;
+  if (sender_) {
+    TxnStatus status = TxnStatus::ResultUnknown;
+    lastRegroupRequired_.store(false, std::memory_order_relaxed);
+    const auto result = sender_->SendBatch(
+        keys, MakeRetryContext(remainingBudgetMs),
+        [&](raftKVRpcProctoc::kvServerRpc_Stub& stub, const RegionMetadata& descriptor, const RegionPeerLocation& peer,
+            const std::vector<std::string>& batchKeys, uint64_t remainingMs) -> DispatchOutcome {
+          raftKVRpcProctoc::TxnBatchRollbackArgs args;
+          args.set_regionid(descriptor.regionId);
+          for (const auto& key : batchKeys) args.add_keys(key);
+          args.set_startts(startTs);
+          args.set_clientid(lane.clientId);
+          args.set_requestid(reqId);
+          args.set_protocolversion(kTxnProtocolVersion);
+          args.set_remainingbudgetms(remainingMs);
+          FillRegionHeader(args.mutable_header(), descriptor, peer, lane.clientId, reqId);
+          raftKVRpcProctoc::TxnBatchRollbackReply reply;
+          MprpcController controller;
+          stub.TxnBatchRollback(&controller, &args, &reply, nullptr);
+          if (controller.Failed()) return {RouteErrorKind::Transport, 0};
+          if (const auto regionError = ClassifyRegionReply(reply);
+              regionError.kind != RouteErrorKind::None) {
+            return regionError;
+          }
+          if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &status);
+              parsed != RouteErrorKind::None) {
+            return {parsed, 0};
+          }
+          return {RouteErrorKind::None, 0};
+        });
+    if (result.regroupRequired) {
+      lastRegroupRequired_.store(true, std::memory_order_relaxed);
+      return TxnStatus::ResultUnknown;
+    }
+    if (!result.ok()) return DefinitiveFailureStatus(result, status);
+    return status;
+  }
   int server = recentLeaderId_.load(std::memory_order_relaxed);
   const RpcDeadline deadline = MakeRpcDeadline(remainingBudgetMs);
   int attempt = 0;
@@ -623,6 +939,48 @@ TxnStatus RaftMvccStorage::CheckTxnStatus(const std::string& primaryKey, uint64_
   MutationLane& lane = PickMutationLane();
   std::lock_guard<std::mutex> mutationLock(lane.mutex);
   const int reqId = ++lane.requestId;
+  if (sender_) {
+    TxnStatus status_result = TxnStatus::Timeout;
+    const auto result = sender_->Send(
+        primaryKey, MakeRetryContext(remainingBudgetMs),
+        [&](raftKVRpcProctoc::kvServerRpc_Stub& stub, const RegionMetadata& descriptor,
+            const RegionPeerLocation& peer, uint64_t remainingMs) -> DispatchOutcome {
+          raftKVRpcProctoc::TxnCheckStatusArgs args;
+          args.set_regionid(descriptor.regionId);
+          args.set_primarykey(primaryKey);
+          args.set_startts(startTs);
+          args.set_currentphysicalms(currentPhysicalMs);
+          args.set_rollbackifexpired(rollbackIfExpired);
+          args.set_clientid(lane.clientId);
+          args.set_requestid(reqId);
+          args.set_remainingbudgetms(remainingMs);
+          args.set_protocolversion(kTxnProtocolVersion);
+          FillRegionHeader(args.mutable_header(), descriptor, peer, lane.clientId, reqId);
+          raftKVRpcProctoc::TxnCheckStatusReply reply;
+          MprpcController controller;
+          stub.TxnCheckStatus(&controller, &args, &reply, nullptr);
+          if (controller.Failed()) return {RouteErrorKind::Transport, 0};
+          if (const auto regionError = ClassifyRegionReply(reply);
+              regionError.kind != RouteErrorKind::None) {
+            return regionError;
+          }
+          if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &status_result);
+              parsed != RouteErrorKind::None) {
+            return {parsed, 0};
+          }
+          if (status_result != TxnStatus::Ok) return {RouteErrorKind::Storage, 0};
+          status->state = FromProtoTxnState(reply.state());
+          status->commitTs = reply.committs();
+          status->lock.reset();
+          if (status->state == TxnRecordState::Locked && reply.has_lock() &&
+              reply.lock().haslock()) {
+            status->lock = DecodeLockReply(reply.lock());
+          }
+          return {RouteErrorKind::None, 0};
+        });
+    if (result.completed && status_result == TxnStatus::Ok) return TxnStatus::Ok;
+    return status_result == TxnStatus::Ok ? TxnStatus::Timeout : status_result;
+  }
   int server = recentLeaderId_.load(std::memory_order_relaxed);
   const RpcDeadline deadline = MakeRpcDeadline(remainingBudgetMs);
   int attempt = 0;
@@ -641,7 +999,7 @@ TxnStatus RaftMvccStorage::CheckTxnStatus(const std::string& primaryKey, uint64_
     raftKVRpcProctoc::TxnCheckStatusReply reply;
     MprpcController controller;
     stubs_[server]->TxnCheckStatus(&controller, &args, &reply, nullptr);
-    if (controller.Failed() || reply.err() == ErrWrongLeader) {
+    if (controller.Failed() || reply.err() == ErrWrongLeader || reply.err() == "ErrWrongLeader") {
       server = (server + 1) % stubs_.size();
       if (RpcBudgetExpired(deadline)) return TxnStatus::Timeout;
       ExponentialBackoff(attempt);
@@ -650,7 +1008,15 @@ TxnStatus RaftMvccStorage::CheckTxnStatus(const std::string& primaryKey, uint64_
     }
 
     recentLeaderId_.store(server, std::memory_order_relaxed);
-    const TxnStatus rpcStatus = static_cast<TxnStatus>(std::stoi(reply.err()));
+    TxnStatus rpcStatus = TxnStatus::StorageError;
+    if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &rpcStatus);
+        parsed != RouteErrorKind::None) {
+      server = (server + 1) % stubs_.size();
+      if (RpcBudgetExpired(deadline)) return TxnStatus::Timeout;
+      ExponentialBackoff(attempt);
+      if (RetryBudgetExhausted(deadline, attempt)) return TxnStatus::Timeout;
+      continue;
+    }
     if (rpcStatus != TxnStatus::Ok) return rpcStatus;
     status->state = FromProtoTxnState(reply.state());
     status->commitTs = reply.committs();
@@ -667,7 +1033,46 @@ TxnStatus RaftMvccStorage::ResolveLock(const std::string& key, uint64_t startTs,
   MutationLane& lane = PickMutationLane();
   std::lock_guard<std::mutex> mutationLock(lane.mutex);
   const int reqId = ++lane.requestId;
+  if (sender_) {
+    TxnStatus status = TxnStatus::StorageError;
+    const auto result = sender_->Send(
+        key, MakeRetryContext(0),
+        [&](raftKVRpcProctoc::kvServerRpc_Stub& stub, const RegionMetadata& descriptor,
+            const RegionPeerLocation& peer, uint64_t remainingMs) -> DispatchOutcome {
+          raftKVRpcProctoc::TxnResolveLockArgs args;
+          args.set_regionid(descriptor.regionId);
+          args.set_key(key);
+          args.set_startts(startTs);
+          args.set_decision(ToProtoTxnState(decision));
+          args.set_committs(commitTs);
+          args.set_clientid(lane.clientId);
+          args.set_requestid(reqId);
+          args.set_protocolversion(kTxnProtocolVersion);
+          FillRegionHeader(args.mutable_header(), descriptor, peer, lane.clientId, reqId);
+          raftKVRpcProctoc::TxnResolveLockReply reply;
+          MprpcController controller;
+          stub.TxnResolveLock(&controller, &args, &reply, nullptr);
+          if (controller.Failed()) return {RouteErrorKind::Transport, 0};
+          if (const auto regionError = ClassifyRegionReply(reply);
+              regionError.kind != RouteErrorKind::None) {
+            return regionError;
+          }
+          if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &status);
+              parsed != RouteErrorKind::None) {
+            return {parsed, 0};
+          }
+          return {status == TxnStatus::Ok || status == TxnStatus::AlreadyCommitted
+                      ? RouteErrorKind::None
+                      : RouteErrorKind::Storage,
+                  0};
+        });
+    if (result.completed && (status == TxnStatus::Ok || status == TxnStatus::AlreadyCommitted)) {
+      return TxnStatus::Ok;
+    }
+    return status;
+  }
   int server = recentLeaderId_.load(std::memory_order_relaxed);
+
   int attempt = 0;
   while (true) {
     raftKVRpcProctoc::TxnResolveLockArgs args;
@@ -683,7 +1088,7 @@ TxnStatus RaftMvccStorage::ResolveLock(const std::string& key, uint64_t startTs,
     raftKVRpcProctoc::TxnResolveLockReply reply;
     MprpcController controller;
     stubs_[server]->TxnResolveLock(&controller, &args, &reply, nullptr);
-    if (controller.Failed() || reply.err() == ErrWrongLeader) {
+    if (controller.Failed() || reply.err() == ErrWrongLeader || reply.err() == "ErrWrongLeader") {
       server = (server + 1) % stubs_.size();
       ExponentialBackoff(attempt);
       if (attempt >= kMaxRpcAttempts) return TxnStatus::ResultUnknown;
@@ -691,7 +1096,14 @@ TxnStatus RaftMvccStorage::ResolveLock(const std::string& key, uint64_t startTs,
     }
 
     recentLeaderId_.store(server, std::memory_order_relaxed);
-    const TxnStatus resolved = static_cast<TxnStatus>(std::stoi(reply.err()));
+    TxnStatus resolved = TxnStatus::StorageError;
+    if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &resolved);
+        parsed != RouteErrorKind::None) {
+      server = (server + 1) % stubs_.size();
+      ExponentialBackoff(attempt);
+      if (attempt >= kMaxRpcAttempts) return TxnStatus::ResultUnknown;
+      continue;
+    }
     return resolved == TxnStatus::AlreadyCommitted ? TxnStatus::Ok : resolved;
   }
 }

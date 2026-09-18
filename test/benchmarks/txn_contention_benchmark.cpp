@@ -25,6 +25,7 @@ struct Options {
   std::string tsoHost = "127.0.0.1";
   int tsoPort = 26300;
   std::string tsoEndpoints = "127.0.0.1:26300,127.0.0.1:26301,127.0.0.1:26302";
+  std::string metadataEndpoints;
   std::string runId = "run";
   int workers = 16;
   int transactions = 1000;
@@ -52,6 +53,7 @@ Options Parse(int argc, char** argv) {
     else if (option == "--tso-host") { options.tsoHost = value; options.tsoEndpoints.clear(); }
     else if (option == "--tso-port") { options.tsoPort = Number(value); options.tsoEndpoints.clear(); }
     else if (option == "--tso-endpoints") options.tsoEndpoints = value;
+    else if (option == "--metadata-endpoints") options.metadataEndpoints = value;
     else if (option == "--run-id") options.runId = value;
     else if (option == "--workers") options.workers = Number(value);
     else if (option == "--transactions") options.transactions = Number(value);
@@ -112,7 +114,17 @@ int main(int argc, char** argv) {
     if (options.tsoEndpoints.empty()) {
       options.tsoEndpoints = options.tsoHost + ":" + std::to_string(options.tsoPort);
     }
-    auto client = stratakv::Client::Connect(options.regions, options.tsoEndpoints);
+    std::shared_ptr<stratakv::Client> client;
+    if (!options.metadataEndpoints.empty()) {
+      stratakv::ConnectionOptions dynamic;
+      dynamic.topologyMode = stratakv::TopologyMode::kDynamic;
+      dynamic.metadataEndpoints = options.metadataEndpoints;
+      dynamic.regionConfigPath = options.regions;
+      dynamic.tsoEndpoints = options.tsoEndpoints;
+      client = stratakv::Client::Connect(dynamic);
+    } else {
+      client = stratakv::Client::Connect(options.regions, options.tsoEndpoints);
+    }
     std::atomic<int> next{0};
     std::atomic<int> attempted{0};
     std::atomic<int> committed{0};

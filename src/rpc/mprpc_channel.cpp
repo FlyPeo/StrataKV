@@ -101,6 +101,10 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
   }
 
   uint32_t resp_len = 0;
+  if (!WaitReadable(connection.fd, controller)) {
+    MarkConnectionFailure(connection);
+    return;
+  }
   int recv_size = recv(connection.fd, &resp_len, sizeof(resp_len), MSG_WAITALL);
   if (recv_size != static_cast<int>(sizeof(resp_len))) {
     char errtxt[512] = {0};
@@ -120,6 +124,10 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
   std::vector<char> recv_buf(resp_len);
   int total_read = 0;
   while (total_read < static_cast<int>(resp_len)) {
+    if (!WaitReadable(connection.fd, controller)) {
+      MarkConnectionFailure(connection);
+      return;
+    }
     int n = recv(connection.fd, recv_buf.data() + total_read, resp_len - total_read, 0);
     if (n <= 0) {
       break;
@@ -218,6 +226,25 @@ bool MprpcChannel::newConnect(int* clientFd, const char* ip, uint16_t port, std:
     return false;
   }
   *clientFd = fd;
+  return true;
+}
+
+// Wait until the descriptor is readable or the deadline passes. Returns false
+// on timeout/error. This poll bound is authoritative: never rely on
+// SO_RCVTIMEO alone, because a half-open peer can leave recv() blocked
+// indefinitely regardless of the socket timeout.
+bool MprpcChannel::WaitReadable(int fd, google::protobuf::RpcController* controller) {
+  struct pollfd pfd{};
+  pfd.fd = fd;
+  pfd.events = POLLIN;
+  const int ready = poll(&pfd, 1, static_cast<int>(kIoTimeout.count()));
+  if (ready <= 0) {
+    char errtxt[128] = {0};
+    snprintf(errtxt, sizeof(errtxt), "rpc response wait timeout after %ld ms",
+             kIoTimeout.count());
+    controller->SetFailed(errtxt);
+    return false;
+  }
   return true;
 }
 

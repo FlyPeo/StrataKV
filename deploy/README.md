@@ -1,7 +1,9 @@
 # StrataKV 本地部署指南
 
-StrataKV 只使用 Linux/WSL 本地进程部署。部署脚本会启动三个
-`stratakv-node`、三个 `stratakv-tso` 控制层成员和一个 `stratakv-gateway`，不需要容器运行时。
+StrataKV 只使用 Linux/WSL 本地进程部署。部署脚本启动三个 `stratakv-node`、三个
+`stratakv-tso` 控制层成员；`--topology-mode dynamic` 时额外启动三成员元数据集群
+（`stratakv-meta`）。不需要容器运行时。客户端一律通过原生 C++ SDK 直连数据节点，
+不存在独立的网关进程。
 
 构建 Fiber 运行时需要 Boost.Context（Ubuntu/WSL 安装
 `libboost-context-dev`）。默认后端是原生 `fcontext`，未启用
@@ -12,43 +14,47 @@ StrataKV 只使用 Linux/WSL 本地进程部署。部署脚本会启动三个
 在项目根目录执行：
 
 ```bash
+# 静态拓扑：三个 Region 来自 regions.conf
 bash deploy/stratakv-server up \
   --project my-db \
   --nodes 3 \
   --replicas 3 \
-  --gateway-port 8080 \
   --tso-port 26300
+
+# 动态拓扑：额外启动三成员元数据集群，支持在线分裂与副本迁移
+bash deploy/stratakv-server up \
+  --project my-db \
+  --nodes 3 \
+  --replicas 3 \
+  --tso-port 26300 \
+  --topology-mode dynamic
 ```
 
 结果：
 
 - 自动构建程序到 `bin/`；
-- 启动 `node-0`、`node-1`、`node-2`、`tso-0`、`tso-1`、`tso-2` 和 `gateway`；
-- 创建 Region 100、101、102，每个 Region 有三个 Raft 副本；
-- 把 PID、日志、配置和 RocksDB 数据放入
-  `deploy/runtime/my-db/`；
-- Gateway 在 `http://127.0.0.1:8080` 提供服务。
+- 静态模式启动 `node-0..2`、`tso-0..2`；动态模式再加 `meta-0..2`；
+- 静态模式创建 Region 100、101、102（各三个 Raft 副本）；动态模式由元数据
+  bootstrap 同一静态目录，之后可通过 `stratakv-admin` 在线分裂；
+- 把 PID、日志、配置和 RocksDB 数据放入 `deploy/runtime/my-db/`。
 
 同一台机器目前只能启动一套使用默认 Raft 端口的集群。另一个项目如需同时
 运行，必须先扩展脚本使其支持自定义 Raft 端口。
 
-### Gateway 运行模式
+### 动态拓扑与在线分裂
 
-Gateway 默认使用 `thread` 模式。高连接扇入或需要严格约束线程数时，
-可显式启用 Pulsar Fiber 网络运行时：
+动态模式下集群支持：
+
+- **在线 Region 分裂**：`bin/stratakv-admin split-region ...` 在指定 split key
+  处一分为二，期间业务持续服务；
+- **动态路由**：SDK 按元数据 revision 缓存拓扑，epoch 变化时自动刷新；
+- **在线副本迁移**：Learner 追平后 Promote，源副本 drain 后退役。
+
+一键体验分裂韧性压测（自动拉起动态集群、施压、触发分裂、审计、出报告）：
 
 ```bash
-bash deploy/stratakv-server up \
-  --project my-db \
-  --gateway-runtime fiber \
-  --gateway-workers 4 \
-  --gateway-request-workers 16
+bash deploy/stratakv-split-benchmark
 ```
-
-Fiber 只负责 HTTP socket 的 accept/read/wait/write。SDK、2PC、同步 RPC、
-Raft 和 RocksDB 仍在原生线程或有界线程池中执行；请求队列满时
-返回 HTTP 503。Fiber 模式的主要目标是给连接和线程资源设置上界，
-不保证在所有负载下比 `thread` 模式更快；生产取舍前应使用目标负载做 A/B。
 
 ### Raft 日志压缩
 
@@ -75,44 +81,10 @@ bash deploy/stratakv-server up \
 ```bash
 bash deploy/stratakv-server status --project my-db
 bash deploy/stratakv-server verify --project my-db
-curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-正常结果是七个进程均为 `running`，TSO 显示 `leaders=1`，三个 Region 均为 `leaders=1`，
-`verify` 输出 `Verification passed`。
-
-## 使用客户端
-
-单条命令：
-
-```bash
-bash deploy/stratakv-client put --project my-db customer:42 alice
-bash deploy/stratakv-client get --project my-db customer:42
-bash deploy/stratakv-client delete --project my-db customer:42
-```
-
-交互事务：
-
-```bash
-bash deploy/stratakv-client shell --project my-db
-```
-
-进入后可以执行：
-
-```text
-begin
-put apple:1 value-a
-put hello:1 value-h
-put zoo:1 value-z
-commit
-quit
-```
-
-批量命令：
-
-```bash
-bash deploy/stratakv-client batch --project my-db deploy/examples/bulk-demo.txn
-```
+正常结果是全部受管进程均为 `running`（静态模式六个，动态模式九个），TSO 显示
+`leaders=1`，三个 Region 均为 `leaders=1`，`verify` 输出 `Verification passed`。
 
 ## 进程、端口和文件
 
@@ -125,15 +97,16 @@ bash deploy/stratakv-client batch --project my-db deploy/examples/bulk-demo.txn
 | 日志 | `deploy/runtime/my-db/logs/` |
 | 节点数据 | `deploy/runtime/my-db/node-N/run_data/` |
 | TSO 水位与 Raft 数据 | `deploy/runtime/my-db/tso-N/` |
-| Gateway | `127.0.0.1:8080` |
+| 元数据集群数据（动态模式） | `deploy/runtime/my-db/metadata-v1/` |
 | TSO control plane | `127.0.0.1:26300`～`26302` |
+| 元数据 RPC（动态模式） | `127.0.0.1:26580`～`26582` |
 | node-0 shared RPC | `127.0.0.1:26200` |
 | node-1 shared RPC | `127.0.0.1:26201` |
 | node-2 shared RPC | `127.0.0.1:26202` |
 
-每个物理节点只有一个 `NodeServer`/`RpcProvider`。三个 Region 的 KV 与
-Raft RPC 共享该节点端口，并通过 `RegionId` 路由到各自的 `RegionPeer`。
-三个 TSO 成员运行独立 Raft Group，只有 Leader 分配时间戳；Gateway/SDK 会在 Leader
+每个物理节点只有一个 `NodeServer`/`RpcProvider`。该节点上所有 Region 的 KV 与
+Raft RPC 共享节点端口，并通过 `RegionId` 路由到各自的 `RegionPeer`。
+三个 TSO 成员运行独立 Raft Group，只有 Leader 分配时间戳；SDK 会在 Leader
 故障后切换到新 Leader。停止项目不会删除水位、Raft 日志或快照。
 
 查看日志：
@@ -141,7 +114,7 @@ Raft RPC 共享该节点端口，并通过 `RegionId` 路由到各自的 `Region
 ```bash
 bash deploy/stratakv-server logs --project my-db
 bash deploy/stratakv-server logs --project my-db --node node-1
-tail -f deploy/runtime/my-db/logs/gateway.log
+tail -f deploy/runtime/my-db/logs/node-0.log
 ```
 
 重启 TSO 成员并验证自动选主：
@@ -149,12 +122,6 @@ tail -f deploy/runtime/my-db/logs/gateway.log
 ```bash
 bash deploy/stratakv-server restart-tso --project my-db --node tso-0
 bash deploy/stratakv-server verify --project my-db
-```
-
-查看 Gateway 指标：
-
-```bash
-curl -fsS http://127.0.0.1:8080/metrics
 ```
 
 ## 重建与故障演练
@@ -221,7 +188,7 @@ bash deploy/stratakv-raft-log-gc-benchmark \
 端口占用：
 
 ```bash
-ss -ltnp | grep -E ':(8080|2620[0-2]|2630[0-2]|2640[0-2])\b'
+ss -ltnp | grep -E ':(2620[0-2]|2630[0-2]|2640[0-2]|2658[0-2])\b'
 ```
 
 进程启动失败时先执行：

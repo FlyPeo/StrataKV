@@ -13,6 +13,8 @@
 #include "kv_server_rpc.pb.h"
 #include "mprpc_channel.h"
 #include "mprpc_controller.h"
+#include "region_metadata.h"
+#include "region_request_sender.h"
 
 class RaftMvccStorage : public MvccStorage {
  public:
@@ -61,6 +63,15 @@ class RaftMvccStorage : public MvccStorage {
   MvccStats Stats() override;
   uint64_t MaxObservedTs() override;
 
+  // Attaches the topology-aware sender. Once attached, transactional batch
+  // RPCs are routed through the Region cache: retries, metadata refresh and
+  // regroup detection all move to RegionRequestSender.
+  void AttachRequestSender(std::shared_ptr<RegionRequestSender> sender);
+  bool Dynamic() const { return sender_ != nullptr; }
+  // True when the last batch stopped because refreshed Region boundaries no
+  // longer covered every key, so the caller must regroup before retrying.
+  bool LastRegroupRequired() const { return lastRegroupRequired_.load(std::memory_order_relaxed); }
+
  private:
   struct MutationLane {
     std::mutex mutex;
@@ -96,6 +107,8 @@ class RaftMvccStorage : public MvccStorage {
   MutationLane& PickMutationLane();
   std::string maintenanceClientId_;
   std::atomic<int> maintenanceRequestId_;
+  std::shared_ptr<RegionRequestSender> sender_;
+  std::atomic<bool> lastRegroupRequired_{false};
 };
 
 #endif  // STRATAKV_TRANSACTION_RAFT_MVCC_STORAGE_H

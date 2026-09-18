@@ -32,6 +32,9 @@ struct RemoteTimestampOracle::EndpointClient {
         stub(std::make_unique<tsoRpcProtocol::timestampOracleRpc_Stub>(channel.get())) {}
 
   TsoEndpoint endpoint;
+  // One call at a time per endpoint: MprpcChannel is not thread-safe for
+  // concurrent CallMethod on the same connection (shared fd send/recv).
+  std::mutex mutex;
   std::unique_ptr<MprpcChannel> channel;
   std::unique_ptr<tsoRpcProtocol::timestampOracleRpc_Stub> stub;
 };
@@ -80,6 +83,7 @@ uint64_t RemoteTimestampOracle::Next() {
       tsoRpcProtocol::TimestampRequest request;
       tsoRpcProtocol::TimestampReply response;
       MprpcController controller;
+      std::lock_guard<std::mutex> endpointLock(endpoints_[index]->mutex);
       endpoints_[index]->stub->Next(&controller, &request, &response, nullptr);
       if (controller.Failed()) {
         lastError = controller.ErrorText();

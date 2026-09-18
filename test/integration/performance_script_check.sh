@@ -14,7 +14,7 @@ grep -q 'interview-full' "$full_script"
 
 smoke=$(bash "$script" plan --profile interview-smoke --run-id script-check --project script-check)
 grep -q 'load=3000x256B' <<<"$smoke"
-grep -q 'gateway-uniform-A/C@1/8;10000opsx1' <<<"$smoke"
+grep -q 'direct-uniform-A/C@1/8;10000opsx1' <<<"$smoke"
 grep -q 'cross-region-ratio-0/100;1000txx1' <<<"$smoke"
 grep -q 'optimistic/pessimisticx0/20;1000txx1' <<<"$smoke"
 grep -q 'faults=B1 consistency=C1-1000,C2-300' <<<"$smoke"
@@ -22,7 +22,7 @@ grep -q 'wait_for_region_convergence 120' "$script"
 grep -q '"event":"node_caught_up"' "$script"
 
 full=$(bash "$script" plan --profile interview-full --run-id script-check --project script-check)
-grep -q 'gateway-uniform-A/B/C/F@1/4/8/16/32' <<<"$full"
+grep -q 'direct-uniform-A/B/C/F@1/4/8/16/32' <<<"$full"
 lite=$(bash "$script" plan --profile interview-full-10pct --run-id script-check --project script-check)
 grep -q 'load=10000x1024B' <<<"$lite"
 grep -q '2000opsx3' <<<"$lite"

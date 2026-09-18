@@ -19,7 +19,8 @@ void MprpcController::SetFailed(const std::string& reason) {
   m_errText = reason;
 }
 
-// 目前未实现具体的功能
+// Cancellation is out of scope for this synchronous-channel prototype; the
+// methods exist to satisfy the google::protobuf::RpcController interface.
 void MprpcController::StartCancel() {}
 bool MprpcController::IsCanceled() const { return false; }
 void MprpcController::NotifyOnCancel(google::protobuf::Closure* callback) {}

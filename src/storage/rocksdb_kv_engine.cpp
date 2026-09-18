@@ -1,5 +1,7 @@
 #include "rocksdb_kv_engine.h"
 
+#include <rocksdb/utilities/checkpoint.h>
+
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/serialization/string.hpp>
@@ -124,6 +126,18 @@ std::string RocksDbKVEngine::Dump() {
 
 std::unique_ptr<IKVSnapshot> RocksDbKVEngine::CaptureSnapshot() {
   return std::make_unique<RocksDbSnapshot>(db_, db_->GetSnapshot());
+}
+
+bool RocksDbKVEngine::CreateCheckpoint(const std::string& checkpointDir) {
+  rocksdb::Checkpoint* rawCheckpoint = nullptr;
+  const auto created = rocksdb::Checkpoint::Create(db_, &rawCheckpoint);
+  if (!created.ok()) return false;
+  std::unique_ptr<rocksdb::Checkpoint> checkpoint(rawCheckpoint);
+  return checkpoint->CreateCheckpoint(checkpointDir).ok();
+}
+
+bool RocksDbKVEngine::DeleteRange(const std::string& begin, const std::string& end) {
+  return db_->DeleteRange(rocksdb::WriteOptions(), db_->DefaultColumnFamily(), begin, end).ok();
 }
 
 bool RocksDbKVEngine::Load(const std::string& snapshot) {

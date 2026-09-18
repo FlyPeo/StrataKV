@@ -44,6 +44,7 @@ class Persister {
   explicit Persister(int me);
   // Region peers on one physical node must not share Raft state or snapshots.
   explicit Persister(const std::string& identity);
+  Persister(const std::string& identity, const std::string& baseDirectory);
   ~Persister();
 
  private:

@@ -16,6 +16,9 @@ class RpcProvider {
 
   void Run(int nodeIndex, short port);
 
+  // Thread-safe request to leave the event loop; Run() returns afterwards.
+  void Stop();
+
  private:
   // 组合EventLoop
   muduo::net::EventLoop m_eventLoop;

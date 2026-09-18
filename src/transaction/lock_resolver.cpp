@@ -1,6 +1,8 @@
 // Transaction subsystem: expired and orphaned lock resolution.
 #include "lock_resolver.h"
 
+#include <stdexcept>
+
 #include "timestamp_oracle.h"
 
 namespace {
@@ -18,7 +20,15 @@ LockResolver::LockResolver(std::shared_ptr<ShardRouter> router) : router_(std::m
 PrimaryTxnStatus LockResolver::CheckPrimary(const std::string& primaryKey, uint64_t startTs,
                                             uint64_t currentPhysicalMs,
                                             bool rollbackIfExpired) {
-  auto primaryShard = router_->Route(primaryKey);
+  std::shared_ptr<MvccStorage> primaryShard;
+  try {
+    primaryShard = router_->Route(primaryKey);
+  } catch (const std::out_of_range&) {
+    // The current topology has no route for this key (e.g. the Region was
+    // removed mid-scan). Treat as unresolvable this round instead of crashing.
+    return PrimaryTxnStatus{TxnStatus::StorageError};
+  }
+  if (!primaryShard) return PrimaryTxnStatus{TxnStatus::StorageError};
   TxnRecordStatus record;
   const TxnStatus query = primaryShard->CheckTxnStatus(
       primaryKey, startTs, currentPhysicalMs, rollbackIfExpired, 5000, &record);

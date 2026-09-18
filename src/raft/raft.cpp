@@ -74,6 +74,12 @@ std::string EncodePersistData(int currentTerm, int votedFor, int snapshotIndex,
 
 void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpcProctoc::AppendEntriesReply* reply) {
   std::lock_guard<std::mutex> locker(m_mtx);
+  if (m_removed.load(std::memory_order_acquire)) {
+    reply->set_success(false);
+    reply->set_term(m_currentTerm);
+    reply->set_appstate(Disconnected);
+    return;
+  }
   bool persistentStateChanged = false;
   reply->set_appstate(AppNormal);  // 能接收到代表网络是正常的
   if (args->term() < m_currentTerm) {
@@ -192,11 +198,17 @@ void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpc
 }
 
 void Raft::applierTicker() {
-  while (true) {
+  while (!m_shutdown.load(std::memory_order_acquire)) {
     std::vector<ApplyMsg> applyMsgs;
     {
       std::unique_lock<std::mutex> lock(m_mtx);
-      m_applyCond.wait(lock, [this]() { return m_lastApplied < m_commitIndex; });
+      m_applyCond.wait(lock, [this]() {
+        return m_shutdown.load(std::memory_order_acquire) ||
+               m_removed.load(std::memory_order_acquire) ||
+               m_lastApplied < m_commitIndex;
+      });
+      if (m_shutdown.load(std::memory_order_acquire) ||
+          m_removed.load(std::memory_order_acquire)) break;
       if (m_status == Leader) {
         DPrintf("[Raft::applierTicker() - raft{%d}]  m_lastApplied{%d}   m_commitIndex{%d}", m_me, m_lastApplied,
                 m_commitIndex);
@@ -207,7 +219,7 @@ void Raft::applierTicker() {
     // The single applier thread preserves commit order without holding m_mtx
     // while the Region queue may block.
     if (!applyMsgs.empty()) {
-      DPrintf("[func- Raft::applierTicker()-raft{%d}] 向kvserver報告的applyMsgs長度爲：{%d}", m_me, applyMsgs.size());
+      DPrintf("[func- Raft::applierTicker()-raft{%d}] applyMsgs size: {%d}", m_me, applyMsgs.size());
     }
     for (auto& message : applyMsgs) {
       applyChan->Push(message);
@@ -240,6 +252,9 @@ bool Raft::CondInstallSnapshot(int lastIncludedTerm, int lastIncludedIndex, std:
 
 void Raft::doElection() {
   std::lock_guard<std::mutex> g(m_mtx);
+  if (m_removed.load(std::memory_order_acquire) || isLearnerLocked(m_me)) {
+    return;
+  }
 
   if (m_status != Leader) {
     abortReadIndexLocked(ReadIndexStatus::NotLeader);
@@ -250,8 +265,29 @@ void Raft::doElection() {
     persist();
     std::shared_ptr<int> votedNum = std::make_shared<int>(1);
     m_lastResetElectionTime = now();
+    if (*votedNum >= getQuorumLocked()) {
+      *votedNum = 0;
+      m_status = Leader;
+      const int lastLogIndex = getLastLogIndex();
+      for (size_t i = 0; i < m_nextIndex.size(); i++) {
+        m_nextIndex[i] = lastLogIndex + 1;
+        m_matchIndex[i] = 0;
+      }
+      Op noOp;
+      noOp.Operation = "RaftNoop";
+      noOp.ClientId = "raft-internal";
+      noOp.RequestId = m_currentTerm;
+      raftRpcProctoc::LogEntry noOpEntry;
+      noOpEntry.set_command(noOp.asString());
+      noOpEntry.set_logterm(m_currentTerm);
+      noOpEntry.set_logindex(lastLogIndex + 1);
+      m_logs.emplace_back(std::move(noOpEntry));
+      leaderUpdateCommitIndex();
+      persist();
+      return;
+    }
     for (int i = 0; i < m_peers.size(); i++) {
-      if (i == m_me) {
+      if (i == m_me || !isVoterLocked(i)) {
         continue;
       }
       int lastLogIndex = -1, lastLogTerm = -1;
@@ -273,6 +309,9 @@ void Raft::doElection() {
 
 void Raft::doHeartBeat() {
   std::lock_guard<std::mutex> g(m_mtx);
+  if (m_removed.load(std::memory_order_acquire)) {
+    return;
+  }
 
   if (m_status == Leader) {
     DPrintf("[func-Raft::doHeartBeat()-Leader: {%d}] Leader的心跳定时器触发了且拿到mutex，开始发送AE\n", m_me);
@@ -292,7 +331,7 @@ void Raft::doHeartBeat() {
     // Enqueue one replication task per follower; dedicated workers serialize
     // each peer's AppendEntries and snapshot traffic.
     for (int i = 0; i < m_peers.size(); i++) {
-      if (i == m_me) {
+      if (i == m_me || isRemovedLocked(i)) {
         continue;
       }
       DPrintf("[func-Raft::doHeartBeat()-Leader: {%d}] Leader的心跳定时器触发了 index:{%d}\n", m_me, i);
@@ -348,7 +387,8 @@ void Raft::doHeartBeat() {
 
 void Raft::electionTimeOutTicker() {
   // Check if a Leader election should be started.
-  while (true) {
+  while (!m_removed.load(std::memory_order_acquire) &&
+         !m_shutdown.load(std::memory_order_acquire)) {
     /**
      * 如果不睡眠，那么对于leader，这个函数会一直空转，浪费cpu。且加入协程之后，空转会导致其他协程无法运行，对于时间敏感的AE，会导致心跳无法正常发送导致异常
      */
@@ -356,6 +396,12 @@ void Raft::electionTimeOutTicker() {
     {
       std::lock_guard<std::mutex> lock(m_mtx);
       isLeader = m_status == Leader;
+      if (m_removed.load(std::memory_order_acquire) ||
+          m_shutdown.load(std::memory_order_acquire) || isLearnerLocked(m_me)) {
+        isLeader = true;
+      } else {
+        isLeader = m_status == Leader;
+      }
     }
     if (isLeader) {
       std::this_thread::sleep_for(std::chrono::milliseconds(HeartBeatTimeout));
@@ -450,8 +496,14 @@ bool Raft::hasCommittedEntryInCurrentTermLocked() {
 }
 
 void Raft::completeReadRoundIfQuorumLocked() {
-  if (!m_activeReadRound || m_activeReadRound->term != m_currentTerm || m_status != Leader ||
-      m_activeReadRound->acknowledgedPeers.size() < m_peers.size() / 2 + 1) {
+  if (!m_activeReadRound || m_activeReadRound->term != m_currentTerm || m_status != Leader) {
+    return;
+  }
+  int voterAcks = 0;
+  for (int peerIdx : m_activeReadRound->acknowledgedPeers) {
+    if (isVoterLocked(peerIdx)) voterAcks++;
+  }
+  if (voterAcks < getQuorumLocked()) {
     return;
   }
 
@@ -570,8 +622,36 @@ void Raft::InstallSnapshot(const raftRpcProctoc::InstallSnapshotRequest* args,
   m_lastLeaderContactTime = m_lastResetElectionTime;
   // Ignore snapshots already covered by local state.
   if (args->lastsnapshotincludeindex() <= m_lastSnapshotIncludeIndex) {
+    reply->set_term(m_currentTerm);
     return;
   }
+
+  // Handle streaming snapshot chunk assembly
+  std::string snapshotData;
+  if (args->chunkoffset() == 0 && args->chunkdone()) {
+    // Single chunk snapshot
+    snapshotData = args->data();
+    m_snapshotReceiveBuffer.clear();
+  } else {
+    // Multi-chunk snapshot stream
+    if (args->chunkoffset() == 0) {
+      m_snapshotReceiveBuffer = args->data();
+    } else {
+      if (args->chunkoffset() <= m_snapshotReceiveBuffer.size()) {
+        m_snapshotReceiveBuffer.resize(args->chunkoffset());
+      }
+      m_snapshotReceiveBuffer.append(args->data());
+    }
+
+    if (!args->chunkdone()) {
+      reply->set_term(m_currentTerm);
+      return;
+    }
+
+    snapshotData = std::move(m_snapshotReceiveBuffer);
+    m_snapshotReceiveBuffer.clear();
+  }
+
   // Compact entries covered by the snapshot and advance delivery progress.
   auto lastLogIndex = getLastLogIndex();
 
@@ -588,23 +668,26 @@ void Raft::InstallSnapshot(const raftRpcProctoc::InstallSnapshotRequest* args,
   reply->set_term(m_currentTerm);
   ApplyMsg msg;
   msg.SnapshotValid = true;
-  msg.Snapshot = args->data();
+  msg.Snapshot = snapshotData;
   msg.SnapshotTerm = args->lastsnapshotincludeterm();
   msg.SnapshotIndex = args->lastsnapshotincludeindex();
 
   // Preserve state-machine delivery order. A detached push could enqueue a
   // later log entry before this snapshot on a busy process.
   applyChan->Push(msg);
-  m_persister->Save(persistData(), args->data());
+  m_persister->Save(persistData(), snapshotData);
 }
 
 void Raft::pushMsgToRegionPeer(ApplyMsg msg) { applyChan->Push(msg); }
 
 void Raft::leaderHearBeatTicker() {
-  while (true) {
+  while (!m_removed.load(std::memory_order_acquire) &&
+         !m_shutdown.load(std::memory_order_acquire)) {
     bool isLeader = false;
     {
       std::lock_guard<std::mutex> lock(m_mtx);
+      if (m_removed.load(std::memory_order_acquire) ||
+          m_shutdown.load(std::memory_order_acquire)) break;
       isLeader = m_status == Leader;
     }
     if (!isLeader) {
@@ -645,49 +728,103 @@ void Raft::leaderHearBeatTicker() {
         continue;
       }
     }
-    // DPrintf("[func-Raft::doHeartBeat()-Leader: {%d}] Leader的心跳定时器触发了\n", m_me);
     doHeartBeat();
   }
 }
 
 void Raft::leaderSendSnapShot(int server) {
   m_mtx.lock();
-  raftRpcProctoc::InstallSnapshotRequest args;
-  args.set_leaderid(m_me);
-  args.set_term(m_currentTerm);
-  args.set_lastsnapshotincludeindex(m_lastSnapshotIncludeIndex);
-  args.set_lastsnapshotincludeterm(m_lastSnapshotIncludeTerm);
-  args.set_data(m_persister->ReadSnapshot());
-
-  raftRpcProctoc::InstallSnapshotResponse reply;
+  const int leaderTerm = m_currentTerm;
+  const int snapshotIndex = m_lastSnapshotIncludeIndex;
+  const int snapshotTerm = m_lastSnapshotIncludeTerm;
+  const std::string snapshotData = m_persister->ReadSnapshot();
+  const size_t chunkSize = 256 * 1024;  // 256 KB chunk
   m_mtx.unlock();
-  bool ok = m_peers[server]->InstallSnapshot(&args, &reply);
-  m_mtx.lock();
-  DEFER { m_mtx.unlock(); };
-  if (!ok) {
+
+  if (snapshotData.empty()) {
     return;
   }
-  if (m_status != Leader || m_currentTerm != args.term()) {
-    return;  //中间释放过锁，可能状态已经改变了
+
+  size_t totalSize = snapshotData.size();
+  size_t offset = 0;
+
+  while (offset < totalSize) {
+    size_t chunkLen = std::min(chunkSize, totalSize - offset);
+    bool isDone = (offset + chunkLen >= totalSize);
+
+    raftRpcProctoc::InstallSnapshotRequest args;
+    args.set_leaderid(m_me);
+    args.set_term(leaderTerm);
+    args.set_lastsnapshotincludeindex(snapshotIndex);
+    args.set_lastsnapshotincludeterm(snapshotTerm);
+    args.set_data(snapshotData.data() + offset, chunkLen);
+    args.set_chunkoffset(offset);
+    args.set_chunkdone(isDone);
+
+    raftRpcProctoc::InstallSnapshotResponse reply;
+    bool ok = false;
+    if (server >= 0 && server < static_cast<int>(m_peers.size()) && m_peers[server]) {
+      ok = m_peers[server]->InstallSnapshot(&args, &reply);
+    }
+    if (!ok) {
+      return;
+    }
+
+    m_mtx.lock();
+    if (m_status != Leader || m_currentTerm != leaderTerm) {
+      m_mtx.unlock();
+      return;
+    }
+    if (reply.term() > m_currentTerm) {
+      abortReadIndexLocked(ReadIndexStatus::NotLeader);
+      m_currentTerm = reply.term();
+      m_votedFor = -1;
+      m_status = Follower;
+      persist();
+      m_lastResetElectionTime = now();
+      m_mtx.unlock();
+      return;
+    }
+    m_mtx.unlock();
+
+    offset += chunkLen;
   }
-  //	无论什么时候都要判断term
-  if (reply.term() > m_currentTerm) {
-    //三变
-    abortReadIndexLocked(ReadIndexStatus::NotLeader);
-    m_currentTerm = reply.term();
-    m_votedFor = -1;
-    m_status = Follower;
-    persist();
-    m_lastResetElectionTime = now();
-    return;
+
+  {
+    std::lock_guard<std::mutex> lock(m_mtx);
+    if (m_status == Leader && m_currentTerm == leaderTerm) {
+      m_matchIndex[server] = snapshotIndex;
+      m_nextIndex[server] = m_matchIndex[server] + 1;
+    }
   }
-  m_matchIndex[server] = args.lastsnapshotincludeindex();
-  m_nextIndex[server] = m_matchIndex[server] + 1;
 }
 
 void Raft::replicationWorker(int server) {
   while (true) {
-    ReplicationTask task = m_replicationQueues[server]->Pop();
+    if (m_removed.load(std::memory_order_acquire) ||
+        m_shutdown.load(std::memory_order_acquire)) {
+      break;
+    }
+    {
+      std::lock_guard<std::mutex> lock(m_mtx);
+      if (isRemovedLocked(server)) {
+        break;
+      }
+    }
+    ReplicationTask task;
+    if (!m_replicationQueues[server]->timeOutPop(100, &task)) {
+      continue;
+    }
+    if (m_removed.load(std::memory_order_acquire) ||
+        m_shutdown.load(std::memory_order_acquire)) {
+      break;
+    }
+    {
+      std::lock_guard<std::mutex> lock(m_mtx);
+      if (isRemovedLocked(server)) {
+        break;
+      }
+    }
     if (task.type == ReplicationTaskType::Snapshot) {
       leaderSendSnapShot(server);
       continue;
@@ -716,6 +853,9 @@ void Raft::leaderUpdateCommitIndex() {
   for (int index = getLastLogIndex(); index > m_commitIndex; index--) {
     int sum = 0;
     for (int i = 0; i < m_peers.size(); i++) {
+      if (!isVoterLocked(i)) {
+        continue;
+      }
       if (i == m_me) {
         sum += 1;
         continue;
@@ -726,7 +866,7 @@ void Raft::leaderUpdateCommitIndex() {
     }
 
     // Raft only advances commitIndex by counting replicas for a current-term entry.
-    if (sum >= m_peers.size() / 2 + 1 && getLogTermFromLogIndex(index) == m_currentTerm) {
+    if (sum >= getQuorumLocked() && getLogTermFromLogIndex(index) == m_currentTerm) {
       m_commitIndex = index;
       break;
     }
@@ -755,6 +895,13 @@ void Raft::RequestVote(const raftRpcProctoc::RequestVoteArgs* args, raftRpcProct
 
   // Persist term and vote changes before releasing the state mutex.
   DEFER { persist(); };
+  if (m_removed.load(std::memory_order_acquire) || isLearnerLocked(m_me) ||
+      !isVoterLocked(args->candidateid())) {
+    reply->set_term(m_currentTerm);
+    reply->set_votestate(Expire);
+    reply->set_votegranted(false);
+    return;
+  }
   if (args->term() < m_currentTerm) {
     reply->set_term(m_currentTerm);
     reply->set_votestate(Expire);
@@ -936,7 +1083,7 @@ bool Raft::sendRequestVote(int server, std::shared_ptr<raftRpcProctoc::RequestVo
   }
 
   *votedNum = *votedNum + 1;
-  if (*votedNum >= m_peers.size() / 2 + 1) {
+  if (*votedNum >= getQuorumLocked()) {
     *votedNum = 0;
     if (m_status == Leader) {
       myAssert(false,
@@ -955,8 +1102,8 @@ bool Raft::sendRequestVote(int server, std::shared_ptr<raftRpcProctoc::RequestVo
 
     // A newly elected leader must commit an entry from its own term before
     // Raft can safely advance commitIndex over entries inherited from older
-    // terms. Without this no-op, recovery waited for the first business write;
-    // the gateway could read an incomplete MVCC timestamp watermark meanwhile.
+    // terms. Without this no-op, recovery waited for the first business write,
+    // and readers could observe an incomplete MVCC timestamp watermark meanwhile.
     Op noOp;
     noOp.Operation = "RaftNoop";
     noOp.ClientId = "raft-internal";
@@ -980,15 +1127,24 @@ bool Raft::sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendE
   DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc開始 ， args->entries_size():{%d}", m_me,
           server, args->entries_size());
   m_appendEntriesSent.fetch_add(1, std::memory_order_relaxed);
-  bool ok = m_peers[server]->AppendEntries(args.get(), reply.get());
+  bool ok = false;
+  if (server >= 0 && server < static_cast<int>(m_peers.size()) && m_peers[server]) {
+    ok = m_peers[server]->AppendEntries(args.get(), reply.get());
+  }
 
   if (!ok) {
     DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc失敗", m_me, server);
     return ok;
   }
   DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc成功", m_me, server);
+  HandleAppendEntriesReply(server, args.get(), reply.get());
+  return ok;
+}
+
+void Raft::HandleAppendEntriesReply(int server, const raftRpcProctoc::AppendEntriesArgs* args,
+                                    const raftRpcProctoc::AppendEntriesReply* reply) {
   if (reply->appstate() == Disconnected) {
-    return ok;
+    return;
   }
   std::lock_guard<std::mutex> lg1(m_mtx);
 
@@ -997,15 +1153,15 @@ bool Raft::sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendE
     m_status = Follower;
     m_currentTerm = reply->term();
     m_votedFor = -1;
-    return ok;
+    return;
   } else if (reply->term() < m_currentTerm) {
     DPrintf("[func -sendAppendEntries  rf{%d}]  节点：{%d}的term{%d}<rf{%d}的term{%d}\n", m_me, server, reply->term(),
             m_me, m_currentTerm);
-    return ok;
+    return;
   }
 
   if (m_status != Leader) {
-    return ok;
+    return;
   }
 
   myAssert(reply->term() == m_currentTerm,
@@ -1045,7 +1201,6 @@ bool Raft::sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendE
              format("[sendAppendEntries raft{%d}] lastLogIndex:%d commitIndex:%d\n", m_me, lastLogIndex,
                     m_commitIndex));
   }
-  return ok;
 }
 
 void Raft::AppendEntries(google::protobuf::RpcController* controller,
@@ -1056,11 +1211,11 @@ void Raft::AppendEntries(google::protobuf::RpcController* controller,
     response->set_success(false);
     response->set_updatenextindex(1);
     response->set_appstate(Disconnected);
-    done->Run();
+    if (done) done->Run();
     return;
   }
   AppendEntries1(request, response);
-  done->Run();
+  if (done) done->Run();
 }
 
 void Raft::InstallSnapshot(google::protobuf::RpcController* controller,
@@ -1068,12 +1223,12 @@ void Raft::InstallSnapshot(google::protobuf::RpcController* controller,
                            ::raftRpcProctoc::InstallSnapshotResponse* response, ::google::protobuf::Closure* done) {
   if (!m_initialized.load(std::memory_order_acquire)) {
     response->set_term(0);
-    done->Run();
+    if (done) done->Run();
     return;
   }
   InstallSnapshot(request, response);
 
-  done->Run();
+  if (done) done->Run();
 }
 
 void Raft::RequestVote(google::protobuf::RpcController* controller, const ::raftRpcProctoc::RequestVoteArgs* request,
@@ -1082,21 +1237,25 @@ void Raft::RequestVote(google::protobuf::RpcController* controller, const ::raft
     response->set_term(0);
     response->set_votegranted(false);
     response->set_votestate(Expire);
-    done->Run();
+    if (done) done->Run();
     return;
   }
   RequestVote(request, response);
-  done->Run();
+  if (done) done->Run();
 }
 
 void Raft::Start(Op command, int *newLogIndex, int *newLogTerm, bool *isLeader) {
   std::lock_guard<std::mutex> lock(m_mtx);
-  if (m_status != Leader) {
+  if (m_removed.load(std::memory_order_acquire) || m_status != Leader) {
     DPrintf("[func-Start-rf{%d}]  is not leader", m_me);
     *newLogIndex = -1;
     *newLogTerm = -1;
     *isLeader = false;
     return;
+  }
+
+  if (command.Operation == "ConfChange") {
+    m_confChangePendingInQueue.store(true, std::memory_order_release);
   }
 
   // Queue the proposal while the leadership decision is still protected.
@@ -1111,6 +1270,10 @@ void Raft::Start(Op command, int *newLogIndex, int *newLogTerm, bool *isLeader) 
 
 void Raft::raftPollerTicker() {
   while (true) {
+    if (m_removed.load(std::memory_order_acquire) ||
+        m_shutdown.load(std::memory_order_acquire)) {
+      break;
+    }
     std::vector<Op> batch = m_proposeQueue.PopBatch(100);
     if (batch.empty()) {
       sleepNMilliseconds(2);
@@ -1124,6 +1287,9 @@ void Raft::raftPollerTicker() {
         // the asynchronous batch had not entered the log before step-down.
         // Explicit rejection lets the transaction scheduler release latches.
         for (const auto& command : batch) {
+          if (command.Operation == "ConfChange") {
+            m_confChangePendingInQueue.store(false, std::memory_order_release);
+          }
           ApplyMsg rejected;
           rejected.ProposalRejected = true;
           rejected.Command = command.asString();
@@ -1134,11 +1300,24 @@ void Raft::raftPollerTicker() {
 
       int lastLogIndex = getLastLogIndex();
       for (const auto& command : batch) {
+        if (command.Operation == "AdminSplit") {
+          std::cerr << "{\"trace\":\"poller_admin_split\",\"me\":" << m_me
+                    << ",\"index\":" << (getLastLogIndex() + 1) << "}" << std::endl;
+        }
+        if (command.Operation == "ConfChange") {
+          m_confChangePendingInQueue.store(false, std::memory_order_release);
+        }
         raftRpcProctoc::LogEntry newLogEntry;
         newLogEntry.set_command(command.asString());
         newLogEntry.set_logterm(m_currentTerm);
         newLogEntry.set_logindex(++lastLogIndex);
         m_logs.emplace_back(newLogEntry);
+      }
+
+      const int oldCommitIndex = m_commitIndex;
+      leaderUpdateCommitIndex();
+      if (m_commitIndex > oldCommitIndex) {
+        m_applyCond.notify_one();
       }
 
       persist(); // Perform a single disk write for the entire batch
@@ -1150,11 +1329,34 @@ void Raft::raftPollerTicker() {
 
 // Initialize persistent state and start the long-running Raft workers.
 void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
-                std::shared_ptr<LockQueue<ApplyMsg>> applyCh, bool deferActivation) {
+                std::shared_ptr<LockQueue<ApplyMsg>> applyCh, bool deferActivation,
+                int regionId, uint64_t localPeerId,
+                std::vector<uint64_t> peerIds, std::vector<bool> learners) {
   m_peers = peers;
   m_persister = persister;
   m_me = me;
+  m_regionId = regionId;
+  m_localPeerId = localPeerId;
+  m_shutdown.store(false, std::memory_order_release);
+  m_removed.store(false, std::memory_order_release);
   m_mtx.lock();
+
+  m_peerIds = std::move(peerIds);
+  m_peerRoles.clear();
+  if (m_peerIds.empty()) {
+    for (size_t i = 0; i < m_peers.size(); ++i) {
+      m_peerIds.push_back(i);
+      m_peerRoles.push_back(PeerRole::Voter);
+    }
+  } else {
+    for (size_t i = 0; i < m_peerIds.size(); ++i) {
+      if (i < learners.size() && learners[i]) {
+        m_peerRoles.push_back(PeerRole::Learner);
+      } else {
+        m_peerRoles.push_back(PeerRole::Voter);
+      }
+    }
+  }
 
   this->applyChan = applyCh;
   m_currentTerm = 0;
@@ -1172,15 +1374,22 @@ void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::sh
   m_lastSnapshotIncludeIndex = 0;
   m_lastSnapshotIncludeTerm = 0;
   m_lastResetElectionTime = now();
-  // A restarted voter has forgotten any volatile leader-lease promise it made
-  // before the crash. Keep it from voting for one full minimum election
-  // interval after startup; this is conservative and closes the restart hole
-  // for the TSO's shorter 150 ms fence.
-  m_lastLeaderContactTime = m_lastResetElectionTime;
   m_lastResetHearBeatTime = m_lastResetElectionTime;
 
   // initialize from state persisted before a crash
-  readPersist(m_persister->ReadRaftState());
+  std::string persistedState = m_persister->ReadRaftState();
+  if (!persistedState.empty()) {
+    // A restarted voter has forgotten any volatile leader-lease promise it made
+    // before the crash. Keep it from voting for one full minimum election
+    // interval after startup; this is conservative and closes the restart hole
+    // for the TSO's shorter 150 ms fence.
+    m_lastLeaderContactTime = m_lastResetElectionTime;
+    readPersist(persistedState);
+  } else {
+    // A freshly initialized Region peer has no prior leader lease or history;
+    // allowing immediate elections avoids a 2000ms voting blackout during splits.
+    m_lastLeaderContactTime = std::chrono::steady_clock::time_point::min();
+  }
   if (m_lastSnapshotIncludeIndex > 0) {
     m_lastApplied = m_lastSnapshotIncludeIndex;
     // commitIndex is volatile and will be reconstructed from the current leader.
@@ -1206,27 +1415,52 @@ void Raft::Activate() {
   // left the scheduler idle and stopped consuming m_proposeQueue indefinitely.
   // Dedicated threads keep election, heartbeat and proposal progress
   // independent; the coroutine runtime remains available to application code.
-  std::thread heartbeatThread(&Raft::leaderHearBeatTicker, this);
-  heartbeatThread.detach();
-  std::thread electionThread(&Raft::electionTimeOutTicker, this);
-  electionThread.detach();
-  std::thread proposalThread(&Raft::raftPollerTicker, this);
-  proposalThread.detach();
+  {
+    std::lock_guard<std::mutex> workersLock(m_workerMutex);
+    m_workers.emplace_back(&Raft::leaderHearBeatTicker, this);
+    m_workers.emplace_back(&Raft::electionTimeOutTicker, this);
+    m_workers.emplace_back(&Raft::raftPollerTicker, this);
 
-  for (int i = 0; i < m_peers.size(); ++i) {
-    if (i == m_me) {
-      continue;
+    for (int i = 0; i < m_peers.size(); ++i) {
+      if (i == m_me) {
+        continue;
+      }
+      m_workers.emplace_back(&Raft::replicationWorker, this, i);
     }
-    std::thread t(&Raft::replicationWorker, this, i);
-    t.detach();
+    m_workers.emplace_back(&Raft::applierTicker, this);
   }
-
-  std::thread t3(&Raft::applierTicker, this);
-  t3.detach();
 
   // Publish only after every worker and the owning Region state machine are
   // ready. RPC handlers use acquire loads before touching restored state.
   m_initialized.store(true, std::memory_order_release);
+}
+
+Raft::~Raft() { Stop(); }
+
+void Raft::Stop() {
+  if (m_shutdown.exchange(true, std::memory_order_acq_rel)) return;
+  m_initialized.store(false, std::memory_order_release);
+  m_applyCond.notify_all();
+  m_readCond.notify_all();
+
+  std::vector<std::thread> workers;
+  {
+    std::lock_guard<std::mutex> lock(m_workerMutex);
+    workers.swap(m_workers);
+  }
+  for (auto& worker : workers) {
+    if (worker.joinable() && worker.get_id() != std::this_thread::get_id()) {
+      worker.join();
+    }
+  }
+}
+
+void Raft::SetEpoch(const RegionEpoch& epoch) {
+  std::lock_guard<std::mutex> lock(m_mtx);
+  m_epoch = epoch;
+  for (auto& peer : m_peers) {
+    if (peer) peer->SetEpoch(epoch);
+  }
 }
 
 std::string Raft::persistData() {
@@ -1341,4 +1575,186 @@ bool Raft::Snapshot(int index, std::string snapshot) {
            format("logCount{%zu} + snapshotIndex{%d} != lastLogIndex{%d}", m_logs.size(),
                   m_lastSnapshotIncludeIndex, lastLogIndex));
   return true;
+}
+
+int Raft::getVoterCountLocked() const {
+  if (m_peerRoles.empty()) {
+    return static_cast<int>(m_peers.size());
+  }
+  int count = 0;
+  for (const auto role : m_peerRoles) {
+    if (role == PeerRole::Voter) {
+      count++;
+    }
+  }
+  return count;
+}
+
+int Raft::getQuorumLocked() const {
+  int voters = getVoterCountLocked();
+  return voters / 2 + 1;
+}
+
+bool Raft::isVoterLocked(int server) const {
+  if (server < 0 || server >= static_cast<int>(m_peerRoles.size())) {
+    return true;
+  }
+  return m_peerRoles[server] == PeerRole::Voter;
+}
+
+bool Raft::isLearnerLocked(int server) const {
+  if (server < 0 || server >= static_cast<int>(m_peerRoles.size())) {
+    return false;
+  }
+  return m_peerRoles[server] == PeerRole::Learner;
+}
+
+bool Raft::isRemovedLocked(int server) const {
+  if (server < 0 || server >= static_cast<int>(m_peerRoles.size())) {
+    return false;
+  }
+  return m_peerRoles[server] == PeerRole::Removed;
+}
+
+bool Raft::HasConfChangeInFlight() {
+  std::lock_guard<std::mutex> lock(m_mtx);
+  return HasConfChangeInFlightLocked();
+}
+
+bool Raft::HasConfChangeInFlightLocked() const {
+  if (m_confChangePendingInQueue.load(std::memory_order_acquire)) {
+    return true;
+  }
+  int lastIndex = const_cast<Raft*>(this)->getLastLogIndex();
+  for (int index = m_lastApplied + 1; index <= lastIndex; ++index) {
+    if (index <= m_lastSnapshotIncludeIndex) continue;
+    int sliceIdx = index - m_lastSnapshotIncludeIndex - 1;
+    if (sliceIdx >= 0 && sliceIdx < static_cast<int>(m_logs.size())) {
+      const auto& cmdStr = m_logs[sliceIdx].command();
+      Op op;
+      op.parseFromString(cmdStr);
+      if (op.Operation == "ConfChange") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void Raft::ApplyConfChange(const stratakv::region::ConfChangeCommand& command) {
+  std::lock_guard<std::mutex> lock(m_mtx);
+  auto changeType = command.changetype();
+  const auto& peer = command.peer();
+  uint64_t targetPeerId = peer.peerid();
+
+  int targetIndex = -1;
+  for (size_t i = 0; i < m_peerIds.size(); ++i) {
+    if (m_peerIds[i] == targetPeerId) {
+      targetIndex = static_cast<int>(i);
+      break;
+    }
+  }
+
+  if (changeType == stratakv::region::CONF_CHANGE_ADD_LEARNER) {
+    if (targetIndex >= 0) {
+      m_peerRoles[targetIndex] = PeerRole::Learner;
+    } else {
+      m_peerIds.push_back(targetPeerId);
+      m_peerRoles.push_back(PeerRole::Learner);
+      m_matchIndex.push_back(0);
+      m_nextIndex.push_back(getLastLogIndex() + 1);
+      m_replicationQueues.push_back(std::make_shared<LockQueue<ReplicationTask>>());
+      if (static_cast<int>(m_peers.size()) < static_cast<int>(m_peerIds.size())) {
+        if (peer.host().empty() || peer.port() == 0) {
+          m_peers.push_back(nullptr);
+        } else {
+          m_peers.push_back(std::make_shared<RaftRpcUtil>(
+              peer.host(), peer.port(), m_regionId, m_localPeerId, targetPeerId, m_epoch));
+        }
+      }
+      if (m_backgroundWorkersStarted.load(std::memory_order_acquire)) {
+        int newServerIdx = static_cast<int>(m_peerRoles.size() - 1);
+        std::lock_guard<std::mutex> workersLock(m_workerMutex);
+        m_workers.emplace_back(&Raft::replicationWorker, this, newServerIdx);
+      }
+    }
+  } else if (changeType == stratakv::region::CONF_CHANGE_PROMOTE_LEARNER) {
+    if (targetIndex >= 0) {
+      m_peerRoles[targetIndex] = PeerRole::Voter;
+    }
+  } else if (changeType == stratakv::region::CONF_CHANGE_REMOVE_PEER) {
+    if (targetIndex >= 0) {
+      m_peerRoles[targetIndex] = PeerRole::Removed;
+      if (targetPeerId == m_localPeerId || targetIndex == m_me) {
+        m_removed.store(true, std::memory_order_release);
+        m_applyCond.notify_all();
+        m_readCond.notify_all();
+        if (m_status == Leader) {
+          abortReadIndexLocked(ReadIndexStatus::NotLeader);
+          m_status = Follower;
+        }
+      }
+    }
+  }
+}
+
+bool Raft::IsPeerCaughtUp(uint64_t peerId, int maxLag) const {
+  std::lock_guard<std::mutex> lock(m_mtx);
+  if (m_status != Leader) return false;
+  int targetIndex = -1;
+  for (size_t i = 0; i < m_peerIds.size(); ++i) {
+    if (m_peerIds[i] == peerId) {
+      targetIndex = static_cast<int>(i);
+      break;
+    }
+  }
+  if (targetIndex < 0 || targetIndex >= static_cast<int>(m_matchIndex.size())) {
+    return false;
+  }
+  int match = m_matchIndex[targetIndex];
+  return match >= (m_commitIndex - maxLag);
+}
+
+int Raft::GetPeerLag(uint64_t peerId) const {
+  std::lock_guard<std::mutex> lock(m_mtx);
+  if (m_status != Leader) return -1;
+  int targetIndex = -1;
+  for (size_t i = 0; i < m_peerIds.size(); ++i) {
+    if (m_peerIds[i] == peerId) {
+      targetIndex = static_cast<int>(i);
+      break;
+    }
+  }
+  if (targetIndex < 0 || targetIndex >= static_cast<int>(m_matchIndex.size())) {
+    return -1;
+  }
+  int match = m_matchIndex[targetIndex];
+  return std::max(0, m_commitIndex - match);
+}
+
+int Raft::GetPeerMatchIndex(uint64_t peerId) const {
+  std::lock_guard<std::mutex> lock(m_mtx);
+  int targetIndex = -1;
+  for (size_t i = 0; i < m_peerIds.size(); ++i) {
+    if (m_peerIds[i] == peerId) {
+      targetIndex = static_cast<int>(i);
+      break;
+    }
+  }
+  if (targetIndex < 0 || targetIndex >= static_cast<int>(m_matchIndex.size())) {
+    return -1;
+  }
+  return m_matchIndex[targetIndex];
+}
+
+void Raft::SetPeerMatchIndexForTest(uint64_t peerId, int matchIndex) {
+  std::lock_guard<std::mutex> lock(m_mtx);
+  for (size_t i = 0; i < m_peerIds.size(); ++i) {
+    if (m_peerIds[i] == peerId) {
+      if (i < m_matchIndex.size()) {
+        m_matchIndex[i] = matchIndex;
+      }
+      break;
+    }
+  }
 }

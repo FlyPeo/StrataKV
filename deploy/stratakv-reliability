@@ -17,7 +17,6 @@ Options:
   --retries N            Attempts per transaction/read. Default: 20.
   --request-timeout-ms N Per-request socket timeout. Default: 180000.
   --run-id ID             Stable test ID. Default: current date and time.
-  --gateway-port P        Local Gateway port. Default: 18080.
   --tso-port P            First of three TSO control-plane ports. Default: 26380.
   --max-runtime-seconds N Fail a stalled workload after N seconds. Default: 900.
   --progress-seconds N    Print workload progress every N seconds. Default: 10.
@@ -45,7 +44,6 @@ workers=16
 retries=20
 request_timeout_ms=180000
 run_id=$(date +%Y%m%d-%H%M%S)
-gateway_port=18080
 tso_port=26380
 max_runtime_seconds=900
 progress_seconds=10
@@ -62,7 +60,6 @@ while [ "$#" -gt 0 ]; do
     --retries) retries=${2:?--retries requires a value}; shift 2 ;;
     --request-timeout-ms) request_timeout_ms=${2:?--request-timeout-ms requires a value}; shift 2 ;;
     --run-id) run_id=${2:?--run-id requires a value}; shift 2 ;;
-    --gateway-port) gateway_port=${2:?--gateway-port requires a value}; shift 2 ;;
     --tso-port) tso_port=${2:?--tso-port requires a value}; shift 2 ;;
     --max-runtime-seconds) max_runtime_seconds=${2:?--max-runtime-seconds requires a value}; shift 2 ;;
     --progress-seconds) progress_seconds=${2:?--progress-seconds requires a value}; shift 2 ;;
@@ -76,7 +73,7 @@ done
 case "$project" in ''|*[!A-Za-z0-9_-]*) echo "Invalid --project." >&2; exit 2 ;; esac
 case "$run_id" in ''|*[!A-Za-z0-9_-]*) echo "Invalid --run-id." >&2; exit 2 ;; esac
 case "$fault" in restart-node|none) ;; *) echo "--fault must be restart-node or none." >&2; exit 2 ;; esac
-for number in "$transactions" "$workers" "$retries" "$request_timeout_ms" "$gateway_port" "$tso_port" "$max_runtime_seconds" "$progress_seconds"; do
+for number in "$transactions" "$workers" "$retries" "$request_timeout_ms" "$tso_port" "$max_runtime_seconds" "$progress_seconds"; do
   case "$number" in ''|*[!0-9]*|0) echo "Counts and ports must be positive integers." >&2; exit 2 ;; esac
 done
 
@@ -91,7 +88,6 @@ persistence_log="${result_dir}/persistence.log"
 fault_log="${result_dir}/fault.log"
 summary="${result_dir}/summary.txt"
 runtime_dir="${deploy_dir}/runtime/${project}"
-gateway="http://127.0.0.1:${gateway_port}"
 cluster_running=false
 workload_pid=
 
@@ -139,11 +135,11 @@ start_cluster() {
   if [ "$no_build" = true ]; then
     bash "${deploy_dir}/stratakv-server" up \
       --project "$project" --nodes 3 --replicas 3 \
-      --gateway-port "$gateway_port" --tso-port "$tso_port" --no-build
+      --tso-port "$tso_port" --no-build
   else
     bash "${deploy_dir}/stratakv-server" up \
       --project "$project" --nodes 3 --replicas 3 \
-      --gateway-port "$gateway_port" --tso-port "$tso_port"
+      --tso-port "$tso_port"
   fi
 }
 
@@ -192,7 +188,6 @@ start_cluster false
 
 echo "[2/5] Running ${transactions} cross-Region transactions with ${workers} workers..."
 "${repo_dir}/bin/stratakv-test-reliability" \
-  --gateway "$gateway" \
   --transactions "$transactions" \
   --workers "$workers" \
   --retries "$retries" \
@@ -230,7 +225,7 @@ while kill -0 "$workload_pid" 2>/dev/null; do
   elapsed=$((now - workload_started_at))
 
   failed_nodes=
-  for candidate in node-0 node-1 node-2 gateway; do
+  for candidate in node-0 node-1 node-2; do
     if ! node_running "$candidate"; then
       failed_nodes="${failed_nodes}${failed_nodes:+,}${candidate}"
     fi
@@ -251,11 +246,7 @@ while kill -0 "$workload_pid" 2>/dev/null; do
     break
   fi
 
-  committed=$(curl -fsS "${gateway}/metrics" 2>/dev/null |
-    sed -n 's/^stratakv_gateway_transactions_committed_total //p' | tail -n 1 || true)
-  open_transactions=$(curl -fsS "${gateway}/metrics" 2>/dev/null |
-    sed -n 's/^stratakv_gateway_open_transactions //p' | tail -n 1 || true)
-  echo "[progress] elapsed=${elapsed}s gateway_commits=${committed:-unavailable} target=${transactions} open=${open_transactions:-unavailable}"
+  echo "[progress] elapsed=${elapsed}s target=${transactions} (progress sampled every ${progress_seconds}s)"
   sleep "$progress_seconds"
 done
 
@@ -290,7 +281,6 @@ echo "[5/5] Verifying all expected values after local-process restart..."
 set +e
 "${repo_dir}/bin/stratakv-test-reliability" \
   --verify-only \
-  --gateway "$gateway" \
   --transactions "$transactions" \
   --workers "$workers" \
   --retries "$retries" \

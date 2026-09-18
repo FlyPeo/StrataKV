@@ -1,4 +1,9 @@
 #include "region_peer.h"
+#include "region_request_validator.h"
+
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include <algorithm>
 #include <cstdio>
@@ -6,6 +11,15 @@
 #include <stdexcept>
 
 namespace {
+
+template <typename Reply>
+void PopulateKeyNotInRegion(const RegionPeer* peer, Reply* response) {
+  response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+  RegionValidationResult validation{stratakv::region::REGION_ERROR_KEY_NOT_IN_REGION,
+                                   "key not in region"};
+  const RegionMetadata descriptor = peer->Descriptor();
+  PopulateRegionError(validation, &descriptor, response->mutable_header());
+}
 
 std::string EscapeJson(const std::string& value) {
   std::string escaped;
@@ -79,6 +93,41 @@ void FillLockReply(const MvccLock& lock, raftKVRpcProctoc::TxnGetLockReply* resp
   response->set_islockonly(lock.isLockOnly);
 }
 
+void DeleteKeysInRange(IKVEngine* engine, const std::string& rangeBegin,
+                       const std::string& rangeEnd) {
+  if (engine == nullptr) return;
+
+  // 1. Delete MVCC prefixes: data/, lock/, write/, meta/revision/
+  static const std::vector<std::pair<std::string, std::string>> prefixes = {
+      {"data/", "data0"},
+      {"lock/", "lock0"},
+      {"write/", "write0"},
+      {"meta/revision/", "meta/revision0"},
+  };
+  for (const auto& [prefix, prefixEnd] : prefixes) {
+    const std::string start = rangeBegin.empty() ? prefix : prefix + rangeBegin;
+    const std::string end = rangeEnd.empty() ? prefixEnd : prefix + rangeEnd;
+    engine->DeleteRange(start, end);
+  }
+
+  // 2. Delete raw user keys (for non-txn operations) that fall in [rangeBegin, rangeEnd)
+  // and do not belong to internal system prefixes.
+  auto isSystemKey = [](const std::string& key) {
+    return key.rfind("data/", 0) == 0 || key.rfind("lock/", 0) == 0 ||
+           key.rfind("write/", 0) == 0 || key.rfind("meta/", 0) == 0;
+  };
+  std::vector<std::string> rawKeysToDelete;
+  for (const auto& item : engine->ScanPrefix("")) {
+    if (isSystemKey(item.first)) continue;
+    if (item.first >= rangeBegin && (rangeEnd.empty() || item.first < rangeEnd)) {
+      rawKeysToDelete.push_back(item.first);
+    }
+  }
+  for (const auto& k : rawKeysToDelete) {
+    engine->Delete(k);
+  }
+}
+
 }  // namespace
 
 void RegionPeer::DprintfKVDB() {
@@ -90,9 +139,6 @@ void RegionPeer::DprintfKVDB() {
 }
 
 bool RegionPeer::ExecuteAppendOpOnKVDB(Op op) {
-  // if op.IfDuplicate {   //get请求是可重复执行的，因此可以不用判复
-  //	return
-  // }
   {
     std::lock_guard<std::mutex> lg(m_mtx);
     if (!m_kvEngine->Append(op.Key, op.Value)) return false;
@@ -285,6 +331,22 @@ bool RegionPeer::GetCommandFromRaft(ApplyMsg message) {
         std::lock_guard<std::mutex> lg(m_mtx);
         m_lastRequestId[op.ClientId] = op.RequestId;
       }
+    } else if (op.Operation == "AdminSplit") {
+      std::cerr << "{\"trace\":\"apply_admin_split\",\"region\":" << m_regionId
+                << ",\"index\":" << message.CommandIndex << "}" << std::endl;
+      stratakv::region::AdminSplitCommand split;
+      const TxnStatus splitStatus = split.ParseFromString(op.Value)
+                                        ? ApplyAdminSplit(split)
+                                        : TxnStatus::StorageError;
+      op.Status = std::to_string(static_cast<int>(splitStatus));
+      m_lastRequestId[op.ClientId] = op.RequestId;
+    } else if (op.Operation == "ConfChange") {
+      stratakv::region::ConfChangeCommand confChange;
+      const TxnStatus confStatus = confChange.ParseFromString(op.Value)
+                                       ? ApplyConfChange(confChange)
+                                       : TxnStatus::StorageError;
+      op.Status = std::to_string(static_cast<int>(confStatus));
+      m_lastRequestId[op.ClientId] = op.RequestId;
     } else if (op.Operation != "Get" && op.Operation != "RaftNoop") {
       applicationSucceeded = false;
     }
@@ -406,9 +468,10 @@ void RegionPeer::PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRp
 }
 
 void RegionPeer::ReadRaftApplyCommandLoop() {
-  while (true) {
+  while (!m_stopRequested.load(std::memory_order_acquire)) {
     //如果只操作applyChan不用拿锁，因为applyChan自己带锁
     auto message = applyChan->Pop();  //阻塞弹出
+    if (m_stopRequested.load(std::memory_order_acquire)) break;
     DPrintf(
         "---------------tmp-------------[func-RegionPeer::ReadRaftApplyCommandLoop()-kvserver{%d}] 收到了下raft的消息",
         m_me);
@@ -530,7 +593,7 @@ void RegionPeer::ReleaseWaitApplyQueue(const std::string& reqKey, const WaitAppl
 
 void RegionPeer::RaftLogGcLoop() {
   bool firstRun = true;
-  while (true) {
+  while (!m_stopRequested.load(std::memory_order_acquire)) {
     auto delay = m_raftLogGcConfig.tickInterval;
     if (firstRun) {
       // Nine Region peers otherwise begin full-state serialization together.
@@ -540,7 +603,14 @@ void RegionPeer::RaftLogGcLoop() {
       delay += m_raftLogGcConfig.tickInterval * slot / 9;
       firstRun = false;
     }
-    std::this_thread::sleep_for(delay);
+    {
+      std::unique_lock<std::mutex> stopLock(m_stopMutex);
+      if (m_stopCondition.wait_for(stopLock, delay, [this] {
+            return m_stopRequested.load(std::memory_order_acquire);
+          })) {
+        break;
+      }
+    }
 
     RaftLogGcDecision decision;
     std::unique_ptr<IKVSnapshot> kvSnapshot;
@@ -674,29 +744,32 @@ void RegionPeer::List(google::protobuf::RpcController *controller, const ::raftK
   done->Run();
 }
 
-RegionPeer::RegionPeer(int physicalNodeId, int regionId, int localPeerId,
+RegionPeer::RegionPeer(int physicalNodeId, RegionMetadata descriptor, int localPeerId,
                        RaftLogGcConfig raftLogGcConfig,
-                       std::string regionStartKey, std::string regionEndKey,
-                       std::vector<std::pair<std::string, short>> peerAddresses,
                        const std::shared_ptr<NodeTxnScheduler>& nodeTxnScheduler)
     : m_me(localPeerId),
       m_physicalNodeId(physicalNodeId),
-      m_regionId(regionId),
-      m_regionStartKey(std::move(regionStartKey)),
-      m_regionEndKey(std::move(regionEndKey)),
+      m_regionId(descriptor.regionId),
+      m_regionStartKey(descriptor.startKey),
+      m_regionEndKey(descriptor.endKey),
+      m_descriptor(std::move(descriptor)),
       m_raftLogGcConfig(std::move(raftLogGcConfig)),
-      m_peerAddresses(std::move(peerAddresses)),
       m_nodeTxnScheduler(nodeTxnScheduler) {
+  m_peerAddresses.reserve(m_descriptor.peers.size());
+  for (const auto& peer : m_descriptor.peers) {
+    m_peerAddresses.emplace_back(peer.host, peer.port);
+  }
   if (localPeerId < 0 || localPeerId >= static_cast<int>(m_peerAddresses.size())) {
     throw std::invalid_argument("local peer index is outside the Region peer list");
   }
 
-  const std::string identity = "region" + std::to_string(regionId) + "_node" + std::to_string(physicalNodeId) +
+  const std::string identity = "region" + std::to_string(m_regionId) + "_node" + std::to_string(physicalNodeId) +
                                "_peer" + std::to_string(localPeerId);
   m_persister = std::make_shared<Persister>(identity);
 
-  const std::string dbPath = "run_data/rocksdb_" + identity;
-  m_kvEngine = KVEngineFactory::Create(dbPath);
+  m_dbPath = "run_data/rocksdb_" + identity;
+  m_splitStatePath = "splitstate_" + identity + ".json";
+  m_kvEngine = KVEngineFactory::Create(m_dbPath);
   std::shared_ptr<IKVEngine> engineShared(m_kvEngine.get(), [](IKVEngine*) {});
   m_mvccStorage = std::make_shared<MvccStorage>(engineShared);
   applyChan = std::make_shared<LockQueue<ApplyMsg>>();
@@ -704,7 +777,327 @@ RegionPeer::RegionPeer(int physicalNodeId, int regionId, int localPeerId,
   m_lastSnapShotRaftLogIndex = 0;
 }
 
+RegionPeer::~RegionPeer() { Stop(); }
+
+bool RegionPeer::TryAcquireRequest() {
+  if (LifecycleState() != RegionPeerState::Serving) return false;
+  m_inFlightRequests.fetch_add(1, std::memory_order_acq_rel);
+  m_totalRequests.fetch_add(1, std::memory_order_relaxed);
+  if (LifecycleState() == RegionPeerState::Serving) return true;
+  ReleaseRequest();
+  return false;
+}
+
+void RegionPeer::MarkServing() {
+  RegionPeerState expected = RegionPeerState::Initializing;
+  if (!m_lifecycle.compare_exchange_strong(expected, RegionPeerState::Serving,
+                                           std::memory_order_acq_rel)) {
+    throw std::logic_error("Region peer can only serve after initialization");
+  }
+}
+
+void RegionPeer::ReleaseRequest() {
+  const uint64_t previous = m_inFlightRequests.fetch_sub(1, std::memory_order_acq_rel);
+  if (previous == 0) std::abort();
+  if (previous == 1) m_lifecycleCondition.notify_all();
+}
+
+bool RegionPeer::BeginRetire() {
+  RegionPeerState expected = RegionPeerState::Serving;
+  if (m_lifecycle.compare_exchange_strong(expected, RegionPeerState::Retiring,
+                                          std::memory_order_acq_rel)) {
+    return true;
+  }
+  return expected == RegionPeerState::Retiring || expected == RegionPeerState::Stopped;
+}
+
+bool RegionPeer::WaitForDrain(std::chrono::steady_clock::time_point deadline,
+                              uint64_t* remainingRequests) {
+  std::unique_lock<std::mutex> lock(m_lifecycleMutex);
+  const bool drained = m_lifecycleCondition.wait_until(lock, deadline, [this] {
+    return m_inFlightRequests.load(std::memory_order_acquire) == 0;
+  });
+  if (remainingRequests) {
+    *remainingRequests = m_inFlightRequests.load(std::memory_order_acquire);
+  }
+  return drained;
+}
+
+void RegionPeer::MarkStopped() {
+  if (LifecycleState() == RegionPeerState::Stopped) return;
+  if (LifecycleState() != RegionPeerState::Retiring || InFlightRequests() != 0) {
+    throw std::logic_error("Region peer cannot stop before retirement drains");
+  }
+  m_lifecycle.store(RegionPeerState::Stopped, std::memory_order_release);
+}
+
+namespace {
+
+std::string HexEncode(const std::string& bytes) {
+  static const char* digits = "0123456789abcdef";
+  std::string out;
+  out.reserve(bytes.size() * 2);
+  for (unsigned char byte : bytes) {
+    out.push_back(digits[byte >> 4]);
+    out.push_back(digits[byte & 0x0F]);
+  }
+  return out;
+}
+
+std::string HexDecode(const std::string& hex) {
+  auto value = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  if (hex.size() % 2 != 0) return {};
+  std::string out;
+  out.reserve(hex.size() / 2);
+  for (size_t i = 0; i < hex.size(); i += 2) {
+    const int high = value(hex[i]);
+    const int low = value(hex[i + 1]);
+    if (high < 0 || low < 0) return {};
+    out.push_back(static_cast<char>((high << 4) | low));
+  }
+  return out;
+}
+
+constexpr int kSplitPhaseCheckpointing = 1;
+constexpr int kSplitPhaseChildReady = 2;
+constexpr int kSplitPhaseParentShrunk = 3;
+constexpr int kSplitPhaseComplete = 4;
+
+}  // namespace
+
+RegionMetadata RegionPeer::Descriptor() const {
+  std::shared_lock<std::shared_mutex> lock(m_descriptorMutex);
+  return m_descriptor;
+}
+
+RegionPeerLocation RegionPeer::LocalPeerDescriptor() const {
+  std::shared_lock<std::shared_mutex> lock(m_descriptorMutex);
+  return m_descriptor.peers.at(static_cast<size_t>(m_me));
+}
+
+void RegionPeer::UpdateDescriptorShrunk(const RegionMetadata& shrunken) {
+  std::unique_lock<std::shared_mutex> lock(m_descriptorMutex);
+  if (shrunken.regionId != m_descriptor.regionId ||
+      shrunken.epoch.version <= m_descriptor.epoch.version) {
+    throw std::logic_error("Region descriptor shrink must advance the epoch");
+  }
+  m_descriptor = shrunken;
+  m_regionEndKey = shrunken.endKey;
+  if (m_raftNode) {
+    m_raftNode->SetEpoch(shrunken.epoch);
+  }
+}
+
+void RegionPeer::WriteSplitStateLocked(int phase, uint64_t generation,
+                                       const stratakv::region::AdminSplitCommand& command) const {
+  std::string blob;
+  command.SerializeToString(&blob);
+  std::ostringstream out;
+  out << "{\"phase\":" << phase << ",\"generation\":" << generation
+      << ",\"split_hex\":\"" << HexEncode(blob) << "\"}";
+  const std::string temporary = m_splitStatePath + ".tmp";
+  {
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    output.write(out.str().data(), static_cast<std::streamsize>(out.str().size()));
+    output.flush();
+    if (!output.good()) throw std::runtime_error("unable to persist split state");
+  }
+  std::filesystem::rename(temporary, m_splitStatePath);
+}
+
+// Background materialization: everything heavy (checkpoint clone, child
+// directory rename/cleanup, out-of-range parent deletion) runs off the apply
+// thread so Raft heartbeats/replication are never stalled by split I/O. The
+// descriptor shrink happens synchronously at the apply position; the deferred
+// steps only move data that is already unreachable.
+void RegionPeer::MaterializeSplitChildAsync(
+    const stratakv::region::AdminSplitCommand& command, int persistedPhase,
+    RegionMetadata parent, RegionMetadata child) {
+  std::lock_guard<std::mutex> splitLock(m_splitMutex);
+  std::cerr << "{\"trace\":\"materialize_begin\",\"region\":" << m_regionId
+            << ",\"persisted\":" << persistedPhase << "}" << std::endl;
+  auto stepTrace = [&](const char* step) {
+    std::cerr << "{\"trace\":\"mat_step\",\"region\":" << m_regionId
+              << ",\"step\":\"" << step << "\"}" << std::endl;
+  };
+  const uint64_t generation =
+      persistedPhase > 0 ? static_cast<uint64_t>(persistedPhase) : 1;
+  const std::string childBase = "run_data/rocksdb_region" +
+      std::to_string(command.child().regionid()) + "_node" +
+      std::to_string(m_physicalNodeId) + "_peer" + std::to_string(m_me);
+  const std::string pendingDir = childBase + "-gen" + std::to_string(generation) + ".pending";
+  const std::string finalDir = childBase;
+
+  try {
+    if (persistedPhase < kSplitPhaseChildReady) {
+      std::error_code fsError;
+      stepTrace("remove_pending");
+      std::filesystem::remove_all(pendingDir, fsError);
+      m_splitPhase.store(kSplitPhaseCheckpointing, std::memory_order_release);
+      stepTrace("create_checkpoint");
+      if (!m_kvEngine->CreateCheckpoint(pendingDir)) {
+        std::cerr << "{\"level\":\"error\",\"component\":\"region_peer\","
+                     "\"event\":\"split_checkpoint_failed\",\"region\":" << m_regionId
+                  << ",\"dir\":\"" << pendingDir << "\"}" << std::endl;
+        m_splitPhase.store(0, std::memory_order_release);
+        return;
+      }
+      WriteSplitStateLocked(kSplitPhaseChildReady, generation, command);
+    }
+    m_splitPhase.store(kSplitPhaseChildReady, std::memory_order_release);
+
+    if (persistedPhase < kSplitPhaseParentShrunk) {
+      std::error_code renameError;
+      if (!std::filesystem::exists(finalDir)) {
+        stepTrace("rename");
+        std::filesystem::rename(pendingDir, finalDir, renameError);
+        if (renameError) {
+          std::cerr << "{\"level\":\"error\",\"component\":\"region_peer\","
+                       "\"event\":\"split_rename_failed\",\"region\":" << m_regionId
+                    << ",\"ec\":" << renameError.value() << "}" << std::endl;
+          return;
+        }
+      }
+      // The clone carries the whole parent keyspace; drop the left half from
+      // the child while nothing has opened it yet.
+      {
+        stepTrace("open_child");
+        auto childEngine = KVEngineFactory::Create(finalDir);
+        stepTrace("child_cleanup");
+        DeleteKeysInRange(childEngine.get(), parent.startKey, command.splitkey());
+        childEngine->Delete("meta/mvcc_applied_raft_index");
+      }
+      WriteSplitStateLocked(kSplitPhaseParentShrunk, generation, command);
+    }
+    m_splitPhase.store(kSplitPhaseParentShrunk, std::memory_order_release);
+
+    if (persistedPhase < kSplitPhaseComplete) {
+      stepTrace("parent_cleanup");
+      DeleteKeysInRange(m_kvEngine.get(), command.splitkey(), parent.endKey);
+      m_mvccStorage->DropKeysInRange(command.splitkey(), parent.endKey);
+      WriteSplitStateLocked(kSplitPhaseComplete, generation, command);
+    }
+    m_splitPhase.store(kSplitPhaseComplete, std::memory_order_release);
+  } catch (const std::exception& error) {
+    std::cerr << "{\"level\":\"error\",\"component\":\"region_peer\","
+                 "\"event\":\"split_materialize_error\",\"region\":" << m_regionId
+              << ",\"what\":\"" << error.what() << "\"}" << std::endl;
+    m_splitPhase.store(0, std::memory_order_release);
+    return;
+  }
+
+  if (m_splitCompletedCallback) {
+    RegionMetadata shrunken = Descriptor();
+    RegionMetadata materializedChild = child;
+    materializedChild.metadataRevision = shrunken.metadataRevision;
+    m_splitCompletedCallback(shrunken, materializedChild);
+  }
+}
+
+TxnStatus RegionPeer::ApplyAdminSplit(const stratakv::region::AdminSplitCommand& command) {
+  // Idempotency and validation run against the current descriptor. A previous
+  // complete split of the same child is an acknowledged no-op; an already
+  // shrunken range (epoch advanced past the command's parent) resumes the
+  // deferred materialization.
+  int persistedPhase = 0;
+  {
+    std::ifstream input(m_splitStatePath, std::ios::binary);
+    if (input.good()) {
+      std::string line((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+      const auto phaseAt = line.find("\"phase\":");
+      if (phaseAt != std::string::npos) {
+        persistedPhase = std::atoi(line.c_str() + phaseAt + 8);
+      }
+    }
+  }
+
+  RegionMetadata parent;
+  parent.regionId = static_cast<int>(command.parent().regionid());
+  parent.startKey = command.parent().startkey();
+  parent.endKey = command.parent().endkey();
+  parent.epoch.version = command.parent().epoch().version();
+  parent.epoch.confVersion = command.parent().epoch().confversion();
+
+  RegionMetadata child;
+  child.regionId = static_cast<int>(command.child().regionid());
+  child.startKey = command.child().startkey();
+  child.endKey = command.child().endkey();
+  child.epoch.version = command.child().epoch().version();
+  child.epoch.confVersion = command.child().epoch().confversion();
+  child.metadataRevision = command.child().metadatarevision();
+  child.leaderPeerId = command.child().leaderpeerid();
+  for (const auto& peer : command.child().peers()) {
+    RegionPeerLocation location;
+    location.nodeId = peer.storeid() > 0 ? static_cast<int>(peer.storeid()) - 1 : -1;
+    location.host = peer.host();
+    location.port = static_cast<short>(peer.port());
+    location.storeId = peer.storeid();
+    location.peerId = peer.peerid();
+    child.peers.push_back(location);
+  }
+
+  bool alreadyShrunkNow = false;
+  {
+    std::shared_lock<std::shared_mutex> descriptorLock(m_descriptorMutex);
+    const bool exactMatch = m_descriptor.regionId == parent.regionId &&
+                            m_descriptor.epoch == parent.epoch &&
+                            m_descriptor.startKey == parent.startKey &&
+                            m_descriptor.endKey == parent.endKey;
+    alreadyShrunkNow = m_descriptor.regionId == parent.regionId &&
+                       m_descriptor.epoch.version == parent.epoch.version + 1 &&
+                       m_descriptor.endKey == command.splitkey();
+    if (!exactMatch && !alreadyShrunkNow) {
+      std::cerr << "{\"trace\":\"split_reject\"}" << std::endl;
+      return TxnStatus::StorageError;
+    }
+    if (alreadyShrunkNow && persistedPhase >= kSplitPhaseComplete) {
+      return TxnStatus::Ok;
+    }
+  }
+
+  // Shrink the descriptor synchronously at the apply position: from this
+  // instant right-half keys are rejected by range validation, which is the
+  // single-owner invariant. Everything else is deferred.
+  if (!alreadyShrunkNow) {
+    RegionMetadata shrunken;
+    shrunken.regionId = parent.regionId;
+    shrunken.startKey = parent.startKey;
+    shrunken.endKey = command.splitkey();
+    shrunken.epoch.version = parent.epoch.version + 1;
+    shrunken.epoch.confVersion = parent.epoch.confVersion;
+    shrunken.metadataRevision = command.metadatarevision();
+    shrunken.leaderPeerId = parent.leaderPeerId;
+    {
+      std::shared_lock<std::shared_mutex> lock(m_descriptorMutex);
+      shrunken.peers = m_descriptor.peers;
+    }
+    UpdateDescriptorShrunk(shrunken);
+  }
+
+  WriteSplitStateLocked(kSplitPhaseCheckpointing, 1, command);
+
+  // The child descriptor is stale by one revision (it was stamped at prepare);
+  // re-stamp with the revision this apply publishes.
+  RegionMetadata stampedChild = child;
+  stampedChild.metadataRevision = command.metadatarevision();
+
+  bool alreadyRunning = m_splitMaterializing.exchange(true, std::memory_order_acq_rel);
+  if (!alreadyRunning) {
+    std::thread([this, command, persistedPhase, parent, stampedChild]() {
+      MaterializeSplitChildAsync(command, persistedPhase, parent, stampedChild);
+      m_splitMaterializing.store(false, std::memory_order_release);
+    }).detach();
+  }
+  return TxnStatus::Ok;
+}
+
 bool RegionPeer::OwnsKey(const std::string& key) const {
+  std::shared_lock<std::shared_mutex> lock(m_descriptorMutex);
   return key >= m_regionStartKey && (m_regionEndKey.empty() || key < m_regionEndKey);
 }
 
@@ -786,10 +1179,24 @@ bool RegionPeer::ProposeTxn(const Op& op, int* raftIndex) {
 
 std::vector<std::pair<std::string, MvccLock>> RegionPeer::ExpiredLocks(uint64_t currentPhysicalMs) {
   if (!IsTxnLeader()) return {};
-  return m_mvccStorage->ExpiredLocks(currentPhysicalMs);
+  auto locks = m_mvccStorage->ExpiredLocks(currentPhysicalMs);
+  std::vector<std::pair<std::string, MvccLock>> owned;
+  owned.reserve(locks.size());
+  for (auto& item : locks) {
+    if (OwnsKey(item.first)) {
+      owned.push_back(std::move(item));
+    }
+  }
+  return owned;
 }
 
 void RegionPeer::Start() {
+  if (LifecycleState() != RegionPeerState::Initializing) {
+    throw std::logic_error("Region peer can only start from Initializing state");
+  }
+  if (m_started.exchange(true, std::memory_order_acq_rel)) {
+    throw std::logic_error("Region peer is already started");
+  }
   std::vector<std::shared_ptr<RaftRpcUtil>> servers;
   servers.reserve(m_peerAddresses.size());
   for (size_t peerIndex = 0; peerIndex < m_peerAddresses.size(); ++peerIndex) {
@@ -797,13 +1204,24 @@ void RegionPeer::Start() {
       servers.push_back(nullptr);
       continue;
     }
-    servers.push_back(std::make_shared<RaftRpcUtil>(m_peerAddresses[peerIndex].first,
-                                                   m_peerAddresses[peerIndex].second, m_regionId));
+    servers.push_back(std::make_shared<RaftRpcUtil>(
+        m_peerAddresses[peerIndex].first, m_peerAddresses[peerIndex].second, m_regionId,
+        LocalPeerDescriptor().peerId, m_descriptor.peers[peerIndex].peerId,
+        m_descriptor.epoch));
+  }
+  std::vector<uint64_t> peerIds;
+  std::vector<bool> learners;
+  peerIds.reserve(m_descriptor.peers.size());
+  learners.reserve(m_descriptor.peers.size());
+  for (const auto& peer : m_descriptor.peers) {
+    peerIds.push_back(peer.peerId);
+    learners.push_back(peer.isLearner);
   }
   // Keep inbound Raft RPCs fenced until local snapshot recovery and the
   // Region apply loop are ready. Otherwise InstallSnapshot can race this
   // recovery and a newer snapshot can be overwritten by stale local data.
-  m_raftNode->init(std::move(servers), m_me, m_persister, applyChan, true);
+  m_raftNode->init(std::move(servers), m_me, m_persister, applyChan, true,
+                   m_regionId, LocalPeerDescriptor().peerId, std::move(peerIds), std::move(learners));
 
   const auto snapshot = m_persister->ReadSnapshot();
   if (!snapshot.empty()) {
@@ -812,17 +1230,53 @@ void RegionPeer::Start() {
     m_lastSnapShotRaftLogIndex = status.lastApplied;
     AdvanceStateMachineApplied(status.lastApplied);
   }
-  std::thread statusWriter(&RegionPeer::WriteRaftStatusLoop, this);
-  statusWriter.detach();
-  std::thread applyThread(&RegionPeer::ReadRaftApplyCommandLoop, this);
-  applyThread.detach();
-  std::thread raftLogGcThread(&RegionPeer::RaftLogGcLoop, this);
-  raftLogGcThread.detach();
+  m_statusThread = std::thread(&RegionPeer::WriteRaftStatusLoop, this);
+  m_applyThread = std::thread(&RegionPeer::ReadRaftApplyCommandLoop, this);
+  m_raftLogGcThread = std::thread(&RegionPeer::RaftLogGcLoop, this);
   m_raftNode->Activate();
+  MarkServing();
+}
+
+void RegionPeer::Campaign() {
+  if (m_raftNode) m_raftNode->doElection();
+}
+
+bool RegionPeer::IsRaftLeader() const {
+  if (!m_raftNode) return false;
+  int term = -1;
+  bool isLeader = false;
+  m_raftNode->GetState(&term, &isLeader);
+  return isLeader;
+}
+
+void RegionPeer::Stop() {
+  if (m_stopRequested.exchange(true, std::memory_order_acq_rel)) return;
+  m_stopCondition.notify_all();
+  if (m_raftNode) m_raftNode->Stop();
+  if (applyChan) applyChan->Push(ApplyMsg{});
+
+  const auto self = std::this_thread::get_id();
+  for (std::thread* worker : {&m_statusThread, &m_applyThread, &m_raftLogGcThread}) {
+    if (worker->joinable() && worker->get_id() != self) worker->join();
+  }
+
+  if (LifecycleState() == RegionPeerState::Serving) BeginRetire();
+  if (LifecycleState() == RegionPeerState::Retiring && InFlightRequests() == 0) {
+    MarkStopped();
+  }
+  m_mvccStorage.reset();
+  m_kvEngine.reset();
+}
+
+bool RegionPeer::DeleteStorageData() {
+  Stop();
+  std::error_code error;
+  const bool removed = std::filesystem::remove_all(m_dbPath, error) > 0;
+  return !error && (removed || !std::filesystem::exists(m_dbPath));
 }
 
 void RegionPeer::WriteRaftStatusLoop() {
-  while (true) {
+  while (!m_stopRequested.load(std::memory_order_acquire)) {
     const Raft::NodeStatus status = m_raftNode->GetStatus();
     const MvccStats mvccStats = m_mvccStorage->Stats();
     int stateMachineAppliedIndex = 0;
@@ -912,14 +1366,17 @@ void RegionPeer::WriteRaftStatusLoop() {
     }
     raftLogOutput << "]}";
     raftLogOutput.flush();
-    sleep(1);
+    std::unique_lock<std::mutex> stopLock(m_stopMutex);
+    m_stopCondition.wait_for(stopLock, std::chrono::seconds(1), [this] {
+      return m_stopRequested.load(std::memory_order_acquire);
+    });
   }
 }
 
 void RegionPeer::TxnGet(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetArgs *request,
                       ::raftKVRpcProctoc::TxnGetReply *response, ::google::protobuf::Closure *done) {
   if (!OwnsKey(request->key())) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -944,7 +1401,7 @@ void RegionPeer::TxnGet(google::protobuf::RpcController *controller, const ::raf
 void RegionPeer::TxnPrewrite(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnPrewriteArgs *request,
                            ::raftKVRpcProctoc::TxnPrewriteReply *response, ::google::protobuf::Closure *done) {
   if (!OwnsKey(request->key())) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -1006,7 +1463,7 @@ void RegionPeer::TxnBatchPrewrite(google::protobuf::RpcController*,
   command.mutations.reserve(static_cast<size_t>(request->mutations_size()));
   for (const auto& mutation : request->mutations()) {
     if (!OwnsKey(mutation.key())) {
-      response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+      PopulateKeyNotInRegion(this, response);
       done->Run();
       return;
     }
@@ -1033,7 +1490,7 @@ void RegionPeer::TxnBatchPrewrite(google::protobuf::RpcController*,
 void RegionPeer::TxnCommit(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnCommitArgs *request,
                          ::raftKVRpcProctoc::TxnCommitReply *response, ::google::protobuf::Closure *done) {
   if (!OwnsKey(request->key())) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -1077,7 +1534,7 @@ void RegionPeer::TxnBatchCommit(google::protobuf::RpcController*,
   command.keys.assign(request->keys().begin(), request->keys().end());
   if (std::any_of(command.keys.begin(), command.keys.end(),
                   [this](const std::string& key) { return key.empty() || !OwnsKey(key); })) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -1098,7 +1555,7 @@ void RegionPeer::TxnBatchCommit(google::protobuf::RpcController*,
 void RegionPeer::TxnRollback(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnRollbackArgs *request,
                            ::raftKVRpcProctoc::TxnRollbackReply *response, ::google::protobuf::Closure *done) {
   if (!OwnsKey(request->key())) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -1130,6 +1587,9 @@ void RegionPeer::TxnBatchRollback(google::protobuf::RpcController*,
   const auto scheduler = m_nodeTxnScheduler.lock();
   if (!scheduler || request->protocolversion() < kBatchTxnProtocolVersion ||
       request->keys_size() <= 0 || request->keys_size() > 10000) {
+    std::cerr << "{\"trace\":\"batch_rollback_reject\",\"region\":" << m_regionId
+              << ",\"scheduler_alive\":" << (scheduler ? 1 : 0)
+              << ",\"keys\":" << request->keys_size() << "}" << std::endl;
     response->set_err(scheduler ? std::to_string(static_cast<int>(TxnStatus::StorageError))
                                 : ErrWrongLeader);
     done->Run();
@@ -1141,7 +1601,7 @@ void RegionPeer::TxnBatchRollback(google::protobuf::RpcController*,
   command.keys.assign(request->keys().begin(), request->keys().end());
   if (std::any_of(command.keys.begin(), command.keys.end(),
                   [this](const std::string& key) { return key.empty() || !OwnsKey(key); })) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -1161,7 +1621,7 @@ void RegionPeer::TxnBatchRollback(google::protobuf::RpcController*,
 void RegionPeer::TxnGetLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetLockArgs *request,
                           ::raftKVRpcProctoc::TxnGetLockReply *response, ::google::protobuf::Closure *done) {
   if (!OwnsKey(request->key())) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -1189,7 +1649,7 @@ void RegionPeer::TxnGetLock(google::protobuf::RpcController *controller, const :
 void RegionPeer::TxnAcquirePessimisticLock(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnAcquirePessimisticLockArgs *request,
                                          ::raftKVRpcProctoc::TxnAcquirePessimisticLockReply *response, ::google::protobuf::Closure *done) {
   if (!OwnsKey(request->key())) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -1232,7 +1692,7 @@ void RegionPeer::TxnCheckStatus(google::protobuf::RpcController*,
                                 ::raftKVRpcProctoc::TxnCheckStatusReply* response,
                                 ::google::protobuf::Closure* done) {
   if (!OwnsKey(request->primarykey())) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -1271,7 +1731,7 @@ void RegionPeer::TxnResolveLock(google::protobuf::RpcController*,
                                 ::raftKVRpcProctoc::TxnResolveLockReply* response,
                                 ::google::protobuf::Closure* done) {
   if (!OwnsKey(request->key())) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -1303,7 +1763,7 @@ void RegionPeer::TxnResolveLock(google::protobuf::RpcController*,
 void RegionPeer::TxnFindCommitTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnFindCommitTsArgs *request,
                                ::raftKVRpcProctoc::TxnFindCommitTsReply *response, ::google::protobuf::Closure *done) {
   if (!OwnsKey(request->key())) {
-    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    PopulateKeyNotInRegion(this, response);
     done->Run();
     return;
   }
@@ -1389,6 +1849,47 @@ void RegionPeer::TxnGarbageCollect(google::protobuf::RpcController *controller, 
   });
 }
 
+void RegionPeer::ProposeAdminSplit(google::protobuf::RpcController *controller,
+                                   const ::raftKVRpcProctoc::ProposeAdminSplitArgs *request,
+                                   ::raftKVRpcProctoc::ProposeAdminSplitReply *response,
+                                   ::google::protobuf::Closure *done) {
+  (void)controller;
+  stratakv::region::AdminSplitCommand split;
+  if (!request->split().IsInitialized() || request->split().splitkey().empty()) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
+  split = request->split();
+
+  Op op;
+  op.Operation = "AdminSplit";
+  if (!split.SerializeToString(&op.Value)) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    done->Run();
+    return;
+  }
+  op.ClientId = "admin-split";
+  op.RequestId = m_adminSplitRequestId.fetch_add(1);
+
+  int raftIndex = -1;
+  int term = -1;
+  bool isLeader = false;
+  m_raftNode->Start(op, &raftIndex, &term, &isLeader);
+  std::cerr << "{\"trace\":\"propose_admin_split\",\"region\":" << m_regionId
+            << ",\":isleader\":" << isLeader << ",\"value_size\":" << op.Value.size()
+            << "}" << std::endl;
+  if (!isLeader) {
+    response->set_err(ErrWrongLeader);
+    done->Run();
+    return;
+  }
+  // The entry is queued; materialization progress is reported through the
+  // split status/metrics, not this synchronous reply.
+  response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
+  done->Run();
+}
+
 void RegionPeer::TxnMaxObservedTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnMaxObservedTsArgs *request,
                                 ::raftKVRpcProctoc::TxnMaxObservedTsReply *response, ::google::protobuf::Closure *done) {
   int term = -1;
@@ -1406,4 +1907,211 @@ void RegionPeer::TxnMaxObservedTs(google::protobuf::RpcController *controller, c
   response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
   response->set_maxts(maxTs);
   done->Run();
+}
+
+TxnStatus RegionPeer::ApplyConfChange(const stratakv::region::ConfChangeCommand& command) {
+  std::unique_lock<std::shared_mutex> lock(m_descriptorMutex);
+
+  auto changeType = command.changetype();
+  const auto& targetPeer = command.peer();
+  uint64_t targetPeerId = targetPeer.peerid();
+
+  if (command.has_expectedepoch()) {
+    if (m_descriptor.epoch.confVersion != command.expectedepoch().confversion() ||
+        m_descriptor.epoch.version != command.expectedepoch().version()) {
+      return TxnStatus::StorageError;
+    }
+  }
+
+  bool isTargetSelf = false;
+  if (m_me >= 0 && m_me < static_cast<int>(m_descriptor.peers.size())) {
+    isTargetSelf = (targetPeerId == m_descriptor.peers[m_me].peerId);
+  }
+
+  if (changeType == stratakv::region::CONF_CHANGE_ADD_LEARNER) {
+    bool found = false;
+    for (auto& p : m_descriptor.peers) {
+      if (p.peerId == targetPeerId) {
+        p.isLearner = true;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      RegionPeerLocation loc;
+      loc.nodeId = targetPeer.storeid() > 0 ? static_cast<int>(targetPeer.storeid()) - 1 : -1;
+      loc.host = targetPeer.host();
+      loc.port = static_cast<short>(targetPeer.port());
+      loc.storeId = targetPeer.storeid();
+      loc.peerId = targetPeer.peerid();
+      loc.isLearner = true;
+      m_descriptor.peers.push_back(loc);
+    }
+  } else if (changeType == stratakv::region::CONF_CHANGE_PROMOTE_LEARNER) {
+    for (auto& p : m_descriptor.peers) {
+      if (p.peerId == targetPeerId) {
+        p.isLearner = false;
+        break;
+      }
+    }
+  } else if (changeType == stratakv::region::CONF_CHANGE_REMOVE_PEER) {
+    auto it = std::remove_if(m_descriptor.peers.begin(), m_descriptor.peers.end(),
+                             [targetPeerId](const RegionPeerLocation& p) {
+                               return p.peerId == targetPeerId;
+                             });
+    m_descriptor.peers.erase(it, m_descriptor.peers.end());
+  }
+
+  m_descriptor.epoch.confVersion++;
+  if (command.metadatarevision() > 0) {
+    m_descriptor.metadataRevision = command.metadatarevision();
+  }
+
+  if (m_raftNode) {
+    m_raftNode->ApplyConfChange(command);
+    m_raftNode->SetEpoch(m_descriptor.epoch);
+  }
+
+  const uint64_t appliedRevision = m_descriptor.metadataRevision;
+  lock.unlock();
+  if (changeType == stratakv::region::CONF_CHANGE_REMOVE_PEER && isTargetSelf) {
+    BeginRetire();
+    if (InFlightRequests() == 0) {
+      MarkStopped();
+    }
+    if (m_removedCallback) {
+      m_removedCallback(m_regionId, targetPeerId, appliedRevision);
+    }
+  }
+
+  return TxnStatus::Ok;
+}
+
+void RegionPeer::ProposeConfChange(google::protobuf::RpcController *controller,
+                                   const ::raftKVRpcProctoc::ProposeConfChangeArgs *request,
+                                   ::raftKVRpcProctoc::ProposeConfChangeReply *response,
+                                   ::google::protobuf::Closure *done) {
+  (void)controller;
+  std::lock_guard<std::mutex> lock(m_confChangeMutex);
+
+  if (!request->confchange().IsInitialized()) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    if (done) done->Run();
+    return;
+  }
+
+  if (m_raftNode->HasConfChangeInFlight()) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    response->mutable_header()->mutable_error()->set_code(stratakv::region::REGION_ERROR_CONF_CHANGE_IN_FLIGHT);
+    if (done) done->Run();
+    return;
+  }
+
+  {
+    std::shared_lock<std::shared_mutex> descLock(m_descriptorMutex);
+    if (request->confchange().has_expectedepoch()) {
+      if (m_descriptor.epoch.confVersion != request->confchange().expectedepoch().confversion() ||
+          m_descriptor.epoch.version != request->confchange().expectedepoch().version()) {
+        response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+        response->mutable_header()->mutable_error()->set_code(stratakv::region::REGION_ERROR_EPOCH_NOT_MATCH);
+        if (done) done->Run();
+        return;
+      }
+    }
+  }
+
+  Op op;
+  op.Operation = "ConfChange";
+  if (!request->confchange().SerializeToString(&op.Value)) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::StorageError)));
+    if (done) done->Run();
+    return;
+  }
+  op.ClientId = "conf-change";
+  op.RequestId = m_adminConfChangeRequestId.fetch_add(1);
+
+  int raftIndex = -1;
+  int term = -1;
+  bool isLeader = false;
+  m_raftNode->Start(op, &raftIndex, &term, &isLeader);
+  if (!isLeader) {
+    response->set_err(ErrWrongLeader);
+    if (done) done->Run();
+    return;
+  }
+
+  response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
+  if (done) done->Run();
+}
+
+bool RegionPeer::IsPeerCaughtUp(uint64_t peerId, int maxLag) const {
+  if (!m_raftNode) return false;
+  return m_raftNode->IsPeerCaughtUp(peerId, maxLag);
+}
+
+int RegionPeer::GetPeerLag(uint64_t peerId) const {
+  if (!m_raftNode) return -1;
+  return m_raftNode->GetPeerLag(peerId);
+}
+
+bool RegionPeer::MaybePromoteLearner(uint64_t peerId, int maxLag) {
+  if (!m_raftNode || !m_raftNode->GetStatus().isLeader) {
+    return false;
+  }
+  if (!m_raftNode->IsPeerCaughtUp(peerId, maxLag)) {
+    return false;
+  }
+  if (m_raftNode->HasConfChangeInFlight()) {
+    return false;
+  }
+
+  stratakv::region::ConfChangeCommand cmd;
+  cmd.set_changetype(stratakv::region::CONF_CHANGE_PROMOTE_LEARNER);
+  auto* p = cmd.mutable_peer();
+  p->set_peerid(peerId);
+  {
+    std::shared_lock<std::shared_mutex> lock(m_descriptorMutex);
+    bool isLearner = false;
+    for (const auto& peer : m_descriptor.peers) {
+      if (peer.peerId == peerId) {
+        isLearner = peer.isLearner;
+        p->set_storeid(peer.storeId);
+        p->set_host(peer.host);
+        p->set_port(peer.port);
+        break;
+      }
+    }
+    if (!isLearner) {
+      return false; // already voter or not found
+    }
+    auto* expEpoch = cmd.mutable_expectedepoch();
+    expEpoch->set_version(m_descriptor.epoch.version);
+    expEpoch->set_confversion(m_descriptor.epoch.confVersion);
+  }
+
+  raftKVRpcProctoc::ProposeConfChangeArgs args;
+  args.set_regionid(m_regionId);
+  *args.mutable_confchange() = cmd;
+  raftKVRpcProctoc::ProposeConfChangeReply reply;
+  ProposeConfChange(nullptr, &args, &reply, nullptr);
+  return reply.err() == std::to_string(static_cast<int>(TxnStatus::Ok));
+}
+
+void RegionPeer::SetPeerMatchIndexForTest(uint64_t peerId, int matchIndex) {
+  if (m_raftNode) m_raftNode->SetPeerMatchIndexForTest(peerId, matchIndex);
+}
+
+std::string RegionPeer::ResolveSplitCandidate(uint64_t generation) const {
+  if (generation == 0) return "";
+  if (m_splitCandidateResolver) {
+    return m_splitCandidateResolver(generation);
+  }
+  std::shared_lock<std::shared_mutex> lock(m_descriptorMutex);
+  if (!m_descriptor.startKey.empty() && !m_descriptor.endKey.empty()) {
+    return m_descriptor.startKey + "_split_" + std::to_string(generation);
+  }
+  if (!m_descriptor.endKey.empty()) {
+    return m_descriptor.endKey.substr(0, 1);
+  }
+  return "m";
 }

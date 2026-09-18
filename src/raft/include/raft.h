@@ -67,7 +67,10 @@ class Raft : public raftRpcProctoc::raftRpc {
   // persistent state and the apply channel have been initialized.
   std::atomic<bool> m_initialized{false};
   std::atomic<bool> m_backgroundWorkersStarted{false};
-  std::mutex m_mtx;
+  std::atomic<bool> m_shutdown{false};
+  std::mutex m_workerMutex;
+  std::vector<std::thread> m_workers;
+  mutable std::mutex m_mtx;
   std::condition_variable m_applyCond;
   std::vector<std::shared_ptr<RaftRpcUtil>> m_peers;
   std::shared_ptr<Persister> m_persister;
@@ -145,6 +148,8 @@ class Raft : public raftRpcProctoc::raftRpc {
   std::unique_ptr<pulsar::IOManager> m_ioManager = nullptr;
 
  public:
+  Raft() = default;
+  ~Raft() override;
   void AppendEntries1(const raftRpcProctoc::AppendEntriesArgs *args, raftRpcProctoc::AppendEntriesReply *reply);
   void applierTicker();
   bool CondInstallSnapshot(int lastIncludedTerm, int lastIncludedIndex, std::string snapshot);
@@ -199,6 +204,25 @@ class Raft : public raftRpcProctoc::raftRpc {
   // Persist a service snapshot through index and compact the covered log prefix.
   bool Snapshot(int index, std::string snapshot);
 
+  enum class PeerRole { Voter, Learner, Removed };
+  bool HasConfChangeInFlight();
+  bool HasConfChangeInFlightLocked() const;
+  void ApplyConfChange(const stratakv::region::ConfChangeCommand& command);
+  bool IsRemoved() const { return m_removed.load(std::memory_order_acquire); }
+
+  int getVoterCountLocked() const;
+  int getQuorumLocked() const;
+  bool isVoterLocked(int server) const;
+  bool isLearnerLocked(int server) const;
+  bool isRemovedLocked(int server) const;
+
+  bool IsPeerCaughtUp(uint64_t peerId, int maxLag = 100) const;
+  int GetPeerLag(uint64_t peerId) const;
+  int GetPeerMatchIndex(uint64_t peerId) const;
+  void HandleAppendEntriesReply(int server, const raftRpcProctoc::AppendEntriesArgs* args,
+                                const raftRpcProctoc::AppendEntriesReply* reply);
+  void SetPeerMatchIndexForTest(uint64_t peerId, int matchIndex);
+
  public:
   // 重写基类方法,因为rpc远程调用真正调用的是这个方法
   //序列化，反序列化等操作rpc框架都已经做完了，因此这里只需要获取值然后真正调用本地方法即可。
@@ -212,14 +236,29 @@ class Raft : public raftRpcProctoc::raftRpc {
 
  public:
   void init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
-            std::shared_ptr<LockQueue<ApplyMsg>> applyCh, bool deferActivation = false);
+            std::shared_ptr<LockQueue<ApplyMsg>> applyCh, bool deferActivation = false,
+            int regionId = 0, uint64_t localPeerId = 0,
+            std::vector<uint64_t> peerIds = {}, std::vector<bool> learners = {});
 
   // RegionPeer defers activation until its durable snapshot is restored and
   // its apply loop is ready. This closes the startup window in which a newer
   // InstallSnapshot could be accepted and then overwritten by local recovery.
   void Activate();
+  // Stops and joins every consensus worker. Safe to call repeatedly; removed
+  // peers use this before their RocksDB and persistence directories are freed.
+  void Stop();
+  void SetEpoch(const RegionEpoch& epoch);
 
  private:
+  std::vector<uint64_t> m_peerIds;
+  std::vector<PeerRole> m_peerRoles;
+  int m_regionId = 0;
+  uint64_t m_localPeerId = 0;
+  RegionEpoch m_epoch;
+  std::atomic<bool> m_removed{false};
+  std::atomic<bool> m_confChangePendingInQueue{false};
+  std::string m_snapshotReceiveBuffer;
+
   bool hasCommittedEntryInCurrentTermLocked();
   void completeReadRoundIfQuorumLocked();
   void abortReadIndexLocked(ReadIndexStatus status);

@@ -3,30 +3,69 @@
 #include <chrono>
 #include <future>
 #include <iostream>
+#include <stdexcept>
 
 #include "lock_resolver.h"
-#include "raft_mvcc_storage.h"
-#include "remote_timestamp_oracle.h"
-#include "shard_router.h"
 #include "txn_scheduler.h"
 
+namespace {
+
+std::shared_ptr<LockResolver> BuildLockResolver(
+    const std::vector<ShardRouter::RegionRoute>& routes) {
+  // An empty view (registry not yet published) is legal: the scan simply skips
+  // secondary locks until the first refresh installs real routes.
+  if (routes.empty()) return nullptr;
+  return std::make_shared<LockResolver>(std::make_shared<ShardRouter>(routes));
+}
+
+}  // namespace
+
 TxnRecoveryManager::TxnRecoveryManager(std::shared_ptr<NodeTxnScheduler> scheduler,
-                                       std::shared_ptr<RemoteTimestampOracle> tsoClient,
-                                       const RegionCatalog& catalog,
+                                       std::shared_ptr<TimestampOracle> tsoClient,
+                                       TxnRecoveryRouteResolver routeResolver,
+                                       TxnRecoveryRouteRevision routeRevision,
                                        std::chrono::milliseconds checkInterval)
     : scheduler_(std::move(scheduler)),
       tsoClient_(std::move(tsoClient)),
+      routeResolver_(std::move(routeResolver)),
+      routeRevision_(std::move(routeRevision)),
       checkInterval_(checkInterval) {
-  std::vector<ShardRouter::RegionRoute> routes;
-  routes.reserve(catalog.Regions().size());
-  for (const auto& region : catalog.Regions()) {
-    std::vector<std::pair<std::string, short>> endpoints;
-    endpoints.reserve(region.peers.size());
-    for (const auto& peer : region.peers) endpoints.emplace_back(peer.host, peer.port);
-    routes.push_back({region, std::make_shared<RaftMvccStorage>(region.regionId, endpoints)});
+  if (!routeResolver_ || !routeRevision_) {
+    throw std::invalid_argument("TxnRecoveryManager requires a route resolver and revision");
   }
-  auto router = std::make_shared<ShardRouter>(std::move(routes));
-  lockResolver_ = std::make_shared<LockResolver>(std::move(router));
+  // Build the initial routes eagerly (possibly an empty view before the registry
+  // is published). The first scan after publication refreshes them as the
+  // revision advances.
+  lockResolver_ = BuildLockResolver(routeResolver_());
+  lastRouteRevision_ = routeRevision_();
+}
+
+std::shared_ptr<LockResolver> TxnRecoveryManager::CurrentLockResolver() {
+  RefreshRoutesIfNeeded();
+  std::lock_guard<std::mutex> lock(routesMutex_);
+  return lockResolver_;
+}
+
+void TxnRecoveryManager::RefreshRoutesIfNeeded() {
+  const uint64_t revision = routeRevision_();
+  {
+    std::lock_guard<std::mutex> lock(routesMutex_);
+    if (revision == lastRouteRevision_) return;
+    lastRouteRevision_ = revision;
+  }
+  // Resolve outside the lock so the resolver can call back into the registry
+  // without serializing against CheckPrimary users.
+  const auto routes = routeResolver_();
+  auto resolver = BuildLockResolver(routes);
+  {
+    std::lock_guard<std::mutex> lock(routesMutex_);
+    if (lastRouteRevision_ == revision) lockResolver_ = std::move(resolver);
+    routeRefreshCount_.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+uint64_t TxnRecoveryManager::RouteRefreshCount() const {
+  return routeRefreshCount_.load(std::memory_order_relaxed);
 }
 
 TxnRecoveryManager::~TxnRecoveryManager() {
@@ -51,30 +90,58 @@ void TxnRecoveryManager::Stop() {
 
 void TxnRecoveryManager::WorkerLoop() {
   while (!stopped_) {
-    ScanOnce();
-    AdvanceGc();
+    try {
+      ScanOnce();
+      AdvanceGc();
+    } catch (const std::exception& e) {
+      std::cerr << "[TxnRecoveryManager] WorkerLoop caught exception: " << e.what() << std::endl;
+    } catch (...) {
+      std::cerr << "[TxnRecoveryManager] WorkerLoop caught unknown exception" << std::endl;
+    }
     std::this_thread::sleep_for(checkInterval_);
   }
 }
 
 void TxnRecoveryManager::ScanOnce() {
-  uint64_t currentPhysicalMs = tsoClient_->Next() >> 18;
+  // Resolve routes once per scan: every CheckPrimary in this round shares one
+  // topology view even if the revision advances mid-scan.
+  const auto lockResolver = CurrentLockResolver();
+  uint64_t currentPhysicalMs = 0;
+  try {
+    currentPhysicalMs = tsoClient_->Next() >> 18;
+  } catch (const std::exception& e) {
+    return;
+  }
 
   for (auto region : scheduler_->Regions()) {
-    for (const auto& item : region->ExpiredLocks(currentPhysicalMs)) {
+    if (!region || !region->IsTxnLeader()) continue;
+    std::vector<std::pair<std::string, MvccLock>> expired;
+    try {
+      expired = region->ExpiredLocks(currentPhysicalMs);
+    } catch (...) {
+      continue;
+    }
+    for (const auto& item : expired) {
       const std::string& key = item.first;
       const MvccLock& lock = item.second;
 
       PrimaryTxnStatus status;
-      if (key == lock.primaryKey) {
-        status.state = PrimaryTxnState::RolledBack;
-        status.queryStatus = TxnStatus::Ok;
-      } else {
-        status = lockResolver_->CheckPrimary(lock.primaryKey, lock.startTs, currentPhysicalMs, true);
+      try {
+        if (key == lock.primaryKey) {
+          status.state = PrimaryTxnState::RolledBack;
+          status.queryStatus = TxnStatus::Ok;
+        } else {
+          if (lockResolver == nullptr) {
+            // Registry not yet published: no route for the Primary; retry next round.
+            continue;
+          }
+          status = lockResolver->CheckPrimary(lock.primaryKey, lock.startTs, currentPhysicalMs, true);
+        }
+      } catch (const std::exception&) {
+        continue;
       }
 
-      if (status.queryStatus != TxnStatus::Ok || status.state == PrimaryTxnState::Missing ||
-          status.state == PrimaryTxnState::Locked) {
+      if (status.queryStatus != TxnStatus::Ok || status.state == PrimaryTxnState::Locked) {
         continue;
       }
 
@@ -94,9 +161,20 @@ void TxnRecoveryManager::ScanOnce() {
         command.resolutionState = TxnRecordState::RolledBack;
       }
 
-      std::promise<void> p;
-      scheduler_->Schedule(command, [&p](const TxnScheduleResult&) { p.set_value(); });
-      p.get_future().get();
+      try {
+        auto p = std::make_shared<std::promise<void>>();
+        auto f = p->get_future();
+        scheduler_->Schedule(command, [p](const TxnScheduleResult&) {
+          try {
+            p->set_value();
+          } catch (...) {
+          }
+        });
+        if (f.wait_for(std::chrono::seconds(2)) == std::future_status::ready) {
+          f.get();
+        }
+      } catch (...) {
+      }
     }
   }
 }
@@ -116,6 +194,7 @@ void TxnRecoveryManager::AdvanceGc() {
   uint64_t safePointTs = (currentPhysicalMs - retentionMs) << 18;
   
   for (auto region : scheduler_->Regions()) {
+    if (!region || !region->IsTxnLeader()) continue;
     TxnCommand command;
     command.type = TxnCommandType::GarbageCollect;
     command.latchMode = TxnLatchMode::RegionExclusive;
@@ -124,8 +203,20 @@ void TxnRecoveryManager::AdvanceGc() {
     command.clientId = "TxnRecoveryManager";
     command.requestId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
     
-    std::promise<void> p;
-    scheduler_->Schedule(command, [&p](const TxnScheduleResult&) { p.set_value(); });
-    p.get_future().get();
+    try {
+      auto p = std::make_shared<std::promise<void>>();
+      auto f = p->get_future();
+      scheduler_->Schedule(command, [p](const TxnScheduleResult&) {
+        try {
+          p->set_value();
+        } catch (...) {
+        }
+      });
+      if (f.wait_for(std::chrono::seconds(2)) == std::future_status::ready) {
+        f.get();
+      }
+    } catch (...) {
+    }
   }
 }
+

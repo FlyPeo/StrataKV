@@ -54,6 +54,8 @@ include_directories(${PROJECT_SOURCE_DIR}/src/proto)
 include_directories(${PROJECT_SOURCE_DIR}/src/storage/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/transaction/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/sdk/include)
+include_directories(${PROJECT_SOURCE_DIR}/src/metadata/include)
+include_directories(${PROJECT_SOURCE_DIR}/src/server)
 include_directories(${PROJECT_SOURCE_DIR}/test)
 
 # 库文件路径
@@ -70,6 +72,19 @@ add_library(stratakv_core STATIC
     ${src_storage}
     ${src_proto}
     ${src_transaction}
+    src/metadata/metadata_state_machine.cpp
+    src/metadata/metadata_consensus.cpp
+    src/metadata/metadata_client.cpp
+    src/metadata/auto_balancer_planner.cpp
+    src/metadata/topology_operation_coordinator.cpp
+    src/metadata/auto_balancer.cpp
+    src/transaction/region_cache.cpp
+    src/server/region_registry.cpp
+    src/server/region_request_validator.cpp
+    src/server/structured_region_log.cpp
+    src/server/node_bootstrap.cpp
+    src/server/node_server.cpp
+    src/server/store_heartbeat_reporter.cpp
 )
 add_dependencies(stratakv_core stratakv_proto_codegen)
 
@@ -85,15 +100,21 @@ target_link_libraries(stratakv_core
 )
 
 # 可部署的单节点进程。通过不同的 node-id、端口和集群配置启动三个实例，组成一个 Raft group。
-add_executable(stratakv-node src/server/node_main.cpp src/server/node_server.cpp)
+add_executable(stratakv-node src/server/node_main.cpp)
 target_include_directories(stratakv-node PRIVATE ${PROJECT_SOURCE_DIR}/src/server)
 target_link_libraries(stratakv-node PRIVATE stratakv_core)
 
 # Cluster-wide timestamp authority. It is intentionally independent from the
-# storage nodes so every SDK/Gateway process observes one timestamp sequence.
+# storage nodes so every SDK process observes one timestamp sequence.
 add_executable(stratakv-tso src/tso/tso_main.cpp src/tso/tso_service.cpp src/tso/tso_consensus.cpp)
 target_include_directories(stratakv-tso PRIVATE ${PROJECT_SOURCE_DIR}/src/tso)
 target_link_libraries(stratakv-tso PRIVATE stratakv_core)
+
+# Replicated Region/Store metadata authority. It is independent from TSO so
+# topology traffic and future scheduling cannot delay timestamp allocation.
+add_executable(stratakv-meta src/metadata/meta_main.cpp src/metadata/metadata_service.cpp)
+target_include_directories(stratakv-meta PRIVATE ${PROJECT_SOURCE_DIR}/src/metadata/include)
+target_link_libraries(stratakv-meta PRIVATE stratakv_core)
 
 # 面向部署用户的最小 KV 客户端。自动在配置的 peer 中寻找当前 Leader。
 add_executable(stratakv-admin src/admin/admin_main.cpp)
@@ -107,20 +128,10 @@ target_link_libraries(stratakv_sdk PUBLIC stratakv_core stratakv_rpc)
 install(TARGETS stratakv_sdk ARCHIVE DESTINATION lib)
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/src/sdk/include/stratakv DESTINATION include)
 
-# Stable HTTP/JSON entrypoint for non-C++ users and operational integrations.
-add_executable(stratakv-gateway src/gateway/gateway_main.cpp)
-target_link_libraries(stratakv-gateway PRIVATE stratakv_sdk pthread)
-
-# End-user command-line client. It calls the public Gateway rather than the
-# internal Raft RPC protocol, matching how non-operator applications connect.
-add_executable(stratakv-client src/cli/client_main.cpp)
-target_link_libraries(stratakv-client PRIVATE pthread)
-
 install(TARGETS
     stratakv-node
     stratakv-tso
+    stratakv-meta
     stratakv-admin
-    stratakv-gateway
-    stratakv-client
     RUNTIME DESTINATION bin
 )

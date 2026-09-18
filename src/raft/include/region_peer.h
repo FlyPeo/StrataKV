@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include "kv_engine.h"
@@ -20,7 +21,13 @@
 #include "kv_server_rpc.pb.h"
 #include "raft.h"
 #include "mvcc_storage.h"
+#include "region_metadata.h"
 #include "txn_scheduler.h"
+
+#include <functional>
+#include <shared_mutex>
+
+enum class RegionPeerState { Initializing, Serving, Retiring, Stopped };
 
 // A lightweight replicated state-machine peer for one Region. Networking is
 // owned by the physical-node NodeServer; this object owns only Region-local
@@ -33,6 +40,35 @@ class RegionPeer : public TxnRegionExecutor {
   int m_regionId = -1;
   std::string m_regionStartKey;
   std::string m_regionEndKey;
+  RegionMetadata m_descriptor;
+  std::atomic<RegionPeerState> m_lifecycle{RegionPeerState::Initializing};
+  std::atomic<uint64_t> m_inFlightRequests{0};
+  std::atomic<int> m_adminSplitRequestId{1};
+  std::atomic<int> m_adminConfChangeRequestId{1};
+  std::atomic<int> m_splitPhase{0};
+  std::atomic<bool> m_splitMaterializing{false};
+  std::atomic<bool> m_stopRequested{false};
+  std::atomic<bool> m_started{false};
+  std::atomic<int> m_testApplyIndex_{0};
+  mutable std::shared_mutex m_descriptorMutex;
+  std::mutex m_splitMutex;
+  std::mutex m_confChangeMutex;
+  std::string m_splitStatePath;
+  std::string m_dbPath;
+  std::function<void(const RegionMetadata& shrunken, const RegionMetadata& child)>
+      m_splitCompletedCallback;
+  std::function<void(int regionId, uint64_t peerId, uint64_t revision)>
+      m_removedCallback;
+
+  void WriteSplitStateLocked(int phase, uint64_t generation,
+                             const stratakv::region::AdminSplitCommand& command) const;
+  mutable std::mutex m_lifecycleMutex;
+  std::condition_variable m_lifecycleCondition;
+  std::mutex m_stopMutex;
+  std::condition_variable m_stopCondition;
+  std::thread m_statusThread;
+  std::thread m_applyThread;
+  std::thread m_raftLogGcThread;
   std::shared_ptr<Raft> m_raftNode;
   std::shared_ptr<Persister> m_persister;
   std::shared_ptr<LockQueue<ApplyMsg> > applyChan;  // kvServer和raft节点的通信管道
@@ -64,6 +100,11 @@ class RegionPeer : public TxnRegionExecutor {
   // a current-term ReadIndex has reached the local state machine.
   std::atomic<int> m_txnReadyTerm{-1};
 
+  std::atomic<uint64_t> m_approximateBytes{0};
+  std::atomic<uint64_t> m_totalRequests{0};
+  std::atomic<uint64_t> m_splitCandidateGeneration{0};
+  std::function<std::string(uint64_t)> m_splitCandidateResolver;
+
   // The apply loop and the GC snapshotter share one state-machine boundary.
   // This prevents a snapshot labelled N from observing part of command N+1.
   std::mutex m_stateMachineExecutionMutex;
@@ -81,17 +122,90 @@ class RegionPeer : public TxnRegionExecutor {
  public:
   RegionPeer() = delete;
 
-  RegionPeer(int physicalNodeId, int regionId, int localPeerId,
+  RegionPeer(int physicalNodeId, RegionMetadata descriptor, int localPeerId,
              RaftLogGcConfig raftLogGcConfig,
-             std::string regionStartKey, std::string regionEndKey,
-             std::vector<std::pair<std::string, short>> peerAddresses,
              const std::shared_ptr<NodeTxnScheduler>& nodeTxnScheduler);
+  ~RegionPeer() override;
 
   // Start Region-local Raft and apply workers after the NodeServer listener is
   // accepting RPCs. The call is non-blocking after initialization completes.
   void Start();
+  void Stop();
+  void Campaign();
+  bool IsRaftLeader() const;
+  bool DeleteStorageData();
+  const std::string& StoragePath() const { return m_dbPath; }
   int RegionId() const { return m_regionId; }
+  // Thread-safe copies: the descriptor shrinks in place when an AdminSplit
+  // applies, while RPC threads validate against it concurrently.
+  RegionMetadata Descriptor() const;
+  RegionPeerLocation LocalPeerDescriptor() const;
+  // In-place shrink on AdminSplit apply. Rejects a non-advancing epoch.
+  void UpdateDescriptorShrunk(const RegionMetadata& shrunken);
+  // Invoked on the apply thread after a split fully materializes locally.
+  // Applies one committed AdminSplit entry. Public: the Raft apply loop calls
+  // it, and split tests use it to drive the phase state machine directly.
+  TxnStatus ApplyAdminSplit(const stratakv::region::AdminSplitCommand& command);
+  void MaterializeSplitChildAsync(const stratakv::region::AdminSplitCommand& command,
+                                  int persistedPhase, RegionMetadata parent,
+                                  RegionMetadata child);
+  TxnStatus ApplyConfChange(const stratakv::region::ConfChangeCommand& command);
+  bool IsPeerCaughtUp(uint64_t peerId, int maxLag = 100) const;
+  int GetPeerLag(uint64_t peerId) const;
+  bool MaybePromoteLearner(uint64_t peerId, int maxLag = 100);
+  void SetPeerMatchIndexForTest(uint64_t peerId, int matchIndex);
+  // Local split phase for operator progress reporting.
+  int SplitPhase() const { return m_splitPhase.load(std::memory_order_acquire); }
+
+  void SetSplitCompletedCallback(
+      std::function<void(const RegionMetadata& shrunken, const RegionMetadata& child)> callback) {
+    m_splitCompletedCallback = std::move(callback);
+  }
+  void SetRemovedCallback(
+      std::function<void(int regionId, uint64_t peerId, uint64_t revision)> callback) {
+    m_removedCallback = std::move(callback);
+  }
+  RegionPeerState LifecycleState() const { return m_lifecycle.load(std::memory_order_acquire); }
+  void MarkServing();
+  bool TryAcquireRequest();
+  void ReleaseRequest();
+  bool BeginRetire();
+  bool WaitForDrain(std::chrono::steady_clock::time_point deadline,
+                    uint64_t* remainingRequests = nullptr);
+  void MarkStopped();
+  uint64_t InFlightRequests() const {
+    return m_inFlightRequests.load(std::memory_order_acquire);
+  }
   Raft* RaftNode() const { return m_raftNode.get(); }
+  // Test seams: apply one Op through the state-machine path, and reach the
+  // local KV engine to inspect post-split data.
+  bool ApplyOpForTest(const Op& op) {
+    ApplyMsg message;
+    message.CommandValid = true;
+    message.CommandIndex = m_testApplyIndex_.fetch_add(1) + 1;
+    message.Command = op.asString();
+    return GetCommandFromRaft(message);
+  }
+  IKVEngine* EngineForTest() { return m_kvEngine.get(); }
+
+  uint64_t ApproximateBytes() const { return m_approximateBytes.load(std::memory_order_relaxed); }
+  void SetApproximateBytes(uint64_t bytes) { m_approximateBytes.store(bytes, std::memory_order_relaxed); }
+
+  uint64_t RequestCount() const { return m_totalRequests.load(std::memory_order_relaxed); }
+  void SetRequestCount(uint64_t count) { m_totalRequests.store(count, std::memory_order_relaxed); }
+
+  uint64_t SplitCandidateGeneration() const {
+    return m_splitCandidateGeneration.load(std::memory_order_relaxed);
+  }
+  void SetSplitCandidateGeneration(uint64_t gen) {
+    m_splitCandidateGeneration.store(gen, std::memory_order_relaxed);
+  }
+
+  void SetSplitCandidateResolver(std::function<std::string(uint64_t)> resolver) {
+    m_splitCandidateResolver = std::move(resolver);
+  }
+  std::string ResolveSplitCandidate(uint64_t generation) const;
+
   NodeTxnScheduler* NodeSchedulerForTest() const {
     const auto scheduler = m_nodeTxnScheduler.lock();
     return scheduler.get();
@@ -112,13 +226,12 @@ class RegionPeer : public TxnRegionExecutor {
 
   bool ExecutePutOpOnKVDB(Op op);
 
-  void Get(const raftKVRpcProctoc::GetArgs *args,
-           raftKVRpcProctoc::GetReply
-               *reply);  //将 GetArgs 改为rpc调用的，因为是远程客户端，即服务器宕机对客户端来说是无感的
-  /**
-   * 從raft節點中獲取消息  （不要誤以爲是執行【GET】命令）
-   * @param message
-   */
+  // Serves one point read through the Raft-backed KV state machine; the RPC
+  // shape keeps server failover invisible to the caller.
+  void Get(const raftKVRpcProctoc::GetArgs *args, raftKVRpcProctoc::GetReply *reply);
+
+  // Consumes one committed entry delivered by the local Raft applier. This is
+  // the state-machine apply path, unrelated to the point-read Get above.
   bool GetCommandFromRaft(ApplyMsg message);
 
   bool LinearizableReadBarrier(std::chrono::steady_clock::time_point deadline,
@@ -205,6 +318,18 @@ class RegionPeer : public TxnRegionExecutor {
 
   void TxnGarbageCollect(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGarbageCollectArgs *request,
                          ::raftKVRpcProctoc::TxnGarbageCollectReply *response, ::google::protobuf::Closure *done);
+
+  // Proposes an AdminSplit entry into this peer's Raft log. Leader-only: a
+  // follower answers ErrWrongLeader and the caller rotates peers.
+  void ProposeAdminSplit(google::protobuf::RpcController *controller,
+                         const ::raftKVRpcProctoc::ProposeAdminSplitArgs *request,
+                         ::raftKVRpcProctoc::ProposeAdminSplitReply *response,
+                         ::google::protobuf::Closure *done);
+
+  void ProposeConfChange(google::protobuf::RpcController *controller,
+                         const ::raftKVRpcProctoc::ProposeConfChangeArgs *request,
+                         ::raftKVRpcProctoc::ProposeConfChangeReply *response,
+                         ::google::protobuf::Closure *done);
 
   void TxnMaxObservedTs(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnMaxObservedTsArgs *request,
                         ::raftKVRpcProctoc::TxnMaxObservedTsReply *response, ::google::protobuf::Closure *done);

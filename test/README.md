@@ -14,9 +14,16 @@
 | `support/`       | 测试共用 workload、统计和报告器 | 被测试程序和脚本复用   |
 | `CMakeLists.txt` | 定义测试程序、依赖和 CTest 注册 | CMake 配置时读取       |
 
+### 命名约定
+
+- 文件名 snake_case，CTest target kebab-case，二者同名对应：`unit/txn_scheduler_check.cpp` → `stratakv-test-txn-scheduler`。
+- 目录即层级：`unit/` 组件级（进程内）、`integration/` 跨组件或子进程（文件一律带 `_integration` 中缀）、`benchmarks/` 手动基准、`system/` 需真实集群编排。
+- 性能用例族（A1-A4、B3、C1、C2）保留用例代号前缀与 `-check` 后缀（如 `a1-matrix-check`），与 `deploy/stratakv-performance` 的报告口径一致；新组件测试不再带 `-check` 后缀。
+- 基准 target 一律以 `-benchmark` 结尾。
+
 ## 自动测试
 
-先构建并运行全部 19 项 CTest：
+先构建并运行全部 58 项 CTest：
 
 ```bash
 cmake --preset release
@@ -57,7 +64,11 @@ ctest --preset release -R '^stratakv-test-txn-scheduler$'
 
 | 源文件                                      | CTest 名称                           | 用途                                                                    |
 | ------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------- |
-| `integration/tso_integration_check.cpp`   | `stratakv-test-tso`                | 启动三成员 TSO，检查并发取号、Leader 故障、少数派 fence、快照和全量重启 |
+| `integration/tso_integration_check.cpp`   | `stratakv-test-tso-integration`    | 启动三成员 TSO，检查并发取号、Leader 故障、少数派 fence、快照和全量重启 |
+| `integration/metadata_integration_check.cpp` | `stratakv-test-metadata-integration` | 启动三成员元数据集群，检查拓扑 RPC、revision 与故障恢复               |
+| `integration/dynamic_cluster_integration_check.cpp` | `stratakv-test-dynamic-cluster` | 拉起动态拓扑集群，检查注册、路由与 Region 生命周期                 |
+| `integration/online_migration_integration_check.cpp` | `stratakv-test-online-migration` | 检查 Learner 追平、Promote/Remove 在线副本迁移                     |
+| `integration/auto_balancer_integration_check.cpp` | `stratakv-test-auto-balancer-integration` | 检查自动均衡 operator 生命周期与 reconcile                     |
 | `integration/performance_script_check.sh` | `stratakv-test-performance-script` | 静态检查 smoke 编排规模、隔离范围和危险命令                             |
 | `integration/performance_report_check.py` | `stratakv-test-performance-report` | 用合成结果检查报告完整性门禁与失败传播                                  |
 | `integration/d1_compare_check.py`         | `stratakv-test-d1-compare`         | 检查 D1 兼容性签名、三次中位数回归比较、告警阈值及 WS L基准标注         |
@@ -137,7 +148,7 @@ Smoke 的固定规模如下：
 | 项目       | 规模                                                                       |
 | ---------- | -------------------------------------------------------------------------- |
 | Load       | 3,000 条 × 256 B，每个 checkpoint 恢复后逐条核对全部初始值                |
-| A1         | Gateway、uniform、A/C × 1/8 workers，每点 10,000 operations               |
+| A1         | 直连 SDK、uniform、A/C × 1/8 workers，每点 10,000 operations              |
 | A2         | 跨 Region 比例 0/100%，8 workers，每点 1,000 transactions                  |
 | A3         | 1/3 Region，8 workers，每点 1,000 transactions                             |
 | A4         | 乐观/悲观 fast-fail × 0/20% 目标争用，16 workers，每点 1,000 transactions |
@@ -193,7 +204,7 @@ test-results/performance/<run-id>/
 `REPORT.md` 和 `summary.json`。客户端 CPU 时间与峰值 RSS 位于 `metrics/*-client.txt`，
 服务 CPU/IO 和状态位于各点 before/after 目录，二进制 SHA-256 位于 manifest。
 
-- A1 的 1/8 worker 点只支持描述这两个点的变化，不能据此宣称达到吞吐平台或定位 Gateway 瓶颈。
+- A1 的 1/8 worker 点只支持描述这两个点的变化，不能据此宣称达到吞吐平台或定位接入层瓶颈。
 - A2/A3 的单位是事务 TPS；其写入值是 benchmark 自己生成的短字符串，不应假设与 A1 的 256 B 相同。
 - A4 必须同时看提交吞吐、实际冲突率、成功率和包含退避的延迟，未观察到曲线交叉时不外推切换点。
 - B1 时间线是脚本观测时间，包含重启、轮询和校验成本，不等同于纯 Raft 选举耗时。

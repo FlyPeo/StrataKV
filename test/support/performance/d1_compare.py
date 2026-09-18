@@ -3,7 +3,7 @@
 测试目标：验证 D1 比较器在兼容签名、完整 run 下按三次中位数比较性能回归，并以正确性为无条件硬门禁。
 测试策略：读取 baseline 与 candidate 目录的 manifest.json 和 raw 结果/summary.json，计算 compatibility signature；当签名不兼容或 run 未完成时拒绝回归比较；当签名兼容时提取三次重复中位数，按吞吐下降 >10% 或 P99 上升 >20% 输出告警与判定；当任一正确性门禁失败时无条件 FAIL；在 WSL 环境下标注 development baseline。
 测试规模：支持 full（三轮重复）与 smoke 单轮，包含 A1(8w)、A2(0/100%)、A3(3 regions)、A4(20% opt/pess)、B1/B3、C1、C2。
-验证条件：Direct/Gateway 或环境不兼容时拒绝比较；吞吐 -10% 或 P99 +20% 告警/FAIL；B1/B3/C1/C2 失败整体硬失败；生成 Markdown/JSON 比较报告。
+验证条件：环境不兼容时拒绝比较（gateway 字段仅为兼容历史 manifest 而保留解析）；吞吐 -10% 或 P99 +20% 告警/FAIL；B1/B3/C1/C2 失败整体硬失败；生成 Markdown/JSON 比较报告。
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import Any
 
 def compute_compatibility_signature(manifest: dict[str, Any]) -> dict[str, Any]:
     gateway = manifest.get("gateway", {}) if isinstance(manifest.get("gateway"), dict) else {}
+    client = manifest.get("client", {}) if isinstance(manifest.get("client"), dict) else {}
     return {
         "schema_version": manifest.get("schema_version"),
         "profile": manifest.get("profile"),
@@ -26,6 +27,7 @@ def compute_compatibility_signature(manifest: dict[str, Any]) -> dict[str, Any]:
         "record_count": manifest.get("record_count"),
         "value_size_bytes": manifest.get("value_size_bytes"),
         "topology": manifest.get("topology"),
+        "client_path": client.get("path", "direct"),
         "gateway_runtime": gateway.get("runtime"),
         "connection_mode": gateway.get("connection_mode"),
     }

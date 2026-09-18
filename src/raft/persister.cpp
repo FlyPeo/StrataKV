@@ -174,6 +174,10 @@ Persister::Persister(const int me)
       m_snapshotFileName("run_data/snapshotPersist" + std::to_string(me) + ".txt"),
       m_raftStateSize(0) {
   std::filesystem::create_directories("run_data");
+  std::error_code pendingError;
+  std::filesystem::remove(m_raftStateFileName + ".pending", pendingError);
+  pendingError.clear();
+  std::filesystem::remove(m_snapshotFileName + ".pending", pendingError);
   bool fileOpenFlag = true;
   std::fstream file(m_raftStateFileName, std::ios::in);
   if (file.is_open()) {
@@ -201,11 +205,20 @@ Persister::Persister(const int me)
   m_snapshotOutStream.open(m_snapshotFileName, std::ios::out | std::ios::app);
 }
 
-Persister::Persister(const std::string& identity)
-    : m_raftStateFileName("run_data/raftstatePersist_" + identity + ".txt"),
-      m_snapshotFileName("run_data/snapshotPersist_" + identity + ".txt"),
+Persister::Persister(const std::string& identity) : Persister(identity, "run_data") {}
+
+Persister::Persister(const std::string& identity, const std::string& baseDirectory)
+    : m_raftStateFileName(baseDirectory + "/raftstatePersist_" + identity + ".txt"),
+      m_snapshotFileName(baseDirectory + "/snapshotPersist_" + identity + ".txt"),
       m_raftStateSize(0) {
-  std::filesystem::create_directories("run_data");
+  std::filesystem::create_directories(baseDirectory);
+  // A process can stop after staging either half of a snapshot publication.
+  // Pending files are never authoritative, so discard them before loading the
+  // last committed Raft state and snapshot pair.
+  std::error_code pendingError;
+  std::filesystem::remove(m_raftStateFileName + ".pending", pendingError);
+  pendingError.clear();
+  std::filesystem::remove(m_snapshotFileName + ".pending", pendingError);
   /**
    * 检查文件状态并在缺失时创建文件。
    * 注意：不能在构造时清空文件，否则节点重启时无法恢复已有持久化状态。

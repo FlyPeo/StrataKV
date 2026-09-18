@@ -49,6 +49,7 @@ class MprpcChannel : public google::protobuf::RpcChannel {
   Connection &PickConnection();
   bool EnsureConnected(Connection &connection, google::protobuf::RpcController *controller);
   bool SendAll(Connection &connection, const std::string &data, google::protobuf::RpcController *controller);
+  static bool WaitReadable(int fd, google::protobuf::RpcController *controller);
   void CloseConnection(Connection &connection);
   void MarkConnectionFailure(Connection &connection);
   bool TryStartReconnect(google::protobuf::RpcController *controller);

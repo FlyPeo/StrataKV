@@ -31,9 +31,16 @@ rules:
     - Include request and state-transition flows across Gateway, SDK/2PC, RPC, NodeServer, RegionPeer, Raft Apply, MVCC, and RocksDB as applicable.
     - State safety invariants, failure handling, observability, performance trade-offs, and rollback design.
   tasks:
-    - Separate implementation, unit tests, integration tests, performance comparison, and documentation tasks.
-    - Every task must name its verification method and avoid modifying unrelated dirty files.
-
+    #- Separate implementation, unit tests, integration tests, performance comparison, and documentation tasks.
+    #- Every task must name its verification method and avoid modifying unrelated dirty files.
+    - Use coarse-grained tasks representing meaningful engineering deliverables.
+    - A normal change should contain 3-8 tasks; exceed this only for genuinely independent subsystems.
+    - Do not create tasks for individual files, classes, functions, fields, or internal reasoning steps.
+    - Group implementation work that belongs to the same subsystem or code path.
+    - Group related unit and integration verification where practical instead of creating one task per scenario.
+    - Create performance-comparison tasks only when the change has an explicit performance goal or meaningful performance risk.
+    - Create documentation tasks only when user-facing, architectural, protocol, or operational documentation actually changes.
+    - Every task must state a concise verification method and must preserve unrelated dirty files.
 operations:
   apply:
     guidance:

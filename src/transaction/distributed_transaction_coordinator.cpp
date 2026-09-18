@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "bounded_thread_pool.h"
+#include "raft_mvcc_storage.h"
 #include "txn_2pc_failpoint.h"
 
 namespace {
@@ -169,7 +170,13 @@ TxnStatus DistributedTransactionCoordinator::Get(Transaction* txn, const std::st
   const TxnStatus active = CheckActiveAndDeadline(txn, options);
   if (active != TxnStatus::Ok) return active;
   // 普通 Get 始终保持 startTs 快照语义，不能通过非原子旧探针猜测锁状态。
-  return router_->Route(key)->Get(key, txn->StartTs(), value);
+  try {
+    return router_->Route(key)->Get(key, txn->StartTs(), value);
+  } catch (const std::out_of_range& error) {
+    std::cerr << "{\"trace\":\"get_route_failed\",\"start_ts\":" << txn->StartTs()
+              << ",\"what\":\"" << error.what() << "\"}" << std::endl;
+    throw;
+  }
 }
 
 BatchLockingReadResult DistributedTransactionCoordinator::AcquireKeys(
@@ -390,43 +397,73 @@ TxnStatus DistributedTransactionCoordinator::Commit(Transaction* txn,
       std::shared_ptr<MvccStorage> storage;
       std::vector<MvccMutation> mutations;
     };
-    std::unordered_map<int, size_t> batchPositions;
-    std::vector<MutationBatch> mutationBatches;
-    const auto appendMutation = [&](MvccMutation mutation) {
-      const int regionId = router_->RegionId(mutation.key);
-      auto inserted = batchPositions.emplace(regionId, mutationBatches.size());
-      if (inserted.second) mutationBatches.push_back({regionId, router_->Route(mutation.key), {}});
-      mutationBatches[inserted.first->second].mutations.push_back(std::move(mutation));
+    // One dispatch round: group by each key's current Region, issue one
+    // BatchPrewrite per Region, and report which mutations were rejected
+    // because a metadata refresh moved Region boundaries underneath them.
+    auto dispatchRound = [&](const std::vector<MvccMutation>& pending,
+                             std::vector<MvccMutation>* regroupPending) -> TxnStatus {
+      std::unordered_map<int, size_t> batchPositions;
+      std::vector<MutationBatch> mutationBatches;
+      for (const auto& mutation : pending) {
+        const int regionId = router_->RegionId(mutation.key);
+        auto inserted = batchPositions.emplace(regionId, mutationBatches.size());
+        if (inserted.second)
+          mutationBatches.push_back({regionId, router_->Route(mutation.key), {}});
+        mutationBatches[inserted.first->second].mutations.push_back(mutation);
+      }
+      std::sort(mutationBatches.begin(), mutationBatches.end(),
+                [](const MutationBatch& lhs, const MutationBatch& rhs) {
+                  return lhs.regionId < rhs.regionId;
+                });
+      std::vector<std::future<TxnStatus>> prewriteFutures;
+      prewriteFutures.reserve(mutationBatches.size());
+      for (auto& batch : mutationBatches) {
+        std::sort(batch.mutations.begin(), batch.mutations.end(),
+                  [](const MvccMutation& lhs, const MvccMutation& rhs) { return lhs.key < rhs.key; });
+        prewriteFutures.push_back(regionExecutor_->Submit(
+            [storage = batch.storage, mutations = batch.mutations, primaryKey,
+             startTs = txn->StartTs(), ttlMs = options.lockTtlMs,
+             forUpdateTs = txn->MaxForUpdateTs(), budgetMs = options.rpcBudgetMs]() {
+              return storage->BatchPrewrite(mutations, primaryKey, startTs, ttlMs,
+                                            forUpdateTs, budgetMs);
+            }));
+      }
+      TxnStatus roundStatus = TxnStatus::Ok;
+      for (size_t index = 0; index < mutationBatches.size(); ++index) {
+        const TxnStatus status = prewriteFutures[index].get();
+        if (status == TxnStatus::Ok) {
+          for (const auto& mutation : mutationBatches[index].mutations)
+            prewritten.push_back(mutation.key);
+          continue;
+        }
+        const auto remote =
+            std::dynamic_pointer_cast<RaftMvccStorage>(mutationBatches[index].storage);
+        if (remote != nullptr && remote->LastRegroupRequired() && regroupPending != nullptr) {
+          regroupPending->insert(regroupPending->end(),
+                                 mutationBatches[index].mutations.begin(),
+                                 mutationBatches[index].mutations.end());
+          continue;
+        }
+        if (roundStatus == TxnStatus::Ok) roundStatus = status;
+      }
+      return roundStatus;
     };
-    if (!HasMutation(*txn, primaryKey)) appendMutation({primaryKey, "", false, true});
+
+    std::vector<MvccMutation> pending;
+    if (!HasMutation(*txn, primaryKey)) pending.push_back({primaryKey, "", false, true});
     for (const auto& key : mutationKeys) {
       const TxnMutation& mutation = txn->Mutations().at(key);
-      appendMutation({key, mutation.value, mutation.isDelete, false});
+      pending.push_back({key, mutation.value, mutation.isDelete, false});
     }
-    std::sort(mutationBatches.begin(), mutationBatches.end(),
-              [](const MutationBatch& lhs, const MutationBatch& rhs) {
-                return lhs.regionId < rhs.regionId;
-              });
-    std::vector<std::future<TxnStatus>> prewriteFutures;
-    prewriteFutures.reserve(mutationBatches.size());
-    for (auto& batch : mutationBatches) {
-      std::sort(batch.mutations.begin(), batch.mutations.end(),
-                [](const MvccMutation& lhs, const MvccMutation& rhs) { return lhs.key < rhs.key; });
-      prewriteFutures.push_back(regionExecutor_->Submit(
-          [storage = batch.storage, mutations = batch.mutations, primaryKey,
-           startTs = txn->StartTs(), ttlMs = options.lockTtlMs,
-           forUpdateTs = txn->MaxForUpdateTs(), budgetMs = options.rpcBudgetMs]() {
-            return storage->BatchPrewrite(mutations, primaryKey, startTs, ttlMs,
-                                          forUpdateTs, budgetMs);
-          }));
-    }
-    for (size_t index = 0; index < mutationBatches.size(); ++index) {
-      const TxnStatus status = prewriteFutures[index].get();
-      if (status == TxnStatus::Ok) {
-        for (const auto& mutation : mutationBatches[index].mutations)
-          prewritten.push_back(mutation.key);
-      } else if (prewriteStatus == TxnStatus::Ok) {
-        prewriteStatus = status;
+    std::vector<MvccMutation> regroupPending;
+    prewriteStatus = dispatchRound(pending, &regroupPending);
+    // A refresh can split one batch across Regions. Regroup only the rejected
+    // mutations and retry once; keys already prewritten keep their locks and
+    // are never prewritten twice.
+    if (!regroupPending.empty()) {
+      const TxnStatus retryStatus = dispatchRound(regroupPending, nullptr);
+      if (prewriteStatus == TxnStatus::Ok) {
+        prewriteStatus = retryStatus;
       }
     }
   }
@@ -503,7 +540,7 @@ TxnStatus DistributedTransactionCoordinator::Commit(Transaction* txn,
            authoritative.state == TxnRecordState::NotFound)) {
         const uint64_t commitBudgetMs = RemainingBudgetMs(resolutionDeadline);
         if (commitBudgetMs == 0) break;
-        primaryStatus = primaryStorage->CommitWithBudget(
+        primaryStatus = router_->Route(primaryKey)->CommitWithBudget(
             primaryKey, txn->StartTs(), commitTs, commitBudgetMs);
         if (IsCommitSuccess(primaryStatus)) break;
       }
@@ -598,16 +635,18 @@ TxnStatus DistributedTransactionCoordinator::Rollback(Transaction* txn,
   if (txn->State() == TransactionState::ResultUnknown) {
     TxnRecordStatus authoritative;
     const TxnStatus query = QueryStatus(*txn, &authoritative, options);
-    if (query != TxnStatus::Ok ||
-        (authoritative.state != TxnRecordState::Committed &&
-         authoritative.state != TxnRecordState::RolledBack)) {
+    if (query != TxnStatus::Ok) {
       return TxnStatus::ResultUnknown;
+    }
+    TxnRecordState resolutionState = authoritative.state;
+    if (resolutionState == TxnRecordState::Locked || resolutionState == TxnRecordState::NotFound) {
+      resolutionState = TxnRecordState::RolledBack;
     }
     const std::vector<std::string> keys = CleanupKeys(*txn);
     TxnStatus resolved = TxnStatus::Ok;
     for (const auto& key : keys) {
       const TxnStatus status = router_->Route(key)->ResolveLock(
-          key, txn->StartTs(), authoritative.state, authoritative.commitTs);
+          key, txn->StartTs(), resolutionState, authoritative.commitTs);
       if (status != TxnStatus::Ok) resolved = TxnStatus::CleanupPending;
     }
     if (resolved != TxnStatus::Ok) {

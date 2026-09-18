@@ -138,7 +138,7 @@ def full_report(
         "- 每个性能点运行 3 次；表格同时保留三轮原值和中位数。单点样本少于 100,000 时，P99.9 不作为有效结论。",
         f"- 三轮吞吐偏离中位数超过 10% 的点：{len(unstable)} 个。" +
         (f" 例：{', '.join(unstable[:12])}。" if unstable else ""), "",
-        "## A1 Gateway/Direct 并发矩阵", "",
+        "## A1 直连 SDK 并发矩阵", "",
         "| Case | r1 OPS | r2 OPS | r3 OPS | median OPS | median P99 (us) | 状态 |",
         "|---|---:|---:|---:|---:|---:|---|",
     ]
@@ -292,7 +292,7 @@ def main() -> int:
         rows.append({
             "case_id": case_id,
             "subject": case.get("subject", "transaction" if case_id.startswith(("a2", "a3", "a4", "c1")) else "record"),
-            "path": case.get("path", "direct" if case_id.startswith(("a2", "a3", "a4")) else "gateway"),
+            "path": case.get("path", "direct"),
             "workers": case.get("workers", ""),
             "attempted": case.get("attempted", case.get("transactions_attempted", case.get("transactions_total", ""))),
             "successful": case.get("successful", case.get("transactions_committed", "")),
@@ -353,7 +353,7 @@ def main() -> int:
         f"- Git commit：`{manifest.get('git_commit', 'unknown')}`（dirty={manifest.get('git_dirty', True)}）",
         "- P99.9：本 smoke 单点样本少于 100,000，不作为有效结论。",
         "",
-        "## A1 Gateway 全链路单记录 OPS",
+        "## A1 直连 SDK 单记录 OPS",
         "",
         "| Workload | workers | successful OPS | P99 (us) | 原始文件 |",
         "|---|---:|---:|---:|---|",

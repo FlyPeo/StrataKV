@@ -54,7 +54,7 @@ class DistributedTransactionCoordinator {
   std::shared_ptr<ShardRouter> router_;
   std::shared_ptr<TimestampOracle> tso_;
   // Cross-Region RPC/storage work is blocking and therefore belongs on a
-  // bounded native executor, separate from Gateway network Fibers.
+  // bounded native executor; no RPC thread may block on it.
   std::unique_ptr<BoundedThreadPool> regionExecutor_;
   std::shared_ptr<LockResolver> lockResolver_;
   std::atomic<uint64_t> rollbackRegionCount_{0};

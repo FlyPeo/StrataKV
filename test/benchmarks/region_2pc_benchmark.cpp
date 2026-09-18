@@ -18,6 +18,9 @@
 
 #include "distributed_transaction_coordinator.h"
 #include "raft_mvcc_storage.h"
+#include "metadata_client.h"
+#include "region_cache.h"
+#include "region_request_sender.h"
 #include "region_metadata.h"
 #include "remote_timestamp_oracle.h"
 
@@ -26,6 +29,7 @@ namespace {
 struct Options {
   std::string regions;
   std::string tsoEndpoints;
+  std::string metadataEndpoints;
   std::string runId = "run";
   int workers = 4;
   int transactions = 20;
@@ -55,6 +59,7 @@ Options Parse(int argc, char** argv) {
     const std::string value = argv[++index];
     if (option == "--regions-config") options.regions = value;
     else if (option == "--tso-endpoints") options.tsoEndpoints = value;
+    else if (option == "--metadata-endpoints") options.metadataEndpoints = value;
     else if (option == "--run-id") options.runId = value;
     else if (option == "--workers") options.workers = Positive(value);
     else if (option == "--transactions") options.transactions = Positive(value);
@@ -88,6 +93,38 @@ long long Percentile(std::vector<long long> values, double percentile) {
   return values[static_cast<size_t>(percentile * static_cast<double>(values.size() - 1))];
 }
 
+// Dynamic topology router: one metadata scan bootstraps the Region cache and
+// every Region storage is created lazily with the shared request sender, so
+// retries, refreshes and regroup detection match the SDK client behavior.
+std::shared_ptr<ShardRouter> MakeDynamicRouter(const std::string& metadataEndpoints) {
+  MetadataClient metadata(metadataEndpoints);
+  uint64_t revision = 0;
+  const auto regions =
+      metadata.Scan("", 4096, std::chrono::steady_clock::now() + std::chrono::seconds(5),
+                    &revision);
+  auto cache = std::make_shared<RegionCache>(regions, revision);
+  auto channels = std::make_shared<RegionChannelPool>();
+  RegionCache::RefreshFunction refresh = [metadataEndpoints](
+                                             const std::string&,
+                                             RegionCache::Clock::time_point refreshDeadline) {
+    MetadataClient client(metadataEndpoints);
+    uint64_t refreshRevision = 0;
+    auto replacement =
+        client.Scan("", 4096, refreshDeadline, &refreshRevision);
+    return RegionCache::RefreshResult{std::move(replacement), refreshRevision};
+  };
+  auto sender = std::make_shared<RegionRequestSender>(cache, channels, std::move(refresh));
+  ShardRouter::StorageFactory factory =
+      [sender](const RegionMetadata& descriptor) -> std::shared_ptr<MvccStorage> {
+    std::vector<std::pair<std::string, short>> addresses;
+    for (const auto& peer : descriptor.peers) addresses.emplace_back(peer.host, peer.port);
+    auto storage = std::make_shared<RaftMvccStorage>(descriptor.regionId, addresses);
+    storage->AttachRequestSender(sender);
+    return storage;
+  };
+  return std::make_shared<ShardRouter>(cache, std::move(factory));
+}
+
 std::shared_ptr<ShardRouter> MakeRouter(const std::string& path) {
   const RegionCatalog catalog = RegionCatalog::LoadFromConfig(path);
   std::vector<ShardRouter::RegionRoute> routes;
@@ -109,7 +146,9 @@ int main(int argc, char** argv) {
       throw std::invalid_argument("Region catalog has fewer Regions than --region-count");
     }
     auto coordinator = std::make_shared<DistributedTransactionCoordinator>(
-        MakeRouter(options.regions), std::make_shared<RemoteTimestampOracle>(options.tsoEndpoints));
+        options.metadataEndpoints.empty() ? MakeRouter(options.regions)
+                                          : MakeDynamicRouter(options.metadataEndpoints),
+        std::make_shared<RemoteTimestampOracle>(options.tsoEndpoints));
     std::atomic<int> next{0};
     std::atomic<int> committed{0};
     std::atomic<int> failed{0};

@@ -1,5 +1,5 @@
 /*
- * 测试目标：声明 Direct SDK 与 Gateway 共用的事务 adapter 和 workload runner 边界。
+ * 测试目标：声明 Direct SDK 事务 adapter 和 workload runner 的边界。
  * 测试策略：每个 pthread worker 独占 adapter，公共 runner 以原子序号分配确定性 operation。
  * 测试规模：支持 smoke 1/8 workers、10,000 operations，也支持 full 的 32 workers。
  * 验证内容：由 workload_runner_check.cpp 验证事务调用顺序、重试计时、错误分类和线程无关序列。
@@ -57,7 +57,11 @@ using AdapterFactory = std::function<std::unique_ptr<ClientAdapter>()>;
 
 AdapterFactory DirectAdapterFactory(const std::string& regionsConfig,
                                     const std::string& tsoEndpoints);
-AdapterFactory GatewayAdapterFactory(const std::string& gateway, int timeoutMs);
+// Dynamic topology adapter: the client bootstraps its Region cache from the
+// metadata cluster instead of the static catalog. Warm-cache requests never
+// issue metadata RPCs.
+AdapterFactory DynamicDirectAdapterFactory(const std::string& metadataEndpoints,
+                                           const std::string& tsoEndpoints);
 std::vector<RegionRange> LoadRegionRanges(const std::string& regionsConfig);
 
 RunSummary LoadRecords(const WorkloadSpec& spec, const RegionKeyCodec& keys,

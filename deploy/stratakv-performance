@@ -19,8 +19,11 @@ Options:
   --run-id ID          Result directory name. Default: smoke-YYYYmmdd-HHMMSS.
   --project NAME       Scoped runtime project. Default: perf-<run-id>.
   --result-dir PATH    Default: test-results/performance/<run-id>.
-  --gateway-port PORT  Default: 18180.
   --tso-port PORT      First of three TSO ports. Default: 26480.
+  --topology-mode MODE static (default) or dynamic (metadata-routed clients
+                        and nodes; the metadata cluster bootstraps from the
+                        generated regions.conf).
+  --metadata-port PORT First of three metadata ports. Default: 26580.
   --no-build           Reuse current Release binaries.
 
 All profiles produce their result files below
@@ -44,8 +47,9 @@ profile=interview-smoke
 run_id="smoke-$(date +%Y%m%d-%H%M%S)"
 project=
 result_dir=
-gateway_port=18180
 tso_port=26480
+topology_mode=static
+metadata_port=26580
 build_enabled=true
 
 while [ "$#" -gt 0 ]; do
@@ -54,8 +58,14 @@ while [ "$#" -gt 0 ]; do
     --run-id) run_id=${2:?--run-id requires a value}; shift 2 ;;
     --project) project=${2:?--project requires a value}; shift 2 ;;
     --result-dir) result_dir=${2:?--result-dir requires a value}; shift 2 ;;
-    --gateway-port) gateway_port=${2:?--gateway-port requires a value}; shift 2 ;;
     --tso-port) tso_port=${2:?--tso-port requires a value}; shift 2 ;;
+    --topology-mode)
+      case "$2" in
+        static|dynamic) topology_mode=$2 ;;
+        *) echo "--topology-mode must be static or dynamic" >&2; exit 2 ;;
+      esac
+      shift 2 ;;
+    --metadata-port) metadata_port=${2:?--metadata-port requires a value}; shift 2 ;;
     --no-build) build_enabled=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -69,7 +79,7 @@ case "$profile" in
   interview-smoke|interview-full|interview-full-10pct) ;;
   *) echo "--profile must be interview-smoke, interview-full, or interview-full-10pct." >&2; exit 2 ;;
 esac
-for numeric in "$gateway_port" "$tso_port"; do
+for numeric in "$tso_port"; do
   case "$numeric" in ''|*[!0-9]*|0) echo "Ports must be positive integers." >&2; exit 2 ;; esac
 done
 [ -n "$result_dir" ] || result_dir="${repo_dir}/test-results/performance/${run_id}"
@@ -82,7 +92,6 @@ runtime_dir="${deploy_dir}/runtime/${project}"
 checkpoint_project="${project}-checkpoint"
 stale_runtime_dirs=""
 checkpoint_dir="${deploy_dir}/runtime/${checkpoint_project}"
-gateway="http://127.0.0.1:${gateway_port}"
 tso_endpoints="127.0.0.1:${tso_port},127.0.0.1:$((tso_port + 1)),127.0.0.1:$((tso_port + 2))"
 regions_file="${runtime_dir}/regions.conf"
 cluster_may_be_running=false
@@ -100,7 +109,7 @@ print_plan() {
     cat <<'EOF'
 profile=interview-full status=implemented
 load=100000x1024B
-a1=gateway-uniform-A/B/C/F@1/4/8/16/32,gateway-zipfian-A/B@8,direct-uniform-A/C@8;20000opsx3
+a1=direct-uniform-A/B/C/F@1/4/8/16/32,direct-zipfian-A/B@8,direct-uniform-A/C@8;20000opsx3
 a2=cross-region-ratio-0/15/100;10000txx3
 a3=regions-1/2/3;10000txx3
 a4=optimistic/pessimisticx0/5/20;5000txx3
@@ -110,7 +119,7 @@ EOF
     cat <<'EOF'
 profile=interview-full-10pct status=implemented
 load=10000x1024B
-a1=gateway-uniform-A/B/C/F@1/4/8/16/32,gateway-zipfian-A/B@8,direct-uniform-A/C@8;2000opsx3
+a1=direct-uniform-A/B/C/F@1/4/8/16/32,direct-zipfian-A/B@8,direct-uniform-A/C@8;2000opsx3
 a2=cross-region-ratio-0/15/100;1000txx3
 a3=regions-1/2/3;1000txx3
 a4=optimistic/pessimisticx0/5/20;500txx3
@@ -120,7 +129,7 @@ EOF
     cat <<'EOF'
 profile=interview-smoke status=implemented
 load=3000x256B
-a1=gateway-uniform-A/C@1/8;10000opsx1
+a1=direct-uniform-A/C@1/8;10000opsx1
 a2=cross-region-ratio-0/100;1000txx1
 a3=regions-1/3;1000txx1
 a4=optimistic/pessimisticx0/20;1000txx1
@@ -186,7 +195,7 @@ build_programs() {
   [ "$build_enabled" = true ] || return 0
   cmake --preset release
   cmake --build --preset release -j"$(nproc)" --target \
-    stratakv-node stratakv-tso stratakv-admin stratakv-gateway \
+    stratakv-node stratakv-tso stratakv-admin \
     stratakv-test-kv-workload stratakv-test-region-2pc-benchmark \
     stratakv-test-txn-contention stratakv-test-reliability stratakv-test-b3-recovery-check
 }
@@ -195,8 +204,9 @@ start_cluster() {
   cluster_may_be_running=true
   bash "${deploy_dir}/stratakv-server" up \
     --project "$project" --nodes 3 --replicas 3 \
-    --gateway-port "$gateway_port" --tso-port "$tso_port" \
-    --gateway-runtime fiber --gateway-workers 4 --gateway-request-workers 16 --no-build
+    --tso-port "$tso_port" \
+    --topology-mode "$topology_mode" --metadata-port "$metadata_port" \
+    --no-build
 }
 
 init_run() {
@@ -210,10 +220,10 @@ init_run() {
   git_commit=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || echo unknown)
   if [ -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null)" ]; then git_dirty=true; else git_dirty=false; fi
   python3 - "$result_dir" "$run_id" "$project" "$profile" "$git_commit" "$git_dirty" \
-    "$gateway_port" "$tso_port" <<'PY'
+    "$tso_port" <<'PY'
 import json, os, platform, sys
 from pathlib import Path
-root, run_id, project, profile, commit, dirty, gateway_port, tso_port = sys.argv[1:]
+root, run_id, project, profile, commit, dirty, tso_port = sys.argv[1:]
 manifest = {
     "schema_version": 1,
     "state": "incomplete",
@@ -227,8 +237,8 @@ manifest = {
     "build_type": "Release",
     "os": platform.platform(),
     "cpu_count": os.cpu_count(),
-    "topology": {"gateway": 1, "tso": 3, "nodes": 3, "regions": 3, "replicas_per_region": 3},
-    "gateway": {"url": f"http://127.0.0.1:{gateway_port}", "runtime": "fiber", "connection_mode": "close"},
+    "topology": {"tso": 3, "nodes": 3, "regions": 3, "replicas_per_region": 3},
+    "client": {"path": "direct", "sdk": "native-cpp"},
     "tso_first_port": int(tso_port),
     "record_count": 100000 if profile == "interview-full" else 10000 if profile == "interview-full-10pct" else 3000,
     "value_size_bytes": 1024 if profile in ("interview-full", "interview-full-10pct") else 256,
@@ -255,7 +265,6 @@ capture_metrics() {
   target="${result_dir}/metrics/${case_id}-${phase}"
   mkdir -p "$target"
   bash "${deploy_dir}/stratakv-server" status --project "$project" >"${target}/cluster-status.txt" 2>&1 || true
-  curl -fsS "${gateway}/metrics" >"${target}/gateway.prom" 2>/dev/null || true
   if [ -d "${runtime_dir}/pids" ]; then
     for pid_file in "${runtime_dir}"/pids/*.pid; do
       [ -f "$pid_file" ] || continue
@@ -272,6 +281,12 @@ capture_metrics() {
   find "${runtime_dir}" -path '*/run_data/*.json' -type f -exec cp -t "$target" {} + 2>/dev/null || true
 }
 
+metadata_driver_args() {
+  if [ "$topology_mode" = "dynamic" ]; then
+    printf '%s' "--metadata-endpoints 127.0.0.1:${metadata_port},127.0.0.1:$((metadata_port + 1)),127.0.0.1:$((metadata_port + 2))"
+  fi
+}
+
 workload_common() {
   local records=3000
   local val_size=256
@@ -283,8 +298,8 @@ workload_common() {
     val_size=1024
   fi
   printf '%s\n' \
-    --path gateway --gateway "$gateway" --regions-config "$regions_file" \
-    --tso-endpoints "$tso_endpoints" --profile "$profile" --run-id "$run_id" \
+    --path direct --regions-config "$regions_file" \
+    --tso-endpoints "$tso_endpoints" $(metadata_driver_args) --profile "$profile" --run-id "$run_id" \
     --records "$records" --value-size "$val_size" --seed 20260904 --timeout-ms 180000
 }
 
@@ -475,17 +490,17 @@ run_performance() {
         run_json_case "a1-zipfian-${wl}-w8-r${rep}" --workload "$wl" --distribution zipfian --workers 8 --operations "$a1_ops" --max-attempts 1
       done
       for wl in A C; do
-        run_json_case "a1-direct-${wl}-w8-r${rep}" --path direct --workload "$wl" --distribution uniform --workers 8 --operations "$a1_ops" --max-attempts 1
+        run_json_case "a1-direct-${wl}-w8-r${rep}" --workload "$wl" --distribution uniform --workers 8 --operations "$a1_ops" --max-attempts 1
       done
       for ratio in 0 15 100; do
         run_log_case a2 "a2-cross-${ratio}-r${rep}" "${repo_dir}/bin/stratakv-test-region-2pc-benchmark" \
-          --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+          --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" $(metadata_driver_args) \
           --run-id "${run_id}-a2-${ratio}-r${rep}" --workers 8 --transactions "$a2a3_tx" \
           --keys-per-transaction 3 --cross-percent "$ratio"
       done
       for regions in 1 2 3; do
         run_log_case a3 "a3-regions-${regions}-r${rep}" "${repo_dir}/bin/stratakv-test-region-2pc-benchmark" \
-          --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+          --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" $(metadata_driver_args) \
           --run-id "${run_id}-a3-${regions}-r${rep}" --workers 8 --transactions "$a2a3_tx" \
           --keys-per-transaction 3 --region-count "$regions"
       done
@@ -494,7 +509,7 @@ run_performance() {
           local hot_keys=0
           if [ "$share" -gt 0 ]; then hot_keys=8; fi
           run_log_case a4 "a4-${mode}-${share}-r${rep}" "${repo_dir}/bin/stratakv-test-txn-contention" \
-            --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+            --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" $(metadata_driver_args) \
             --run-id "${run_id}-a4-${mode}-${share}-r${rep}" --workers 16 --transactions "$a4_tx" \
             --hot-key-count "$hot_keys" --hot-percent "$share" --keys-per-region 1 \
             --max-attempts 3 --retry-delay-ms 10 --workload "${mode}-contention"
@@ -511,13 +526,13 @@ run_performance() {
 
   for ratio in 0 100; do
     run_log_case a2 "a2-cross-${ratio}" "${repo_dir}/bin/stratakv-test-region-2pc-benchmark" \
-      --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+      --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" $(metadata_driver_args) \
       --run-id "${run_id}-a2-${ratio}" --workers 8 --transactions 1000 \
       --keys-per-transaction 3 --cross-percent "$ratio"
   done
   for regions in 1 3; do
     run_log_case a3 "a3-regions-${regions}" "${repo_dir}/bin/stratakv-test-region-2pc-benchmark" \
-      --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+      --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" $(metadata_driver_args) \
       --run-id "${run_id}-a3-${regions}" --workers 8 --transactions 1000 \
       --keys-per-transaction 3 --region-count "$regions"
   done
@@ -525,7 +540,7 @@ run_performance() {
     for share in 0 20; do
       if [ "$share" -eq 0 ]; then hot_keys=0; else hot_keys=8; fi
       run_log_case a4 "a4-${mode}-${share}" "${repo_dir}/bin/stratakv-test-txn-contention" \
-        --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" \
+        --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" $(metadata_driver_args) \
         --run-id "${run_id}-a4-${mode}-${share}" --workers 16 --transactions 1000 \
         --hot-key-count "$hot_keys" --hot-percent "$share" --keys-per-region 1 \
         --max-attempts 3 --retry-delay-ms 10 --workload "${mode}-contention"
@@ -599,8 +614,9 @@ run_b1() {
   workload_log="${result_dir}/faults/b1-workload.log"
   history="${result_dir}/histories/b1-history.jsonl"
   "${repo_dir}/bin/stratakv-test-reliability" \
-    --gateway "$gateway" --transactions 1000 --workers 8 --retries 20 \
-    --retry-delay-ms 100 --timeout-ms 180000 --run-id "${run_id}-b1" \
+    --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" $(metadata_driver_args) \
+    --transactions 1000 --workers 8 --retries 25 \
+    --retry-delay-ms 150 --timeout-ms 180000 --run-id "${run_id}-b1" \
     --history "$history" >"$workload_log" 2>&1 &
   workload_pid=$!
   sleep 1
@@ -631,8 +647,10 @@ run_b1() {
   set -e
   verify_status=0
   "${repo_dir}/bin/stratakv-test-reliability" --verify-only \
-    --gateway "$gateway" --transactions 1000 --workers 8 --retries 20 \
-    --retry-delay-ms 100 --timeout-ms 180000 --run-id "${run_id}-b1" \
+    --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" $(metadata_driver_args) \
+    --transactions 1000 --workers 8 --retries 25 \
+    --retry-delay-ms 150 --timeout-ms 180000 --run-id "${run_id}-b1" \
+    --verify-from "$history" \
     --history "${result_dir}/histories/b1-after-rejoin.jsonl" \
     >"${result_dir}/faults/b1-after-rejoin.log" 2>&1 || verify_status=$?
   convergence_status=0
@@ -646,8 +664,10 @@ run_b1() {
   start_cluster || true
   persistence_status=0
   "${repo_dir}/bin/stratakv-test-reliability" --verify-only \
-    --gateway "$gateway" --transactions 1000 --workers 8 --retries 20 \
-    --retry-delay-ms 100 --timeout-ms 180000 --run-id "${run_id}-b1" \
+    --regions-config "$regions_file" --tso-endpoints "$tso_endpoints" $(metadata_driver_args) \
+    --transactions 1000 --workers 8 --retries 25 \
+    --retry-delay-ms 150 --timeout-ms 180000 --run-id "${run_id}-b1" \
+    --verify-from "$history" \
     --history "${result_dir}/histories/b1-after-full-restart.jsonl" \
     >"${result_dir}/faults/b1-after-full-restart.log" 2>&1 || persistence_status=$?
   capture_metrics b1 after
@@ -756,7 +776,7 @@ from pathlib import Path
 repo, root = map(Path, sys.argv[1:])
 path = root / 'manifest.json'
 manifest = json.loads(path.read_text())
-names = ['stratakv-node', 'stratakv-tso', 'stratakv-gateway', 'stratakv-test-kv-workload',
+names = ['stratakv-node', 'stratakv-tso', 'stratakv-test-kv-workload',
          'stratakv-test-region-2pc-benchmark', 'stratakv-test-txn-contention',
          'stratakv-test-reliability', 'stratakv-test-b3-recovery-check']
 manifest['binary_sha256'] = {name: hashlib.sha256((repo / 'bin' / name).read_bytes()).hexdigest() for name in names}
@@ -778,6 +798,7 @@ PY
     ;;
   prepare) init_run; build_programs; prepare_suite ;;
   run) run_performance ;;
+  b1) run_b1 ;;
   fault) run_b1; run_b3 ;;
   check) run_checks ;;
   report) report_suite ;;

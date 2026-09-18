@@ -5,8 +5,13 @@
 #include <vector>
 
 #include "distributed_transaction_coordinator.h"
+#include "metadata_client.h"
 #include "raft_mvcc_storage.h"
+#include "region_cache.h"
+#include "region_channel_pool.h"
+#include "region_request_sender.h"
 #include "remote_timestamp_oracle.h"
+#include "topology_config.h"
 #include "region_metadata.h"
 #include "shard_router.h"
 
@@ -50,6 +55,11 @@ TransactionRecordState ToPublicRecordState(TxnRecordState state) {
 
 struct Client::Impl {
   std::shared_ptr<DistributedTransactionCoordinator> coordinator;
+  // Dynamic mode owns the routing state that the router's storages and the
+  // request sender share; keeping them here pins their lifetime to the client.
+  std::shared_ptr<RegionCache> cache;
+  std::shared_ptr<RegionChannelPool> channels;
+  std::shared_ptr<RegionRequestSender> sender;
 };
 
 struct Transaction::Impl {
@@ -97,7 +107,85 @@ std::shared_ptr<Client> Client::Connect(const std::string& regionConfigPath,
 
 std::shared_ptr<Client> Client::Connect(const std::string& regionConfigPath,
                                         const std::string& tsoEndpoints) {
-  const RegionCatalog catalog = RegionCatalog::LoadFromConfig(regionConfigPath);
+  ConnectionOptions options;
+  options.regionConfigPath = regionConfigPath;
+  options.tsoEndpoints = tsoEndpoints;
+  return Connect(options);
+}
+
+std::shared_ptr<Client> Client::Connect(const ConnectionOptions& options) {
+  TopologyConfig topology;
+  topology.mode = options.topologyMode == TopologyMode::kDynamic
+                      ? ::TopologyMode::Dynamic
+                      : ::TopologyMode::Static;
+  topology.regionConfigPath = options.regionConfigPath;
+  topology.metadataEndpoints = options.metadataEndpoints;
+  topology.metadataTimeout = std::chrono::milliseconds(options.metadataTimeoutMs);
+  topology.Validate(false);
+  auto impl = std::make_shared<Impl>();
+  if (topology.mode == ::TopologyMode::Dynamic) {
+    // Dynamic mode never falls back to regions.conf: the client caches one
+    // validated metadata revision and refreshes ranges on demand.
+    MetadataClient metadata(topology.metadataEndpoints);
+    uint64_t revision = 0;
+    const auto deadline = std::chrono::steady_clock::now() + topology.metadataTimeout;
+    std::vector<RegionMetadata> regions = metadata.Scan("", 4096, deadline, &revision);
+    if (regions.empty() || revision == 0) {
+      throw std::runtime_error("metadata returned no Region view");
+    }
+    impl->cache = std::make_shared<RegionCache>(regions, revision);
+    impl->channels = std::make_shared<RegionChannelPool>();
+    const std::string endpoints = topology.metadataEndpoints;
+    const auto timeout = topology.metadataTimeout;
+    RegionCache::RefreshFunction routerRefresh;
+    RegionCache::RefreshFunction refresh = [endpoints, timeout](const std::string& startKey,
+                                                                RegionCache::Clock::time_point
+                                                                    refreshDeadline) {
+      MetadataClient client(endpoints);
+      uint64_t refreshRevision = 0;
+      (void)startKey;
+      // A full scan keeps the replacement exactly aligned with the cached
+      // keyspace, which is what the cache requires of an interval refresh.
+      auto replacement = client.Scan("", 4096, refreshDeadline, &refreshRevision);
+      return RegionCache::RefreshResult{std::move(replacement), refreshRevision};
+    };
+    impl->sender =
+        std::make_shared<RegionRequestSender>(impl->cache, impl->channels, std::move(refresh));
+    // The router shares one refresh path with the sender: coordinator-level
+    // lookups can then recover an invalidated Region instead of failing fast.
+    routerRefresh = impl->sender->RefreshFunctionForRouter();
+    impl->sender->SetLogSink([](const std::string& event, int regionId, uint64_t epochVersion,
+                                uint64_t metadataRevision, const char* cause, int attempts) {
+      std::cerr << "{\"sdk_event\":\"" << event << "\",\"region\":" << regionId
+                << ",\"cause\":\"" << cause << "\",\"attempts\":" << attempts << "}"
+                << std::endl;
+    });
+    // Structured routing diagnostics: Region id, epoch, revision and cause
+    // only, never keys, values or transaction payloads.
+    impl->sender->SetLogSink([](const std::string& event, int regionId, uint64_t epochVersion,
+                                uint64_t metadataRevision, const char* cause, int attempts) {
+      if (std::string(event).find("enter") != std::string::npos) return;
+      std::cerr << "{\"level\":\"info\",\"component\":\"sdk\",\"event\":\"" << event
+                << "\",\"region_id\":" << regionId << ",\"epoch_version\":" << epochVersion
+                << ",\"metadata_revision\":" << metadataRevision << ",\"cause\":\"" << cause
+                << "\",\"attempts\":" << attempts << "}" << std::endl;
+    });
+    std::shared_ptr<RegionRequestSender> sender = impl->sender;
+    ShardRouter::StorageFactory factory =
+        [sender](const RegionMetadata& descriptor) -> std::shared_ptr<MvccStorage> {
+      std::vector<std::pair<std::string, short>> addresses;
+      addresses.reserve(descriptor.peers.size());
+      for (const auto& peer : descriptor.peers) addresses.emplace_back(peer.host, peer.port);
+      auto storage = std::make_shared<RaftMvccStorage>(descriptor.regionId, addresses);
+      storage->AttachRequestSender(sender);
+      return storage;
+    };
+    impl->coordinator = std::make_shared<DistributedTransactionCoordinator>(
+        std::make_shared<ShardRouter>(impl->cache, std::move(factory), routerRefresh),
+        std::make_shared<RemoteTimestampOracle>(options.tsoEndpoints));
+    return std::shared_ptr<Client>(new Client(std::move(impl)));
+  }
+  const RegionCatalog catalog = RegionCatalog::LoadFromConfig(options.regionConfigPath);
   std::vector<ShardRouter::RegionRoute> routes;
   routes.reserve(catalog.Regions().size());
   for (const auto& region : catalog.Regions()) {
@@ -107,16 +195,19 @@ std::shared_ptr<Client> Client::Connect(const std::string& regionConfigPath,
     routes.push_back({region, std::make_shared<RaftMvccStorage>(region.regionId, endpoints)});
   }
 
-  auto impl = std::make_shared<Impl>();
   impl->coordinator = std::make_shared<DistributedTransactionCoordinator>(
       std::make_shared<ShardRouter>(std::move(routes)),
-      std::make_shared<RemoteTimestampOracle>(tsoEndpoints));
+      std::make_shared<RemoteTimestampOracle>(options.tsoEndpoints));
   return std::shared_ptr<Client>(new Client(std::move(impl)));
 }
 
-std::shared_ptr<Transaction> Client::Begin(uint64_t lockTtlMs) {
+std::shared_ptr<Transaction> Client::Begin(uint64_t lockTtlMs, uint64_t rpcBudgetMs) {
   TxnOptions options;
   options.lockTtlMs = lockTtlMs;
+  if (rpcBudgetMs != 0) options.rpcBudgetMs = rpcBudgetMs;
+  if (options.lockTtlMs <= options.transactionTimeoutMs) {
+    options.transactionTimeoutMs = options.lockTtlMs > 1000 ? options.lockTtlMs - 1000 : options.lockTtlMs / 2;
+  }
   return std::shared_ptr<Transaction>(new Transaction(std::make_shared<Transaction::Impl>(impl_->coordinator->Begin(), options)));
 }
 
@@ -135,14 +226,20 @@ Result Client::Get(const std::shared_ptr<Transaction>& transaction, const std::s
     result.primaryKey = transaction->impl_->transaction.PrimaryKey();
     return result;
   }
-  std::string value;
-  const TxnStatus status = impl_->coordinator->Get(&transaction->impl_->transaction, key, &value, transaction->impl_->options);
-  Result result = FromTxnStatus(status);
-  result.value = std::move(value);
-  result.found = status == TxnStatus::Ok;
-  result.startTimestamp = transaction->impl_->transaction.StartTs();
-  result.primaryKey = transaction->impl_->transaction.PrimaryKey();
-  return result;
+  try {
+    std::string value;
+    const TxnStatus status = impl_->coordinator->Get(&transaction->impl_->transaction, key, &value, transaction->impl_->options);
+    Result result = FromTxnStatus(status);
+    result.value = std::move(value);
+    result.found = status == TxnStatus::Ok;
+    result.startTimestamp = transaction->impl_->transaction.StartTs();
+    result.primaryKey = transaction->impl_->transaction.PrimaryKey();
+    return result;
+  } catch (const std::exception& error) {
+    Result result{Status::kUnavailable, {}, error.what()};
+    result.retryable = true;
+    return result;
+  }
 }
 
 Result Client::GetForUpdate(const std::shared_ptr<Transaction>& transaction,
@@ -151,13 +248,19 @@ Result Client::GetForUpdate(const std::shared_ptr<Transaction>& transaction,
       key.empty()) {
     return {Status::kInvalidTransaction, {}, "transaction is not active or key is empty"};
   }
-  const PessimisticLockResult locked =
-      impl_->coordinator->GetForUpdate(&transaction->impl_->transaction, key, transaction->impl_->options);
-  Result result = FromTxnStatus(locked.status, locked.value);
-  result.found = locked.found;
-  result.startTimestamp = transaction->impl_->transaction.StartTs();
-  result.primaryKey = transaction->impl_->transaction.PrimaryKey();
-  return result;
+  try {
+    const PessimisticLockResult locked =
+        impl_->coordinator->GetForUpdate(&transaction->impl_->transaction, key, transaction->impl_->options);
+    Result result = FromTxnStatus(locked.status, locked.value);
+    result.found = locked.found;
+    result.startTimestamp = transaction->impl_->transaction.StartTs();
+    result.primaryKey = transaction->impl_->transaction.PrimaryKey();
+    return result;
+  } catch (const std::exception& error) {
+    Result result{Status::kUnavailable, {}, error.what()};
+    result.retryable = true;
+    return result;
+  }
 }
 
 BatchResult Client::BatchGetForUpdate(const std::shared_ptr<Transaction>& transaction,
@@ -168,22 +271,29 @@ BatchResult Client::BatchGetForUpdate(const std::shared_ptr<Transaction>& transa
     result.message = "transaction is not active";
     return result;
   }
-  BatchLockingReadResult locked =
-      impl_->coordinator->BatchGetForUpdate(&transaction->impl_->transaction, keys, transaction->impl_->options);
-  result.status = ToPublicStatus(locked.status);
-  result.message = StatusName(result.status);
-  result.retryable = locked.status == TxnStatus::LockConflict ||
-                     locked.status == TxnStatus::WriteConflict || locked.status == TxnStatus::Timeout;
-  if (locked.status != TxnStatus::Ok) return result;
-  result.values.reserve(locked.values.size());
-  for (auto& item : locked.values) {
-    Result value = FromTxnStatus(item.second.status, std::move(item.second.value));
-    value.found = item.second.found;
-    value.startTimestamp = transaction->impl_->transaction.StartTs();
-    value.primaryKey = transaction->impl_->transaction.PrimaryKey();
-    result.values.emplace_back(std::move(item.first), std::move(value));
+  try {
+    BatchLockingReadResult locked =
+        impl_->coordinator->BatchGetForUpdate(&transaction->impl_->transaction, keys, transaction->impl_->options);
+    result.status = ToPublicStatus(locked.status);
+    result.message = StatusName(result.status);
+    result.retryable = locked.status == TxnStatus::LockConflict ||
+                       locked.status == TxnStatus::WriteConflict || locked.status == TxnStatus::Timeout;
+    if (locked.status != TxnStatus::Ok) return result;
+    result.values.reserve(locked.values.size());
+    for (auto& item : locked.values) {
+      Result value = FromTxnStatus(item.second.status, std::move(item.second.value));
+      value.found = item.second.found;
+      value.startTimestamp = transaction->impl_->transaction.StartTs();
+      value.primaryKey = transaction->impl_->transaction.PrimaryKey();
+      result.values.emplace_back(std::move(item.first), std::move(value));
+    }
+    return result;
+  } catch (const std::exception& error) {
+    result.status = Status::kUnavailable;
+    result.message = error.what();
+    result.retryable = true;
+    return result;
   }
-  return result;
 }
 
 Result Client::LockKeys(const std::shared_ptr<Transaction>& transaction,
@@ -191,57 +301,87 @@ Result Client::LockKeys(const std::shared_ptr<Transaction>& transaction,
   if (transaction == nullptr || transaction->impl_ == nullptr || transaction->impl_->finished) {
     return {Status::kInvalidTransaction, {}, "transaction is not active"};
   }
-  Result result =
-      FromTxnStatus(impl_->coordinator->LockKeys(&transaction->impl_->transaction, keys, transaction->impl_->options));
-  result.startTimestamp = transaction->impl_->transaction.StartTs();
-  result.primaryKey = transaction->impl_->transaction.PrimaryKey();
-  return result;
+  try {
+    Result result =
+        FromTxnStatus(impl_->coordinator->LockKeys(&transaction->impl_->transaction, keys, transaction->impl_->options));
+    result.startTimestamp = transaction->impl_->transaction.StartTs();
+    result.primaryKey = transaction->impl_->transaction.PrimaryKey();
+    return result;
+  } catch (const std::exception& error) {
+    Result result{Status::kUnavailable, {}, error.what()};
+    result.retryable = true;
+    return result;
+  }
 }
 
 Result Client::Put(const std::shared_ptr<Transaction>& transaction, const std::string& key, const std::string& value) {
   if (transaction == nullptr || transaction->impl_ == nullptr || transaction->impl_->finished || key.empty()) {
     return {Status::kInvalidTransaction, {}, "transaction is not active or key is empty"};
   }
-  const TxnStatus active = impl_->coordinator->Validate(&transaction->impl_->transaction, transaction->impl_->options);
-  if (active != TxnStatus::Ok) return FromTxnStatus(active);
-  transaction->impl_->transaction.Put(key, value);
-  return {Status::kOk, {}, "OK"};
+  try {
+    const TxnStatus active = impl_->coordinator->Validate(&transaction->impl_->transaction, transaction->impl_->options);
+    if (active != TxnStatus::Ok) return FromTxnStatus(active);
+    transaction->impl_->transaction.Put(key, value);
+    return {Status::kOk, {}, "OK"};
+  } catch (const std::exception& error) {
+    Result result{Status::kUnavailable, {}, error.what()};
+    result.retryable = true;
+    return result;
+  }
 }
 
 Result Client::Delete(const std::shared_ptr<Transaction>& transaction, const std::string& key) {
   if (transaction == nullptr || transaction->impl_ == nullptr || transaction->impl_->finished || key.empty()) {
     return {Status::kInvalidTransaction, {}, "transaction is not active or key is empty"};
   }
-  const TxnStatus active = impl_->coordinator->Validate(&transaction->impl_->transaction, transaction->impl_->options);
-  if (active != TxnStatus::Ok) return FromTxnStatus(active);
-  transaction->impl_->transaction.Delete(key);
-  return {Status::kOk, {}, "OK"};
+  try {
+    const TxnStatus active = impl_->coordinator->Validate(&transaction->impl_->transaction, transaction->impl_->options);
+    if (active != TxnStatus::Ok) return FromTxnStatus(active);
+    transaction->impl_->transaction.Delete(key);
+    return {Status::kOk, {}, "OK"};
+  } catch (const std::exception& error) {
+    Result result{Status::kUnavailable, {}, error.what()};
+    result.retryable = true;
+    return result;
+  }
 }
 
 Result Client::Commit(const std::shared_ptr<Transaction>& transaction) {
   if (transaction == nullptr || transaction->impl_ == nullptr || transaction->impl_->finished) {
     return {Status::kInvalidTransaction, {}, "transaction is not active"};
   }
-  const TxnStatus status = impl_->coordinator->Commit(&transaction->impl_->transaction, transaction->impl_->options);
-  transaction->impl_->finished =
-      transaction->impl_->transaction.State() == TransactionState::Finished;
-  Result result = FromTxnStatus(status);
-  result.startTimestamp = transaction->impl_->transaction.StartTs();
-  result.primaryKey = transaction->impl_->transaction.PrimaryKey();
-  return result;
+  try {
+    const TxnStatus status = impl_->coordinator->Commit(&transaction->impl_->transaction, transaction->impl_->options);
+    transaction->impl_->finished =
+        transaction->impl_->transaction.State() == TransactionState::Finished;
+    Result result = FromTxnStatus(status);
+    result.startTimestamp = transaction->impl_->transaction.StartTs();
+    result.primaryKey = transaction->impl_->transaction.PrimaryKey();
+    return result;
+  } catch (const std::exception& error) {
+    Result result{Status::kUnavailable, {}, error.what()};
+    result.retryable = true;
+    return result;
+  }
 }
 
 Result Client::Rollback(const std::shared_ptr<Transaction>& transaction) {
   if (transaction == nullptr || transaction->impl_ == nullptr || transaction->impl_->finished) {
     return {Status::kInvalidTransaction, {}, "transaction is not active"};
   }
-  const TxnStatus status = impl_->coordinator->Rollback(&transaction->impl_->transaction, transaction->impl_->options);
-  transaction->impl_->finished =
-      transaction->impl_->transaction.State() == TransactionState::Finished;
-  Result result = FromTxnStatus(status);
-  result.startTimestamp = transaction->impl_->transaction.StartTs();
-  result.primaryKey = transaction->impl_->transaction.PrimaryKey();
-  return result;
+  try {
+    const TxnStatus status = impl_->coordinator->Rollback(&transaction->impl_->transaction, transaction->impl_->options);
+    transaction->impl_->finished =
+        transaction->impl_->transaction.State() == TransactionState::Finished;
+    Result result = FromTxnStatus(status);
+    result.startTimestamp = transaction->impl_->transaction.StartTs();
+    result.primaryKey = transaction->impl_->transaction.PrimaryKey();
+    return result;
+  } catch (const std::exception& error) {
+    Result result{Status::kUnavailable, {}, error.what()};
+    result.retryable = true;
+    return result;
+  }
 }
 
 TransactionStatusResult Client::QueryTransactionStatus(
@@ -265,7 +405,16 @@ TransactionStatusResult Client::QueryTransactionStatus(
 
 ClientMetrics Client::Metrics() const {
   const DistributedTxnMetrics metrics = impl_->coordinator->Metrics();
-  return {metrics.rollbackRegionCount};
+  ClientMetrics result;
+  result.rollbackRegionCount = metrics.rollbackRegionCount;
+  if (impl_->sender) {
+    const auto senderMetrics = impl_->sender->Metrics();
+    result.epochRefreshes = senderMetrics.epochRefreshes;
+    result.leaderRetries = senderMetrics.leaderRetries;
+    result.routingSends = senderMetrics.sends;
+    result.routingAttempts = senderMetrics.attempts;
+  }
+  return result;
 }
 
 }  // namespace stratakv

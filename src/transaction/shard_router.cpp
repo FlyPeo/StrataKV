@@ -2,6 +2,7 @@
 #include "shard_router.h"
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <stdexcept>
 
@@ -29,9 +30,51 @@ ShardRouter::ShardRouter(std::vector<RegionRoute> regions) {
   RegionCatalog(std::vector<RegionMetadata>(regions_));
 }
 
-std::shared_ptr<MvccStorage> ShardRouter::Route(const std::string& key) const { return shards_[RouteIndex(key)]; }
+ShardRouter::ShardRouter(std::shared_ptr<RegionCache> cache, StorageFactory factory,
+                         RegionCache::RefreshFunction refresh)
+    : cache_(std::move(cache)), factory_(std::move(factory)), refresh_(std::move(refresh)) {
+  if (!cache_) throw std::invalid_argument("ShardRouter needs a Region cache");
+  if (!factory_) throw std::invalid_argument("ShardRouter needs a storage factory");
+}
+
+RegionRouteHandle ShardRouter::ResolveHandle(const std::string& key) const {
+  if (!cache_) return {};
+  try {
+    return cache_->LookupKey(key);
+  } catch (const std::out_of_range&) {
+    if (!refresh_) throw;
+    return cache_->LookupOrRefresh(
+        key, std::chrono::steady_clock::now() + std::chrono::milliseconds(2000), refresh_);
+  }
+}
+
+std::shared_ptr<MvccStorage> ShardRouter::Route(const std::string& key) const {
+  if (cache_) {
+    return StorageFor(ResolveHandle(key));
+  }
+  if (shards_.empty()) throw std::out_of_range("no shard available for routing");
+  return shards_[RouteIndex(key)];
+}
+
+std::shared_ptr<MvccStorage> ShardRouter::StorageFor(const RegionRouteHandle& handle) const {
+  const int regionId = handle.Descriptor().regionId;
+  {
+    std::shared_lock<std::shared_mutex> lock(storageMutex_);
+    const auto found = storages_.find(regionId);
+    if (found != storages_.end()) return found->second;
+  }
+  auto storage = factory_(handle.Descriptor());
+  if (!storage) {
+    throw std::out_of_range("no storage available for Region " + std::to_string(regionId));
+  }
+  std::unique_lock<std::shared_mutex> lock(storageMutex_);
+  auto& slot = storages_[regionId];
+  if (!slot) slot = storage;
+  return slot;
+}
 
 size_t ShardRouter::ShardId(const std::string& key) const {
+  if (cache_) return static_cast<size_t>(RegionId(key));
   if (!regions_.empty()) {
     return RouteIndex(key);
   }
@@ -45,6 +88,7 @@ size_t ShardRouter::ShardId(const std::string& key) const {
 }
 
 int ShardRouter::RegionId(const std::string& key) const {
+  if (cache_) return ResolveHandle(key).Descriptor().regionId;
   const size_t index = RouteIndex(key);
   return regions_.empty() ? static_cast<int>(index) : regions_[index].regionId;
 }
@@ -67,4 +111,13 @@ size_t ShardRouter::RouteIndex(const std::string& key) const {
   return static_cast<size_t>(std::distance(regions_.begin(), it));
 }
 
-const std::vector<std::shared_ptr<MvccStorage>>& ShardRouter::Shards() const { return shards_; }
+std::vector<std::shared_ptr<MvccStorage>> ShardRouter::Shards() const {
+  if (cache_) {
+    std::shared_lock<std::shared_mutex> lock(storageMutex_);
+    std::vector<std::shared_ptr<MvccStorage>> result;
+    result.reserve(storages_.size());
+    for (const auto& entry : storages_) result.push_back(entry.second);
+    return result;
+  }
+  return shards_;
+}

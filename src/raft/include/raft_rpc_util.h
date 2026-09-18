@@ -1,7 +1,9 @@
 #ifndef STRATAKV_RAFT_RAFT_RPC_UTIL_H
 #define STRATAKV_RAFT_RAFT_RPC_UTIL_H
 
+#include <mutex>
 #include "raft_rpc.pb.h"
+#include "region_metadata.h"
 
 class MprpcChannel;
 
@@ -11,12 +13,17 @@ class RaftRpcUtil {
   MprpcChannel* channel_;
   raftRpcProctoc::raftRpc_Stub *stub_;
   int regionId_;
+  uint64_t fromPeerId_ = 0;
+  uint64_t toPeerId_ = 0;
+  mutable std::mutex epochMutex_;
+  RegionEpoch epoch_;
 
  public:
   // Outbound Raft RPCs are issued through the generated Protobuf stub.
   bool AppendEntries(raftRpcProctoc::AppendEntriesArgs *args, raftRpcProctoc::AppendEntriesReply *response);
   bool InstallSnapshot(raftRpcProctoc::InstallSnapshotRequest *args, raftRpcProctoc::InstallSnapshotResponse *response);
   bool RequestVote(raftRpcProctoc::RequestVoteArgs *args, raftRpcProctoc::RequestVoteReply *response);
+  void SetEpoch(const RegionEpoch& epoch);
   //响应其他节点的方法
   /**
    *
@@ -24,6 +31,8 @@ class RaftRpcUtil {
    * @param port  远端端口
    */
   RaftRpcUtil(std::string ip, short port, int regionId);
+  RaftRpcUtil(std::string ip, short port, int regionId, uint64_t fromPeerId,
+              uint64_t toPeerId, RegionEpoch epoch);
   ~RaftRpcUtil();
 };
 

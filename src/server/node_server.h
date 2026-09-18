@@ -1,13 +1,20 @@
 #ifndef STRATAKV_SERVER_NODE_SERVER_H
 #define STRATAKV_SERVER_NODE_SERVER_H
 
+#include <chrono>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "region_peer.h"
 #include "region_metadata.h"
+#include "region_registry.h"
+#include "region_request_validator.h"
 #include "rpc_provider.h"
+#include "shard_router.h"
+#include "store_heartbeat_reporter.h"
 
 class NodeServer;
 
@@ -67,6 +74,30 @@ class KvServiceDispatcher final : public raftKVRpcProctoc::kvServerRpc {
                          raftKVRpcProctoc::TxnGarbageCollectReply*, google::protobuf::Closure*) override;
   void TxnMaxObservedTs(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnMaxObservedTsArgs*,
                         raftKVRpcProctoc::TxnMaxObservedTsReply*, google::protobuf::Closure*) override;
+  void ProposeAdminSplit(google::protobuf::RpcController*,
+                         const raftKVRpcProctoc::ProposeAdminSplitArgs*,
+                         raftKVRpcProctoc::ProposeAdminSplitReply*,
+                         google::protobuf::Closure*) override;
+  void ProposeConfChange(google::protobuf::RpcController*,
+                         const raftKVRpcProctoc::ProposeConfChangeArgs*,
+                         raftKVRpcProctoc::ProposeConfChangeReply*,
+                         google::protobuf::Closure*) override;
+  void PrepareMigrationTarget(google::protobuf::RpcController*,
+                              const raftKVRpcProctoc::PrepareMigrationTargetArgs*,
+                              raftKVRpcProctoc::PrepareMigrationTargetReply*,
+                              google::protobuf::Closure*) override;
+  void RetireMigrationSource(google::protobuf::RpcController*,
+                             const raftKVRpcProctoc::RetireMigrationSourceArgs*,
+                             raftKVRpcProctoc::RetireMigrationSourceReply*,
+                             google::protobuf::Closure*) override;
+  void RegionMigrationStatus(google::protobuf::RpcController*,
+                             const raftKVRpcProctoc::RegionMigrationStatusArgs*,
+                             raftKVRpcProctoc::RegionMigrationStatusReply*,
+                             google::protobuf::Closure*) override;
+  void RegionSplitStatus(google::protobuf::RpcController*,
+                         const raftKVRpcProctoc::RegionSplitStatusArgs*,
+                         raftKVRpcProctoc::RegionSplitStatusReply*,
+                         google::protobuf::Closure*) override;
 
  private:
   NodeServer* server_;
@@ -87,31 +118,79 @@ class RaftServiceDispatcher final : public raftRpcProctoc::raftRpc {
   NodeServer* server_;
 };
 
+// The complete Region view of one validated metadata revision. A storage node
+// bootstraps all of its assigned peers from exactly one of these views.
+struct NodeDynamicBootstrap {
+  std::vector<RegionMetadata> regions;
+  uint64_t revision = 0;
+};
+
 class NodeServer {
  public:
+  // requireRegionHeader enforces the typed Region header in dynamic topology
+  // mode; static compatibility mode still accepts legacy headerless requests.
   NodeServer(int nodeId, RaftLogGcConfig raftLogGcConfig, const RegionCatalog& catalog,
-             const std::string& tsoEndpoints = "");
+             const std::string& tsoEndpoints = "", bool requireRegionHeader = false);
+  // Dynamic bootstrap: every locally assigned peer is built from one metadata
+  // revision and the registry is published only when all of them initialize.
+  NodeServer(int nodeId, RaftLogGcConfig raftLogGcConfig, const RegionCatalog& catalog,
+             const std::string& tsoEndpoints, const NodeDynamicBootstrap& bootstrap);
   ~NodeServer();
+  // Dynamic-mode split acks go to the metadata members after a node publishes
+  // its materialized child. No-op when unset (static mode / tests).
+  void SetSplitAckEndpoints(const std::string& endpoints) { SetMetadataEndpoints(endpoints); }
+  void SetMetadataEndpoints(const std::string& endpoints);
+  StoreHeartbeatReporter* HeartbeatReporterForTest() { return heartbeatReporter_.get(); }
+  RegionRegistry& RegistryForTest() { return registry_; }
+  void WireSplitCallbacks(RaftLogGcConfig raftLogGcConfig);
+  void MaterializeSplitChild(size_t parentPeerIndex, const RegionMetadata& shrunken,
+                             const RegionMetadata& child);
+  void AckSplitToMetadata(uint64_t parentRegionId, const RegionMetadata& child);
   void Start();
   NodeTxnScheduler* TxnSchedulerForTest() const { return txnScheduler_.get(); }
   const std::vector<std::shared_ptr<RegionPeer>>& PeersForTest() const { return peers_; }
+  // Publishes the startup registry without binding the RPC listener or
+  // starting Region Raft groups, so dispatcher validation is unit-testable.
+  void PublishInitialRegistryForTest() {
+    registry_.PublishInitial(peers_, peers_.front()->Descriptor().metadataRevision);
+  }
+  RegionRegistryMetrics RegistryMetrics() const { return registry_.Metrics(); }
+  std::shared_ptr<RegionPeer> MountMigrationPeer(const RegionMetadata& descriptor,
+                                                 uint64_t targetPeerId,
+                                                 bool startWorkers = true);
+  RegionRetireResult RetireMigrationPeer(
+      int regionId, uint64_t peerId, uint64_t revision,
+      std::chrono::steady_clock::time_point deadline);
 
  private:
   friend class KvServiceDispatcher;
   friend class RaftServiceDispatcher;
 
-  RegionPeer* FindPeer(int regionId) const;
+  RegionPeerHandle FindPeer(int regionId) const;
+  // Builds recovery routes from the registry's current published view, so the
+  // TxnRecoveryManager tracks dynamic membership instead of the startup catalog.
+  std::vector<ShardRouter::RegionRoute> BuildRecoveryRoutes() const;
+  void RecordValidationReject(const RegionValidationResult& validation,
+                             const RegionMetadata& descriptor);
+  void WireMigrationCallback(const std::shared_ptr<RegionPeer>& peer);
 
   int nodeId_;
+  std::string splitAckEndpoints_;
+  std::mutex materializeMutex_;
+  std::unordered_set<int> materializedChildren_;
   short port_ = 0;
+  bool requireRegionHeader_ = false;
+  RaftLogGcConfig raftLogGcConfig_;
+  mutable std::mutex peersMutex_;
   // Declared before peers so it is destroyed after them. There is exactly one
   // transaction scheduler and one latch table per physical NodeServer.
   std::shared_ptr<NodeTxnScheduler> txnScheduler_;
   std::unique_ptr<TxnRecoveryManager> recoveryManager_;
   std::vector<std::shared_ptr<RegionPeer>> peers_;
-  std::unordered_map<int, std::shared_ptr<RegionPeer>> peersByRegion_;
+  RegionRegistry registry_;
   KvServiceDispatcher kvService_;
   RaftServiceDispatcher raftService_;
+  std::unique_ptr<StoreHeartbeatReporter> heartbeatReporter_;
 };
 
 #endif  // STRATAKV_SERVER_NODE_SERVER_H

@@ -236,6 +236,7 @@ class MvccStorage {
   // Replace the engine contents with a Raft snapshot and rebuild all in-memory
   // MVCC indexes while holding the same lock used by foreground operations.
   bool RestoreSnapshot(const std::string& snapshot);
+  void DropKeysInRange(const std::string& rangeBegin, const std::string& rangeEnd);
 
  private:
   TxnStatus PrewriteLocked(const std::string& key, const std::string& value, const std::string& primaryKey,

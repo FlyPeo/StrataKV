@@ -33,15 +33,15 @@ def create_mock_run(root: Path, *, tps_scale: float = 1.0, p99_scale: float = 1.
         "record_count": record_count,
         "value_size_bytes": 256,
         "os": "Linux-WSL2-x86_64",
-        "topology": {"gateway": 1, "tso": 3, "nodes": 3, "regions": 3, "replicas_per_region": 3},
-        "gateway": {"runtime": "fiber", "connection_mode": "close"},
+        "topology": {"tso": 3, "nodes": 3, "regions": 3, "replicas_per_region": 3},
+        "client": {"path": "direct", "sdk": "native-cpp"},
     }
     write_json(root / "manifest.json", manifest)
 
     # Core cases
     cases_config = [
-        ("a1-A-w8", 800.0, 1500.0, "gateway"),
-        ("a1-C-w8", 1200.0, 1000.0, "gateway"),
+        ("a1-A-w8", 800.0, 1500.0, "direct"),
+        ("a1-C-w8", 1200.0, 1000.0, "direct"),
         ("a2-cross-0", 500.0, 2000.0, "direct"),
         ("a2-cross-100", 350.0, 3000.0, "direct"),
         ("a3-regions-3", 300.0, 3500.0, "direct"),
@@ -54,11 +54,11 @@ def create_mock_run(root: Path, *, tps_scale: float = 1.0, p99_scale: float = 1.
             suffix = f"-r{r}" if repetitions > 1 else ""
             tps_val = base_tps * tps_scale * (1.0 + 0.01 * (r - 2))
             p99_val = base_p99 * p99_scale * (1.0 + 0.01 * (r - 2))
-            if path_mode == "gateway":
+            if case_id.startswith("a1"):
                 write_json(root / "raw/a1" / f"{case_id}{suffix}.json", {
                     "case_id": f"{case_id}{suffix}",
                     "subject": "record",
-                    "path": "gateway",
+                    "path": "direct",
                     "workers": 8,
                     "attempted": 10000,
                     "successful": 10000,

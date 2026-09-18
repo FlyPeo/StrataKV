@@ -9,6 +9,19 @@
 
 namespace stratakv {
 
+enum class TopologyMode {
+  kStatic,
+  kDynamic,
+};
+
+struct ConnectionOptions {
+  TopologyMode topologyMode = TopologyMode::kStatic;
+  std::string regionConfigPath;
+  std::string metadataEndpoints;
+  uint64_t metadataTimeoutMs = 3000;
+  std::string tsoEndpoints = "127.0.0.1:26300,127.0.0.1:26301,127.0.0.1:26302";
+};
+
 // Stable SDK status values.  They intentionally hide internal RPC error text.
 enum class Status {
   kOk,
@@ -59,6 +72,10 @@ struct TransactionStatusResult {
 
 struct ClientMetrics {
   uint64_t rollbackRegionCount = 0;
+  uint64_t epochRefreshes = 0;
+  uint64_t leaderRetries = 0;
+  uint64_t routingSends = 0;
+  uint64_t routingAttempts = 0;
 };
 
 const char* StatusName(Status status);
@@ -80,6 +97,7 @@ class Transaction {
 // Region configuration is the same static catalog used by StrataKV nodes.
 class Client {
  public:
+  static std::shared_ptr<Client> Connect(const ConnectionOptions& options);
   static std::shared_ptr<Client> Connect(const std::string& regionConfigPath);
   static std::shared_ptr<Client> Connect(const std::string& regionConfigPath,
                                          const std::string& tsoHost, uint16_t tsoPort);
@@ -88,7 +106,7 @@ class Client {
   static std::shared_ptr<Client> Connect(const std::string& regionConfigPath,
                                          const std::string& tsoEndpoints);
 
-  std::shared_ptr<Transaction> Begin(uint64_t lockTtlMs);
+  std::shared_ptr<Transaction> Begin(uint64_t lockTtlMs = 120000, uint64_t rpcBudgetMs = 5000);
   Result Get(const std::shared_ptr<Transaction>& transaction, const std::string& key);
   Result GetForUpdate(const std::shared_ptr<Transaction>& transaction, const std::string& key);
   BatchResult BatchGetForUpdate(const std::shared_ptr<Transaction>& transaction,
