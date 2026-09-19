@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(StrataKV)
+project(StrataKV VERSION 1.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +32,15 @@ endforeach()
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
+
+# 发布打包(deploy/stratakv-package 消费此布局):安装产物从发行包自带的
+# lib/ 解析第三方共享库($ORIGIN 相对定位)。该变量在 target 创建时初始化
+# INSTALL_RPATH 属性,因此必须先于所有 add_subdirectory/add_executable 设置;
+# 只作用于 install 出来的副本,不影响 build tree 内的二进制。
+# 默认的 DT_RUNPATH 不沿依赖链传递(librocksdb 的 libsnappy 等会绕过包内
+# lib/ 落回系统目录),因此统一改用可传递的 DT_RPATH。
+set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
+add_link_options(-Wl,--disable-new-dtags)
 
 # 1. 查找依赖
 find_package(Protobuf REQUIRED)
@@ -125,9 +134,9 @@ target_link_libraries(stratakv-admin PRIVATE stratakv_core stratakv_rpc)
 add_library(stratakv_sdk STATIC src/sdk/client.cpp)
 target_include_directories(stratakv_sdk PUBLIC ${PROJECT_SOURCE_DIR}/src/sdk/include)
 target_link_libraries(stratakv_sdk PUBLIC stratakv_core stratakv_rpc)
-install(TARGETS stratakv_sdk ARCHIVE DESTINATION lib)
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/src/sdk/include/stratakv DESTINATION include)
-
+# ---- 发布打包(deploy/stratakv-package 消费此布局)----
+# stratakv_rpc 与 pulsar 定义在子目录中,受 CMP0062 约束,
+# 通过 TARGET_FILE 生成表达式安装。
 install(TARGETS
     stratakv-node
     stratakv-tso
@@ -135,3 +144,11 @@ install(TARGETS
     stratakv-admin
     RUNTIME DESTINATION bin
 )
+install(TARGETS stratakv_sdk stratakv_core ARCHIVE DESTINATION lib)
+install(FILES
+    $<TARGET_FILE:stratakv_rpc>
+    $<TARGET_FILE:pulsar>
+    DESTINATION lib
+)
+install(DIRECTORY ${PROJECT_SOURCE_DIR}/src/sdk/include/stratakv DESTINATION include)
+install(FILES ${PROJECT_SOURCE_DIR}/cmake/stratakvConfig.cmake DESTINATION lib/cmake/stratakv)

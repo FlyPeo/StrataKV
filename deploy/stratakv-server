@@ -3,7 +3,19 @@
 set -eu
 
 deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# 源码树模式:脚本位于 deploy/,上级是仓库根(存在 CMakeLists.txt),可现场构建。
+# 发行包模式:脚本位于 <包根>/scripts/,包内无源码,直接使用 <包根>/bin/ 的成品。
+if [ -f "${deploy_dir}/../CMakeLists.txt" ]; then
+  deployment_mode=source
+else
+  deployment_mode=package
+fi
 repo_dir=$(CDPATH= cd -- "${deploy_dir}/.." && pwd)
+if [ "$deployment_mode" = package ]; then
+  runtime_root="${repo_dir}/runtime"
+else
+  runtime_root="${deploy_dir}/runtime"
+fi
 
 usage() {
   cat <<'EOF'
@@ -45,13 +57,27 @@ Options:
   --no-build         Reuse the current bin/ executables.
 
 The local topology has three fixed Regions: ["",h), [h,p), [p,+inf).
-Runtime data, PIDs and logs live under deploy/runtime/<project>/.
+Source tree: builds via CMake, runtime data under deploy/runtime/<project>/.
+Release package: uses the packaged bin/ executables (no build step, rebuild
+is unavailable), runtime data under <package>/runtime/<project>/.
 No Docker command, container, image or volume is used.
 EOF
 }
 
 is_uint() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 is_project() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; *) return 0 ;; esac; }
+
+# 发行包必须自带全部服务端可执行文件;缺失时给出可执行错误而不是让某个
+# 成员在启动阶段以模糊的方式失败。
+check_package_binaries() {
+  [ "$deployment_mode" = package ] || return 0
+  for package_binary in "$node_bin" "$tso_bin" "$meta_bin" "$admin_bin"; do
+    if [ ! -x "$package_binary" ]; then
+      echo "Release package is incomplete: missing executable ${package_binary}." >&2
+      exit 2
+    fi
+  done
+}
 
 command=${1:-help}
 if [ "$#" -gt 0 ]; then shift; fi
@@ -99,7 +125,12 @@ while [ "$#" -gt 0 ]; do
 done
 
 is_project "$project" || { echo "--project may use only letters, digits, _ and -." >&2; exit 2; }
-runtime_dir="${deploy_dir}/runtime/${project}"
+# 发行包内构建请求一律被改为免构建:up 默认即免构建,--no-build 保留为兼容 no-op;
+# 只有 rebuild 显式把 build_enabled 置回 true,由 build_programs 给出可执行错误。
+if [ "$deployment_mode" = package ] && [ "$build_enabled" = true ]; then
+  build_enabled=false
+fi
+runtime_dir="${runtime_root}/${project}"
 regions_file="${runtime_dir}/regions.conf"
 settings_file="${runtime_dir}/runtime.conf"
 pids_dir="${runtime_dir}/pids"
@@ -108,6 +139,7 @@ node_bin="${repo_dir}/bin/stratakv-node"
 meta_bin="${repo_dir}/bin/stratakv-meta"
 tso_bin="${repo_dir}/bin/stratakv-tso"
 admin_bin="${repo_dir}/bin/stratakv-admin"
+check_package_binaries
 
 load_settings() {
   [ -f "$settings_file" ] || {
@@ -186,6 +218,11 @@ validate_topology() {
 
 build_programs() {
   [ "$build_enabled" = true ] || return 0
+  if [ "$deployment_mode" = package ]; then
+    echo "This is a release package: it contains no source tree to build." >&2
+    echo "Use the packaged bin/ executables directly, or download a source checkout for rebuild." >&2
+    exit 2
+  fi
   asan=${STRATAKV_ENABLE_ASAN:-OFF}
   build_dir="${repo_dir}/build/stratakv/release"
   cmake -S "$repo_dir" -B "$build_dir" \
@@ -677,7 +714,7 @@ case "$command" in
   reset)
     load_settings
     stop_all
-    case "$runtime_dir" in "${deploy_dir}/runtime/"*) rm -rf -- "$runtime_dir" ;; *) exit 1 ;; esac
+    case "$runtime_dir" in "${runtime_root}/"*) rm -rf -- "$runtime_dir" ;; *) exit 1 ;; esac
     echo "Deleted local StrataKV project ${project}."
     ;;
   help|-h|--help) usage ;;

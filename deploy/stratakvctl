@@ -3,6 +3,13 @@
 set -eu
 
 deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# 与 stratakv-server 一致的双模式判定:上级存在 CMakeLists.txt 为源码树模式,
+# 否则为发行包模式(scripts/ 之下,init 不可用)。
+if [ -f "${deploy_dir}/../CMakeLists.txt" ]; then
+  deployment_mode=source
+else
+  deployment_mode=package
+fi
 project=${STRATAKV_PROJECT:-stratakv-local}
 tso_port=${STRATAKV_TSO_PORT:-26300}
 
@@ -30,6 +37,10 @@ server() { bash "${deploy_dir}/stratakv-server" "$@" --project "$project"; }
 
 case "${1:-}" in
   init)
+    if [ "$deployment_mode" = package ]; then
+      echo "init is not available in a release package: it contains no source tree." >&2
+      exit 2
+    fi
     build_dir="${deploy_dir}/../build/stratakv/release"
     cmake -S "${deploy_dir}/.." -B "$build_dir" -DCMAKE_BUILD_TYPE=Release
     cmake --build "$build_dir" -j"$(nproc)"

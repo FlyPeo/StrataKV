@@ -1,225 +1,146 @@
 # StrataKV 测试目录
 
-本目录只保存 StrataKV 主项目自己的测试源码。Pulsar 已有的测试和基准直接引用
-`src/pulsar` 子模块中的唯一源文件，不在这里维护重复副本。
+组织主轴:**顶层目录 = 领域**(与 `src/` 模块一一对应),**测试类型放文件名后缀**:
 
-## 目录结构
+- `*_unit_check.{cpp,py}` — 组件级、进程内,可进 CI 快速反馈;
+- `*_integration_check.{cpp,py,sh}` — 跨组件或子进程(拉起真实成员/集群);
+- `*_benchmark.cpp` — 手动基准,受机器与负载影响,不注册 CTest;
+- 无类型后缀的 `*_support.*` / 驱动程序 — 套件共用库与施压入口。
 
-| 路径               | 内容                            | 执行方式               |
-| ------------------ | ------------------------------- | ---------------------- |
-| `unit/`          | 不依赖外部服务的单元与组件检查  | CTest 自动执行         |
-| `integration/`   | 自包含集成检查与脚本契约测试    | CTest 自动执行         |
-| `benchmarks/`    | 性能、吞吐和 A/B 基准           | 由`deploy/` 脚本编排 |
-| `system/`        | 需要真实集群的系统与可靠性负载  | 由`deploy/` 脚本编排 |
-| `support/`       | 测试共用 workload、统计和报告器 | 被测试程序和脚本复用   |
-| `CMakeLists.txt` | 定义测试程序、依赖和 CTest 注册 | CMake 配置时读取       |
+CTest target 命名规则:文件名 snake → kebab、去 `_check`;unit 类追加 `-unit`,
+integration 类以 `-integration` 结尾,benchmark 类以 `-benchmark` 结尾。
+Pulsar 子模块的测试源码仍在 `src/pulsar/tests/`(不在本目录维护副本),
+target 名沿用子模块命名。
 
-### 命名约定
+## 目录总览
 
-- 文件名 snake_case，CTest target kebab-case，二者同名对应：`unit/txn_scheduler_check.cpp` → `stratakv-test-txn-scheduler`。
-- 目录即层级：`unit/` 组件级（进程内）、`integration/` 跨组件或子进程（文件一律带 `_integration` 中缀）、`benchmarks/` 手动基准、`system/` 需真实集群编排。
-- 性能用例族（A1-A4、B3、C1、C2）保留用例代号前缀与 `-check` 后缀（如 `a1-matrix-check`），与 `deploy/stratakv-performance` 的报告口径一致；新组件测试不再带 `-check` 后缀。
-- 基准 target 一律以 `-benchmark` 结尾。
+| 目录 | 领域 | 内容 |
+| --- | --- | --- |
+| `raft/` | 共识与复制 | 4 个 unit check |
+| `transaction/` | MVCC 与分布式事务 | 5 个 unit check |
+| `tso/` | 时间戳权威 | 1 unit + 1 integration + 1 benchmark |
+| `region/` | Region 数据面与动态分片 | 13 unit + 2 integration + 1 benchmark |
+| `metadata/` | 元数据控制面与自动调度 | 9 unit + 2 integration |
+| `performance/` | 性能与可靠性套件 | 10 unit + 3 integration + 2 benchmark + 2 驱动 + `support/` 共用库 |
+| `sdk/` | 公开接口契约 | 1 unit check |
+| `pulsar/` | 协程运行时(源码在子模块) | 1 benchmark + 2 个 A/B 驱动脚本 |
+| `foundation/` | 通用基础设施 | 1 unit check |
 
-## 自动测试
-
-先构建并运行全部 58 项 CTest：
+构建与运行:
 
 ```bash
 cmake --preset release
 cmake --build --preset release -j"$(nproc)"
-ctest --preset release
+ctest --preset release                 # 全部 58 项
+ctest --preset release -R 'txn-scheduler-unit'   # 只跑一个
 ```
 
-只运行一个测试：
+## raft/ — 共识与复制
 
-```bash
-ctest --preset release -R '^stratakv-test-txn-scheduler$'
-```
+| 文件 | CTest 名称 | 用途 |
+| --- | --- | --- |
+| `raft_confchange_unit_check.cpp` | `stratakv-test-raft-confchange-unit` | 单步成员变更:learner 角色、在途互斥、自退役 |
+| `raft_log_gc_unit_check.cpp` | `stratakv-test-raft-log-gc-unit` | 日志软/硬 GC 阈值与已 Apply 安全边界 |
+| `replica_catchup_unit_check.cpp` | `stratakv-test-replica-catchup-unit` | 副本追赶、阈值晋升与流式快照安装 |
+| `rocksdb_snapshot_unit_check.cpp` | `stratakv-test-rocksdb-snapshot-unit` | 引擎快照钉住语义与恢复一致性 |
 
-### StrataKV 单元与组件检查
+## transaction/ — MVCC 与分布式事务
 
-| 源文件                                      | CTest 名称                                  | 用途                                                                   |
-| ------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------- |
-| `unit/bounded_thread_pool_check.cpp`      | `stratakv-test-bounded-thread-pool`       | 检查有界线程池的队列背压和任务完成行为                                 |
-| `unit/raft_log_gc_check.cpp`              | `stratakv-test-raft-log-gc`               | 检查 Raft 日志软/硬 GC 阈值和已 Apply 安全边界                         |
-| `unit/performance_support_check.cpp`      | `stratakv-test-performance-support-check` | 检查 YCSB 配比、确定性键分布、分位数和结果发布契约                     |
-| `unit/workload_runner_check.cpp`          | `stratakv-test-workload-runner-check`     | 检查公共负载执行器的事务边界、重试、并发和统计                         |
-| `unit/a1_matrix_check.cpp`                | `stratakv-test-a1-matrix-check`           | 检查 A1 矩阵定义、命令行参数解析及 YCSB 确定性序列                     |
-| `unit/a2_transaction_check.cpp`           | `stratakv-test-a2-transaction-check`      | 检查 A2 跨 Region 事务混合生成器、路由分桶及本地/跨区统计              |
-| `unit/a3_fanout_check.cpp`                | `stratakv-test-a3-fanout-check`           | 检查 A3 1/2/3 Region fanout 事务生成与单事务多 Region 路由             |
-| `unit/a4_contention_check.cpp`            | `stratakv-test-a4-contention-check`       | 检查 A4 乐观/悲观争用模拟、重试 vs 快速失败和 crossover 分析           |
-| `unit/b3_barrier_check.cpp`               | `stratakv-test-b3-barrier-check`          | 检查测试专用 2PC failpoint barrier、显式 token 与原子 marker           |
-| `unit/b3_recovery_check.cpp`              | `stratakv-test-b3-recovery-check`         | 检查 B3 协调器崩溃恢复：Primary 未提交回滚与 Primary 提交 roll-forward |
-| `unit/c1_transfer_check.cpp`              | `stratakv-test-c1-transfer-check`         | 检查 C1 并发双 Key 转账、总额守恒、零部分转账与负向篡改检测            |
-| `unit/c2_linearizability_check.cpp`       | `stratakv-test-c2-linearizability-check`  | 检查 C2 寄存器线性一致性、golden 历史、实时偏序与反例诊断              |
-| `unit/txn_scheduler_check.cpp`            | `stratakv-test-txn-scheduler`             | 检查事务调度、Latch、Raft propose/apply、超时、悲观锁及重启恢复        |
-| `unit/timestamp_oracle_check.cpp`         | `stratakv-test-timestamp-oracle`          | 检查 HLC 单调性、时钟回拨、逻辑位溢出、持久化迁移和重启                |
-| `unit/transaction_coordinator_check.cpp`  | `stratakv-test-transaction-coordinator`   | 检查 2PC 状态、清理、写偏斜防护、超时分类和协调器恢复                  |
-| `unit/mvcc_batch_check.cpp`               | `stratakv-test-mvcc-batch`                | 检查 Region 内批量 MVCC prepare/apply 的原子性和失败进度               |
-| `unit/region_batch_coordinator_check.cpp` | `stratakv-test-region-batch-coordinator`  | 检查跨 Region 分组、并行执行、部分失败清理和协议降级                   |
-| `unit/sdk_contract_check.cpp`             | `stratakv-test-sdk-contract`              | 检查公开 SDK 类型、状态名称和缺失值等接口契约                          |
+| 文件 | CTest 名称 | 用途 |
+| --- | --- | --- |
+| `mvcc_batch_unit_check.cpp` | `stratakv-test-mvcc-batch-unit` | Region 内批量 prepare/apply 原子性 |
+| `region_batch_coordinator_unit_check.cpp` | `stratakv-test-region-batch-coordinator-unit` | 跨 Region 分组、并行与部分失败清理 |
+| `transaction_coordinator_unit_check.cpp` | `stratakv-test-transaction-coordinator-unit` | 2PC 状态、清理、写偏斜防护与恢复 |
+| `txn_recovery_dynamic_unit_check.cpp` | `stratakv-test-txn-recovery-dynamic-unit` | 动态拓扑下的过期锁后台恢复 |
+| `txn_scheduler_unit_check.cpp` | `stratakv-test-txn-scheduler-unit` | 事务调度、Latch、悲观锁与重启恢复 |
 
-### 集成测试
+## tso/ — 时间戳权威
 
-| 源文件                                      | CTest 名称                           | 用途                                                                    |
-| ------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------- |
-| `integration/tso_integration_check.cpp`   | `stratakv-test-tso-integration`    | 启动三成员 TSO，检查并发取号、Leader 故障、少数派 fence、快照和全量重启 |
-| `integration/metadata_integration_check.cpp` | `stratakv-test-metadata-integration` | 启动三成员元数据集群，检查拓扑 RPC、revision 与故障恢复               |
-| `integration/dynamic_cluster_integration_check.cpp` | `stratakv-test-dynamic-cluster` | 拉起动态拓扑集群，检查注册、路由与 Region 生命周期                 |
-| `integration/online_migration_integration_check.cpp` | `stratakv-test-online-migration` | 检查 Learner 追平、Promote/Remove 在线副本迁移                     |
-| `integration/auto_balancer_integration_check.cpp` | `stratakv-test-auto-balancer-integration` | 检查自动均衡 operator 生命周期与 reconcile                     |
-| `integration/performance_script_check.sh` | `stratakv-test-performance-script` | 静态检查 smoke 编排规模、隔离范围和危险命令                             |
-| `integration/performance_report_check.py` | `stratakv-test-performance-report` | 用合成结果检查报告完整性门禁与失败传播                                  |
-| `integration/d1_compare_check.py`         | `stratakv-test-d1-compare`         | 检查 D1 兼容性签名、三次中位数回归比较、告警阈值及 WS L基准标注         |
+| 文件 | CTest 名称 | 用途 |
+| --- | --- | --- |
+| `timestamp_oracle_unit_check.cpp` | `stratakv-test-timestamp-oracle-unit` | HLC 单调、时钟回拨、持久化与重启 |
+| `tso_integration_check.cpp` | `stratakv-test-tso-integration` | 三成员 TSO:并发取号、故障、fence、快照 |
+| `tso_range_benchmark.cpp` | `stratakv-test-tso-range-benchmark` | range size 吞吐/延迟对比 |
 
-### 直接复用的 Pulsar 测试
+## region/ — Region 数据面与动态分片
 
-以下目标由主项目注册到 CTest，但源码位于 `src/pulsar/tests/`，避免两处内容漂移：
+| 文件 | CTest 名称 | 用途 |
+| --- | --- | --- |
+| `region_metadata_unit_check.cpp` | `stratakv-test-region-metadata-unit` | 描述符/epoch/范围不变量与目录校验 |
+| `region_cache_unit_check.cpp` | `stratakv-test-region-cache-unit` | 路由缓存二分定位与 epoch 前进校验 |
+| `region_cache_stress_unit_check.cpp` | `stratakv-test-region-cache-stress-unit` | 路由状态并发压力(TSan/ASan 目标) |
+| `region_registry_unit_check.cpp` | `stratakv-test-region-registry-unit` | 注册表原子发布、替换与 in-flight 保护 |
+| `region_dispatcher_unit_check.cpp` | `stratakv-test-region-dispatcher-unit` | 节点级请求分发与结构化拒绝 |
+| `region_request_sender_unit_check.cpp` | `stratakv-test-region-request-sender-unit` | sender 重试预算、退避与错误分类 |
+| `region_data_path_unit_check.cpp` | `stratakv-test-region-data-path-unit` | 数据路径:header、定论错误不重试、regroup |
+| `region_envelope_compat_unit_check.cpp` | `stratakv-test-region-envelope-compat-unit` | 新旧请求信封兼容矩阵 |
+| `region_split_unit_check.cpp` | `stratakv-test-region-split-unit` | 分裂命令 apply、幂等与恢复态 |
+| `node_split_unit_check.cpp` | `stratakv-test-node-split-unit` | 节点侧子 Region 物化与注册 |
+| `node_migration_unit_check.cpp` | `stratakv-test-node-migration-unit` | 迁移两阶段协议与 learner 挂载 |
+| `node_bootstrap_unit_check.cpp` | `stratakv-test-node-bootstrap-unit` | 动态节点全成全败 bootstrap |
+| `topology_config_unit_check.cpp` | `stratakv-test-topology-config-unit` | 启动拓扑配置校验,无隐式回退 |
+| `dynamic_cluster_integration_check.cpp` | `stratakv-test-dynamic-cluster-integration` | 拉起动态集群检查注册、路由与生命周期 |
+| `online_migration_integration_check.cpp` | `stratakv-test-online-migration-integration` | Learner 追平、Promote/Remove 在线迁移 |
+| `dynamic_sharding_benchmark.cpp` | `stratakv-test-dynamic-sharding-benchmark` | 在线分裂韧性压测(由 `deploy/stratakv-split-benchmark` 编排) |
 
-| CTest 名称                                | Pulsar 源文件                         | 用途                                       |
-| ----------------------------------------- | ------------------------------------- | ------------------------------------------ |
-| `stratakv-test-fiber-sync`              | `fiber_sync_check.cpp`              | FiberMutex、条件变量、信号量和超时唤醒     |
-| `stratakv-test-fiber-context`           | `fiber_context_check.cpp`           | Fiber 切换、reset、异常和边界行为          |
-| `stratakv-test-scheduler-work-stealing` | `scheduler_work_stealing_check.cpp` | Scheduler work stealing 与线程亲和         |
-| `stratakv-test-stack-pool`              | `stack_pool_check.cpp`              | Fiber 栈分配、尺寸等级和复用池             |
-| `stratakv-test-scheduler-cache`         | `scheduler_cache_check.cpp`         | Scheduler 本地缓存、跨 worker 回收及统计   |
-| `stratakv-test-reuse-integration`       | `reuse_integration_check.cpp`       | 栈复用在调度、同步和定时器路径中的集成行为 |
+## metadata/ — 元数据控制面与自动调度
 
-## 手动基准
+| 文件 | CTest 名称 | 用途 |
+| --- | --- | --- |
+| `metadata_state_machine_unit_check.cpp` | `stratakv-test-metadata-state-machine-unit` | 两阶段分裂/迁移状态机与 revision CAS |
+| `metadata_consensus_unit_check.cpp` | `stratakv-test-metadata-consensus-unit` | 三成员共识与幂等 mutation |
+| `metadata_consensus_fault_unit_check.cpp` | `stratakv-test-metadata-consensus-fault-unit` | 仲裁丢失、重放与截断快照拒绝 |
+| `metadata_property_unit_check.cpp` | `stratakv-test-metadata-property-unit` | 随机分裂后的拓扑结构不变量 |
+| `metadata_client_unit_check.cpp` | `stratakv-test-metadata-client-unit` | 元数据 RPC 客户端契约 |
+| `auto_balancer_state_unit_check.cpp` | `stratakv-test-auto-balancer-state-unit` | 调度器状态与 operator 持久化 |
+| `auto_balancer_planner_unit_check.cpp` | `stratakv-test-auto-balancer-planner-unit` | 评分、证据窗口与操作规划 |
+| `auto_balancer_heartbeat_unit_check.cpp` | `stratakv-test-auto-balancer-heartbeat-unit` | 心跳遥测的新鲜度与幂等 |
+| `auto_balancer_recovery_unit_check.cpp` | `stratakv-test-auto-balancer-recovery-unit` | leader 重启后 reconcile |
+| `metadata_integration_check.cpp` | `stratakv-test-metadata-integration` | 三成员元数据集群端到端 |
+| `auto_balancer_integration_check.cpp` | `stratakv-test-auto-balancer-integration` | 均衡 operator 生命周期与 reconcile |
 
-基准会受机器、编译类型和当前负载影响，因此只生成可执行程序，不注册到 CTest。
+## performance/ — 性能与可靠性套件
 
-| 源文件或来源                                  | 构建目标                               | 用途                                                           |
-| --------------------------------------------- | -------------------------------------- | -------------------------------------------------------------- |
-| `src/pulsar/benchmarks/fiber_benchmark.cpp` | `stratakv-test-fiber-benchmark`      | Fiber context、生命周期、Scheduler、Timer、Hook 和同步原语基准 |
-| `benchmarks/fiber_context_ab_benchmark.cpp` | `stratakv-test-fiber-context-ab`     | Pulsar、Boost.Context 与 Photon 的严格 context-switch A/B      |
-| `benchmarks/tso_range_benchmark.cpp`        | `stratakv-test-tso-range-benchmark`  | 自启动三成员 TSO，对比不同 range size 的吞吐和延迟             |
-| `benchmarks/txn_contention_benchmark.cpp`   | `stratakv-test-txn-contention`       | 对运行中集群施加热点事务争用负载                               |
-| `benchmarks/region_2pc_benchmark.cpp`       | `stratakv-test-region-2pc-benchmark` | 对运行中集群测量跨 Region 2PC 扩展性                           |
+对应 `deploy/stratakv-performance` 的 A1–A4 / B1 / B3 / C1 / C2 用例族;`support/` 为套件共用库。
 
-运行完整 Pulsar 基准：
+| 文件 | CTest 名称 | 用途 |
+| --- | --- | --- |
+| `a1_matrix_unit_check.cpp` | `stratakv-test-a1-matrix-unit` | A1 矩阵定义与 YCSB 确定性序列 |
+| `a2_transaction_unit_check.cpp` | `stratakv-test-a2-transaction-unit` | A2 跨 Region 事务混合生成与分桶 |
+| `a3_fanout_unit_check.cpp` | `stratakv-test-a3-fanout-unit` | A3 1/2/3 Region fanout 生成 |
+| `a4_contention_unit_check.cpp` | `stratakv-test-a4-contention-unit` | A4 乐观/悲观争用与 crossover |
+| `b3_barrier_unit_check.cpp` | `stratakv-test-b3-barrier-unit` | 2PC failpoint barrier 与原子 marker |
+| `b3_recovery_unit_check.cpp` | `stratakv-test-b3-recovery-unit` | 协调器崩溃恢复:回滚与前滚 |
+| `c1_transfer_unit_check.cpp` | `stratakv-test-c1-transfer-unit` | 转账守恒与部分转账检测 |
+| `c2_linearizability_unit_check.cpp` | `stratakv-test-c2-linearizability-unit` | 寄存器线性一致性与反例诊断 |
+| `performance_support_unit_check.cpp` | `stratakv-test-performance-support-unit` | YCSB 配比、分位数与结果发布契约 |
+| `workload_runner_unit_check.cpp` | `stratakv-test-workload-runner-unit` | 负载执行器事务边界、重试与统计 |
+| `performance_script_integration_check.sh` | `stratakv-test-performance-script-integration` | smoke 编排静态检查 |
+| `performance_report_integration_check.py` | `stratakv-test-performance-report-integration` | 报告完整性门禁与失败传播 |
+| `d1_compare_integration_check.py` | `stratakv-test-d1-compare-integration` | D1 兼容签名与三次中位数回归比较 |
+| `txn_contention_benchmark.cpp` | `stratakv-test-txn-contention-benchmark` | 热点事务争用负载 |
+| `region_2pc_benchmark.cpp` | `stratakv-test-region-2pc-benchmark` | 跨 Region 2PC 扩展性 |
+| `kv_workload.cpp` | `stratakv-test-kv-workload` | YCSB/转账/寄存器施压与校验驱动 |
+| `reliability_check.cpp` | `stratakv-test-reliability` | 故障注入负载与原子性/持久化校验 |
+| `support/` | (库) | `performance_support`、`workload_runner`、`linearizability_checker`、`d1_compare.py`、`report.py` |
 
-```bash
-bash deploy/stratakv-fiber-benchmark
-```
+## sdk/、pulsar/、foundation/
 
-其他基准可先单独构建，再从 `bin/` 执行并传入所需参数：
+| 文件 | CTest 名称 | 用途 |
+| --- | --- | --- |
+| `sdk/sdk_contract_unit_check.cpp` | `stratakv-test-sdk-contract-unit` | SDK 类型、状态名称与缺失值契约 |
+| `pulsar/fiber_context_ab_benchmark.cpp` | `stratakv-test-fiber-context-ab-benchmark` | 上下文切换严格 A/B |
+| `pulsar/run_context_switch_ab.py` | (手动) | Pulsar 栈池 Direct/Pooled vs Photon A/B 驱动 |
+| `pulsar/run_fiber_reuse_ab.py` | (手动) | 协程栈复用开启前后 A/B 驱动 |
+| `foundation/bounded_thread_pool_unit_check.cpp` | `stratakv-test-bounded-thread-pool-unit` | 有界线程池背压与完成语义 |
 
-```bash
-cmake --build --preset release --target stratakv-test-tso-range-benchmark
-./bin/stratakv-test-tso-range-benchmark \
-  --requests 2048 --clients 8 --warmup 128 \
-  --baseline-range 1 --optimized-range 4096
-```
+Pulsar 协程库自身的 6 项检查(`stratakv-test-fiber-sync`、`-fiber-context`、
+`-scheduler-work-stealing`、`-stack-pool`、`-scheduler-cache`、`-reuse-integration`)
+与 `stratakv-test-fiber-benchmark` 直接引用 `src/pulsar/` 子模块源文件,命名沿用子模块。
 
-## 性能与可靠性测试系统
+## 约定与自检
 
-### 1. 核心概念与口径区分
-
-- **读写分布 (YCSB-compatible Workloads)**：
-  - **A** (Update Heavy): 50% Read, 50% Update
-  - **B** (Read Predominant): 95% Read, 5% Update
-  - **C** (Read Only): 100% Read
-  - **F** (Read-Modify-Write): 50% Read, 50% Read-Modify-Write
-- **“数据跨 Region 但单操作单 Region” vs “单事务跨 Region”**：
-  - **A1 阶段**：整体数据集通过 Key 范围分布在全部 3 个 Region（如 Region 100, 101, 102），但每次单 Key 操作只命中一个特定的 Region，属于单 Region Raft 复制与本地读写，不涉及跨节点分布式 2PC。
-  - **A2/A3 阶段**：单笔事务内包含写入多个不同 Region 的 Key（如 1、2、3 个 Region），由事务协调器执行完整的分布式 2PC 协议（Prewrite -> Primary Commit -> Secondary Commit / Roll-Forward）。
-- **吞吐与延迟统计口径**：
-  - **OPS (Operations Per Second)**：仅用于 A1 单记录读写操作。
-  - **TPS (Transactions Per Second)**：用于 A2/A3/A4/C1 完整事务提交，绝不与 OPS 混为一谈。
-  - **延迟与分位数**：严格按照 attempted/successful 分离，A1 延迟直方图包含所有逻辑操作（含最终冲突），A4 延迟包含重试与退避；单点样本不足 100,000 时不发布有效 P99.9。Smoke 使用 P50/P95/P99/Max。
-
-### 2. 执行命令与复跑方式
-
-在项目根目录执行 **`deploy/stratakv-performance`**：
-
-```bash
-bash deploy/stratakv-performance all --profile interview-smoke
-```
-
-该命令自动进行 Release 构建、启动专用集群、Load、逐点 checkpoint 恢复及全量键值校验、
-施压、故障/一致性检查、集群停止和报告生成。需要 Bash、CMake/C++ 构建依赖、Python 3、
-curl 和 GNU `/usr/bin/time`。本地节点使用 26200–26202 端口，测试前请确保没有另一套集群占用。
-运行时间包含构建及多次集群重启，不承诺固定分钟数。
-
-Smoke 的固定规模如下：
-
-| 项目       | 规模                                                                       |
-| ---------- | -------------------------------------------------------------------------- |
-| Load       | 3,000 条 × 256 B，每个 checkpoint 恢复后逐条核对全部初始值                |
-| A1         | 直连 SDK、uniform、A/C × 1/8 workers，每点 10,000 operations              |
-| A2         | 跨 Region 比例 0/100%，8 workers，每点 1,000 transactions                  |
-| A3         | 1/3 Region，8 workers，每点 1,000 transactions                             |
-| A4         | 乐观/悲观 fast-fail × 0/20% 目标争用，16 workers，每点 1,000 transactions |
-| B1         | 持续写入时强杀 Region Leader，检查恢复、追赶及完整重启后的数据             |
-| B3（附加） | 内存存储上以异常模拟协调器中断，验证提交前/后的恢复语义                    |
-| C1 / C2    | 无故障集群上 1,000 次转账 / 300 次寄存器操作                               |
-
-默认 run-id 为 `smoke-日期-时间`，project 为 `perf-<run-id>`。也可以显式指定：
-
-```bash
-bash deploy/stratakv-performance all --profile interview-smoke --run-id smoke-my-check
-
-# 仅查看矩阵；不启动集群
-bash deploy/stratakv-performance plan --profile interview-smoke
-
-# 已自行完成构建时，可在 all 命令末尾追加 --no-build
-# 手动停止或删除指定测试项目（结果目录保留）
-bash deploy/stratakv-performance down --project perf-smoke-my-check
-bash deploy/stratakv-performance clean --project perf-smoke-my-check
-```
-
-同一 run-id 不能覆盖已有结果，重新运行请换新 ID。正常结束、失败和中断后保留已有证据，
-未完成时保持 `incomplete`。验收检查必选点规模、完整 Load、checkpoint 校验、错误计数、
-B1/B3/C1/C2 和清理结果；不能仅凭“有成功请求”判为 PASS。
-
-`interview-full` 的执行矩阵已存在，但完整验收和报告能力仍待补齐。D1 比较器也仍有待修复的
-采样/正确性门禁问题，目前不要把它们的 PASS 当作完整变更验收证据。
-
-### 3. 结果目录结构
-
-测试输出严格收敛于 `test-results/performance/<run-id>/`：
-
-```text
-test-results/performance/<run-id>/
-├── manifest.json       # 环境配置、版本、拓扑及整体 PASS/FAIL
-├── REPORT.md           # 人类可读 Markdown 报告，数字完全追溯
-├── summary.json        # 机器可读全量聚合指标
-├── summary.csv         # 核心点二维表格
-├── raw/                # 各 case 原始执行日志与 json 结果
-│   ├── load/
-│   ├── a1/
-│   ├── a2/
-│   ├── a3/
-│   └── a4/
-├── metrics/            # /proc/status, /proc/io, prometheus 快照
-├── faults/             # B1/B3 故障时间线、杀进程日志与恢复校验
-└── histories/          # C1/C2 事务历史与线性一致性反例诊断
-```
-
-### 4. 结果分析与适用边界
-
-运行完成后先核对 `manifest.json` 的 `state=complete`、`overall=PASS`，再阅读
-`REPORT.md` 和 `summary.json`。客户端 CPU 时间与峰值 RSS 位于 `metrics/*-client.txt`，
-服务 CPU/IO 和状态位于各点 before/after 目录，二进制 SHA-256 位于 manifest。
-
-- A1 的 1/8 worker 点只支持描述这两个点的变化，不能据此宣称达到吞吐平台或定位接入层瓶颈。
-- A2/A3 的单位是事务 TPS；其写入值是 benchmark 自己生成的短字符串，不应假设与 A1 的 256 B 相同。
-- A4 必须同时看提交吞吐、实际冲突率、成功率和包含退避的延迟，未观察到曲线交叉时不外推切换点。
-- B1 时间线是脚本观测时间，包含重启、轮询和校验成本，不等同于纯 Raft 选举耗时。
-- B3 当前是内存模拟单元测试，不等于真实集群 Coordinator 进程强杀。
-- C1 检查账户总额守恒，C2 检查有限 register history；两者目前没有与 B1/B3 组合运行。
-- C1/C2 的总体耗时还包含最终校验或 epoch 管理，不作为与 A1 同口径的性能对照。
-- Smoke 每点一次，结论仅是 WSL development baseline，不能作为生产容量、完整事务隔离证明或稳定性能回归结论。
-
-## 维护约定
-
-- 新的无外部依赖检查放入 `unit/`，并在 `CMakeLists.txt` 中注册 `add_test`。
-- 会启动本地进程但能自包含运行的测试放入 `integration/`。
-- 性能程序放入 `benchmarks/`，默认不要注册到 CTest。
-- 依赖已部署集群或会写持久化结果的负载放入 `system/`。
-- 多个性能测试共用的生成器、adapter、统计和报告代码放入 `support/performance/`。
-- Pulsar 已有测试应直接引用子模块源码，不要复制到本目录。
-- 可执行目标继续使用 `stratakv-test-*` 命名，并由根目录 CMake 输出到 `bin/`。
-- 每个测试源码开头必须写明测试目标、策略、数据规模和通过条件。
+- 所有测试源文件头部必须包含 4 项规范说明(目标/策略/规模/验证内容),
+  由 `python3 test/verify_test_headers.py`(仓库根目录运行)检查;
+- 新增测试:放进对应领域目录,按 `<名称>_unit_check.cpp` 命名并在本 README 登记;
+- 结果产物一律写入 `test-results/`(按 run-id 建子目录),不散落 `.log`/`.json`。

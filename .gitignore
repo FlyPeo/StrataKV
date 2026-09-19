@@ -22,6 +22,12 @@
 !/deploy/
 !/deploy/**
 
+!/examples/
+!/examples/**
+
+!/cmake/
+!/cmake/**
+
 !/scripts/
 /scripts/*
 !/scripts/pull_all.sh

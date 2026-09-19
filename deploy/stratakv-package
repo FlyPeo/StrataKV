@@ -1,0 +1,286 @@
+#!/usr/bin/env sh
+# Produce the self-contained StrataKV release package and run its acceptance
+# gate: build Release, install into dist/stratakv-<version>-linux-x64/, bundle
+# every non-base third-party shared library into the package's lib/ directory,
+# pack the tar.gz, then unpack into a clean temporary directory and start,
+# verify, read/write and stop a real cluster plus build the shipped SDK example.
+set -eu
+
+deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_dir=$(CDPATH= cd -- "${deploy_dir}/.." && pwd)
+
+usage() {
+  cat <<'EOF'
+Usage: bash deploy/stratakv-package [--skip-build]
+
+Produces dist/stratakv-<version>-linux-x64.tar.gz and runs the acceptance
+gate. Any failure exits nonzero and keeps the acceptance logs under
+dist/stratakv-<version>-linux-x64-acceptance-logs/.
+
+Options:
+  --skip-build  Reuse the existing Release build tree.
+EOF
+}
+
+case "${1:-}" in
+  "") ;;
+  --skip-build) skip_build=true ;;
+  -h|--help) usage; exit 0 ;;
+  *) usage >&2; exit 2 ;;
+esac
+
+version=$(sed -n 's/^project(StrataKV VERSION \([0-9][0-9.]*\))$/\1/p' "${repo_dir}/CMakeLists.txt" | head -n 1)
+[ -n "$version" ] || {
+  echo "Cannot determine the project version from ${repo_dir}/CMakeLists.txt." >&2
+  exit 2
+}
+pkg_name="stratakv-${version}-linux-x64"
+dist_dir="${repo_dir}/dist"
+staging="${dist_dir}/${pkg_name}"
+lib_dir="${staging}/lib"
+archive="${dist_dir}/${pkg_name}.tar.gz"
+log_dir="${dist_dir}/${pkg_name}-acceptance-logs"
+acceptance_root=
+acceptance_pkg=
+
+fail() {
+  echo "stratakv-package: $1" >&2
+  exit 2
+}
+
+# The acceptance cluster binds the default node and TSO ports; refuse to run
+# when anything already occupies them instead of failing later in a confusing
+# startup race.
+check_acceptance_ports() {
+  for port in 26200 26201 26202 26300 26301 26302; do
+    if ss -ltn 2>/dev/null | grep -qE "[:.]${port}[[:space:]]"; then
+      fail "port ${port} is already in use; stop running StrataKV clusters before packaging."
+    fi
+  done
+}
+
+# A non-base third-party dependency of any packaged dynamic object. The base
+# set (glibc and the C++ runtime) is assumed present on every compatible
+# target machine; everything else travels inside the package.
+is_base_lib() {
+  case "$1" in
+    libc.so*|libm.so*|libpthread.so*|librt.so*|libdl.so*|libgcc_s.so*|libstdc++.so*) return 0 ;;
+    ld-linux*|linux-vdso*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Strip every trailing version suffix: libboost_context.so.1.74.0 ->
+# libboost_context.so, so "-lboost_context" resolves during consumer builds.
+linker_short_name() {
+  short=$1
+  while :; do
+    case "$short" in
+      *.so) break ;;
+      *.so.*) short=${short%.*} ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$short"
+}
+
+# ldd indents every line with a tab; strip leading whitespace before parsing
+# so dependency names never carry it into file names or comparisons.
+trim_ldd_line() {
+  tab=$(printf '\t')
+  while :; do
+    case "$1" in
+      "$tab"*) set -- "${1#"$tab"}" ;;
+      " "*) set -- "${1# }" ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$1"
+}
+
+# One fixpoint pass: for every packaged executable and bundled .so, copy any
+# third-party dependency that is not present yet. Returns 0 when nothing new
+# was copied, which terminates the loop.
+collect_pass() {
+  copied=0
+  for elf in "${staging}"/bin/* "${lib_dir}"/*.so "${lib_dir}"/*.so.*; do
+    [ -f "$elf" ] || continue
+    dep_report=$(mktemp)
+    if ! ldd "$elf" >"$dep_report" 2>&1; then
+      cat "$dep_report" >&2
+      rm -f "$dep_report"
+      fail "ldd failed for ${elf}."
+    fi
+    while IFS= read -r raw_line; do
+      dep_line=$(trim_ldd_line "$raw_line")
+      case "$dep_line" in
+        *" not found")
+          missing_lib=${dep_line%% =>*}
+          fail "unresolved dependency ${missing_lib} required by ${elf}."
+          ;;
+        *" => "*)
+          dep_name=${dep_line%% =>*}
+          dep_path=${dep_line#* => }
+          dep_path=${dep_path%% (*}
+          ;;
+        *" "*)
+          # Lines like "/lib64/ld-linux-x86-64.so.2 (0x...)" without "=>".
+          dep_path=${dep_line%% (*}
+          case "$dep_path" in
+            /*) dep_name=$(basename "$dep_path") ;;
+            *) continue ;;
+          esac
+          ;;
+        *) continue ;;
+      esac
+      case "$dep_path" in
+        "${lib_dir}/"*) continue ;;
+      esac
+      is_base_lib "$dep_name" && continue
+      [ -e "${lib_dir}/${dep_name}" ] && continue
+      [ -f "$dep_path" ] || fail "dependency ${dep_name} of ${elf} resolves to missing file ${dep_path}."
+      cp -L "$dep_path" "${lib_dir}/${dep_name}"
+      short=$(linker_short_name "$dep_name")
+      if [ "$short" != "$dep_name" ] && [ ! -e "${lib_dir}/${short}" ]; then
+        ln -s "$dep_name" "${lib_dir}/${short}"
+      fi
+      copied=1
+    done <"$dep_report"
+    rm -f "$dep_report"
+  done
+  [ "$copied" -eq 0 ]
+}
+
+# After the fixpoint, every third-party dependency of every packaged executable
+# must resolve to a file inside the package; anything else means the closure
+# pass missed a library.
+verify_self_contained() {
+  for elf in "${staging}"/bin/*; do
+    [ -f "$elf" ] || continue
+    while IFS= read -r raw_line; do
+      dep_line=$(trim_ldd_line "$raw_line")
+      case "$dep_line" in
+        *" => "*)
+          dep_name=${dep_line%% =>*}
+          dep_path=${dep_line#* => }
+          dep_path=${dep_path%% (*}
+          ;;
+        *) continue ;;
+      esac
+      is_base_lib "$dep_name" && continue
+      case "$dep_path" in
+        # $ORIGIN shows up expanded as "<staging>/bin/../lib/..." in ldd output;
+        # both spellings mean the dependency lives inside the package.
+        "${staging}/"*) ;;
+        *) fail "${elf} resolves ${dep_name} outside the package: ${dep_path}." ;;
+      esac
+    done <<EOF
+$(ldd "$elf")
+EOF
+  done
+}
+
+bundle_muduo() {
+  # muduo static libraries are outside the CMake target graph but part of the
+  # exported link interface; consumers link against the copies in lib/.
+  for muduo_lib in muduo_net muduo_base; do
+    muduo_path=$(find /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib -maxdepth 2 \
+      -name "lib${muduo_lib}.a" 2>/dev/null | head -n 1)
+    [ -n "$muduo_path" ] || fail "cannot locate lib${muduo_lib}.a on the build machine."
+    cp "$muduo_path" "$lib_dir/"
+  done
+}
+
+# ---- Acceptance gate ------------------------------------------------------
+acceptance_project=stratakv-package-acceptance
+on_exit() {
+  rc=$?
+  set +e
+  if [ -n "$acceptance_pkg" ]; then
+    "${acceptance_pkg}/scripts/stratakv-server" down --project "$acceptance_project" >/dev/null 2>&1
+    "${acceptance_pkg}/scripts/stratakv-server" reset --project "$acceptance_project" >/dev/null 2>&1
+  fi
+  if [ -n "$acceptance_root" ]; then
+    rm -rf "$acceptance_root"
+  fi
+  if [ "$rc" -eq 0 ]; then
+    rm -rf "$log_dir"
+  else
+    echo "stratakv-package: failed; acceptance logs kept in ${log_dir}" >&2
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
+
+step() {
+  step_name=$1
+  shift
+  echo "[acceptance] ${step_name}" >&2
+  "$@" >"${log_dir}/${step_name}.log" 2>&1
+}
+
+check_acceptance_ports
+
+echo "Building Release binaries..."
+build_dir="${repo_dir}/build/stratakv/release"
+if [ "${skip_build:-false}" != true ]; then
+  cmake -S "$repo_dir" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release >/dev/null
+  cmake --build "$build_dir" -j"$(nproc)" \
+    --target stratakv-node stratakv-tso stratakv-meta stratakv-admin >/dev/null
+fi
+
+echo "Installing into ${staging}..."
+rm -rf "$staging" "$archive"
+cmake --install "$build_dir" --prefix "$staging" >/dev/null
+
+echo "Adding package-only content..."
+mkdir -p "$lib_dir" "${staging}/scripts" "${staging}/docs"
+cp "${deploy_dir}/stratakv-server" "${deploy_dir}/stratakvctl" "${staging}/scripts/"
+chmod +x "${staging}/scripts/stratakv-server" "${staging}/scripts/stratakvctl"
+cp "${deploy_dir}/QUICKSTART.md" "${staging}/docs/QUICKSTART.md"
+cp -R "${deploy_dir}/config" "${staging}/config"
+cp -R "${repo_dir}/examples" "${staging}/examples"
+printf '%s\n' "$version" >"${staging}/VERSION"
+
+echo "Bundling third-party shared libraries..."
+bundle_muduo
+until collect_pass; do :; done
+verify_self_contained
+echo "Bundled $(ls "$lib_dir" | grep -c '\.so' || true) shared library files."
+
+echo "Packing ${archive}..."
+tar -C "$dist_dir" -czf "$archive" "$pkg_name"
+
+echo "Running acceptance gate..."
+acceptance_root=$(mktemp -d "${TMPDIR:-/tmp}/stratakv-package-acceptance.XXXXXX")
+mkdir -p "$log_dir"
+tar -C "$acceptance_root" -xzf "$archive"
+acceptance_pkg="${acceptance_root}/${pkg_name}"
+acc_regions="${acceptance_pkg}/runtime/${acceptance_project}/regions.conf"
+acc_tso="127.0.0.1:26300,127.0.0.1:26301,127.0.0.1:26302"
+
+step up "${acceptance_pkg}/scripts/stratakv-server" up --project "$acceptance_project"
+step verify "${acceptance_pkg}/scripts/stratakv-server" verify --project "$acceptance_project"
+
+STRATAKV_REGION_CONFIG="$acc_regions" \
+  "${acceptance_pkg}/bin/stratakv-admin" put stratakv-acceptance-key stratakv-acceptance-value \
+  >"${log_dir}/put.log" 2>&1 || fail "acceptance put failed; see ${log_dir}/put.log."
+got_value=$(STRATAKV_REGION_CONFIG="$acc_regions" \
+  "${acceptance_pkg}/bin/stratakv-admin" get stratakv-acceptance-key \
+  2>"${log_dir}/get.log") || fail "acceptance get failed; see ${log_dir}/get.log."
+[ "$got_value" = "stratakv-acceptance-value" ] ||
+  fail "acceptance get mismatch: expected stratakv-acceptance-value, got '${got_value}'."
+
+echo "[acceptance] example build and run"
+cmake -S "${acceptance_pkg}/examples" -B "${acceptance_root}/example-build" \
+  -DCMAKE_PREFIX_PATH="$acceptance_pkg" >"${log_dir}/example-configure.log" 2>&1 ||
+  fail "example configure failed; see ${log_dir}/example-configure.log."
+cmake --build "${acceptance_root}/example-build" >"${log_dir}/example-build.log" 2>&1 ||
+  fail "example build failed; see ${log_dir}/example-build.log."
+"${acceptance_root}/example-build/stratakv_sdk_example" "$acc_regions" "$acc_tso" \
+  >"${log_dir}/example-run.log" 2>&1 ||
+  fail "example run failed; see ${log_dir}/example-run.log."
+
+step down "${acceptance_pkg}/scripts/stratakv-server" down --project "$acceptance_project"
+
+echo "Release package ready: ${archive}"

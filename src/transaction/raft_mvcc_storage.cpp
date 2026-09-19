@@ -77,13 +77,13 @@ namespace {
   // A structured Region error short-circuits legacy err parsing, so `parsed`
   // can still be ResultUnknown even for a definitive sender answer; recover
   // the caller-visible status from the routing kind instead of dropping it.
+  // Only a genuine storage error is definitive here: overload is transient,
+  // and callers must keep retrying it within budget — the B1 fault-window
+  // recovery path depends on that.
   TxnStatus DefinitiveFailureStatus(const SendResult& result, TxnStatus parsed) {
     if (parsed == TxnStatus::Ok) return TxnStatus::ResultUnknown;
     if (parsed != TxnStatus::ResultUnknown) return parsed;
-    if (result.kind == RouteErrorKind::Storage ||
-        result.kind == RouteErrorKind::ServerOverloaded) {
-      return TxnStatus::StorageError;
-    }
+    if (result.kind == RouteErrorKind::Storage) return TxnStatus::StorageError;
     return TxnStatus::ResultUnknown;
   }
 
