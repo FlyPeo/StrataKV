@@ -62,7 +62,9 @@ uint64_t SafeAdd(uint64_t value, uint64_t count) {
 
 metadataRpcProtocol::AutoBalancerConfig DefaultAutoBalancerConfig() {
   metadataRpcProtocol::AutoBalancerConfig config;
-  config.set_enabled(false);
+  // 默认开启自动调度(分裂/副本修复/均衡);存量集群的显式配置随快照
+  // 持久化,不会被本默认值覆盖。运维退出通道:balancer-disable/pause。
+  config.set_enabled(true);
   config.set_paused(false);
   config.set_version(1);
   config.set_evaluationintervalms(5000);

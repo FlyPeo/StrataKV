@@ -283,9 +283,9 @@ void CheckBackwardCompatibleSnapshot() {
     throw std::runtime_error("snapshot without Auto-Balancer fields must remain restorable: " +
                              error);
   }
-  Require(!restored.View()->balancerConfig.enabled() &&
+  Require(restored.View()->balancerConfig.enabled() &&
               restored.View()->balancerConfig.version() == 1,
-          "old snapshot must receive safe disabled defaults");
+          "old snapshot without an explicit choice must receive the enabled default");
 }
 
 }  // namespace

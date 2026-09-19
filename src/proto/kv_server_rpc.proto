@@ -84,6 +84,25 @@ message TxnGetReply {
   stratakv.region.RegionResponseHeader Header = 100;
 }
 
+// Snapshot range scan over one Region. StartKey is inclusive, EndKey is
+// exclusive; an empty EndKey scans to the Region's upper bound. Limit 0 means
+// unlimited within the clipped Region range. Visibility follows the same
+// readTs rules as TxnGet.
+message TxnScanArgs {
+  bytes StartKey = 1;
+  bytes EndKey = 2;
+  uint64 ReadTs = 3;
+  uint32 Limit = 4;
+  int32 RegionId = 5;
+  stratakv.region.RegionRequestHeader Header = 100;
+}
+
+message TxnScanReply {
+  bytes Err = 1;
+  repeated KeyValue Entries = 2;
+  stratakv.region.RegionResponseHeader Header = 100;
+}
+
 message TxnPrewriteArgs {
   bytes Key = 1;
   bytes Value = 2;
@@ -464,6 +483,7 @@ service kvServerRpc
   rpc List(ListArgs) returns(ListReply);
 
   rpc TxnGet(TxnGetArgs) returns (TxnGetReply);
+  rpc TxnScan(TxnScanArgs) returns (TxnScanReply);
   rpc TxnPrewrite(TxnPrewriteArgs) returns (TxnPrewriteReply);
   rpc TxnBatchPrewrite(TxnBatchPrewriteArgs) returns (TxnBatchPrewriteReply);
   rpc TxnCommit(TxnCommitArgs) returns (TxnCommitReply);

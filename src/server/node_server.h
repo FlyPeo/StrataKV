@@ -36,6 +36,8 @@ class KvServiceDispatcher final : public raftKVRpcProctoc::kvServerRpc {
             raftKVRpcProctoc::ListReply*, google::protobuf::Closure*) override;
   void TxnGet(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnGetArgs*,
               raftKVRpcProctoc::TxnGetReply*, google::protobuf::Closure*) override;
+  void TxnScan(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnScanArgs*,
+               raftKVRpcProctoc::TxnScanReply*, google::protobuf::Closure*) override;
   void TxnPrewrite(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnPrewriteArgs*,
                    raftKVRpcProctoc::TxnPrewriteReply*, google::protobuf::Closure*) override;
   void TxnBatchPrewrite(google::protobuf::RpcController*, const raftKVRpcProctoc::TxnBatchPrewriteArgs*,

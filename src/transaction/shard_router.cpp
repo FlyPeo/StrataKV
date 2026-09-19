@@ -56,6 +56,45 @@ std::shared_ptr<MvccStorage> ShardRouter::Route(const std::string& key) const {
   return shards_[RouteIndex(key)];
 }
 
+std::vector<ShardRouter::RegionRoute> ShardRouter::RegionsInRange(const std::string& startKey,
+                                                                  const std::string& endKey) const {
+  std::vector<RegionRoute> result;
+  if (cache_) {
+    // 空起点从全空间第一个 Region 开始;否则先解析起点所在 Region,再沿
+    // 路由表顺序前进,直到 Region 起点越过 endKey。
+    RegionRouteHandle handle;
+    if (startKey.empty()) {
+      auto table = cache_->Snapshot();
+      if (table->regions.empty()) return result;
+      handle.table = table;
+      handle.index = 0;
+    } else {
+      handle = ResolveHandle(startKey);
+    }
+    while (handle) {
+      const RegionMetadata& region = handle.Descriptor();
+      if (!endKey.empty() && region.startKey >= endKey) break;
+      auto storage = StorageFor(handle);
+      if (!storage) throw std::out_of_range("no storage available for Region " +
+                                            std::to_string(region.regionId));
+      result.push_back({region, std::move(storage)});
+      ++handle.index;
+      if (handle.index >= handle.table->regions.size()) break;
+    }
+    return result;
+  }
+  for (size_t i = 0; i < regions_.size(); ++i) {
+    const RegionMetadata& region = regions_[i];
+    if (!endKey.empty() && region.startKey >= endKey) continue;
+    if (!region.endKey.empty() && !startKey.empty() && region.endKey <= startKey) continue;
+    if (i >= shards_.size()) continue;
+    result.push_back({region, shards_[i]});
+  }
+  std::sort(result.begin(), result.end(),
+            [](const RegionRoute& a, const RegionRoute& b) { return a.metadata.startKey < b.metadata.startKey; });
+  return result;
+}
+
 std::shared_ptr<MvccStorage> ShardRouter::StorageFor(const RegionRouteHandle& handle) const {
   const int regionId = handle.Descriptor().regionId;
   {

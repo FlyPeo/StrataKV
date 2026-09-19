@@ -22,6 +22,8 @@ class RaftMvccStorage : public MvccStorage {
   ~RaftMvccStorage() override;
 
   TxnStatus Get(const std::string& key, uint64_t readTs, std::string* value) override;
+  TxnStatus Scan(const std::string& startKey, const std::string& endKey, uint64_t readTs,
+                 size_t limit, std::vector<std::pair<std::string, std::string>>* entries) override;
   TxnStatus Prewrite(const std::string& key, const std::string& value, const std::string& primaryKey, uint64_t startTs,
                      uint64_t ttlMs, uint64_t forUpdateTs = 0,
                      uint64_t remainingBudgetMs = 0) override;

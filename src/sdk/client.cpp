@@ -242,6 +242,34 @@ Result Client::Get(const std::shared_ptr<Transaction>& transaction, const std::s
   }
 }
 
+ScanResult Client::Scan(const std::shared_ptr<Transaction>& transaction, const std::string& startKey,
+                        const std::string& endKey, size_t limit) {
+  ScanResult result;
+  if (transaction == nullptr || transaction->impl_ == nullptr || transaction->impl_->finished) {
+    result.status = Status::kInvalidTransaction;
+    result.message = "transaction is not active";
+    return result;
+  }
+  try {
+    std::vector<std::pair<std::string, std::string>> entries;
+    const TxnStatus status = impl_->coordinator->Scan(&transaction->impl_->transaction, startKey,
+                                                      endKey, limit, &entries,
+                                                      transaction->impl_->options);
+    const Result mapped = FromTxnStatus(status);
+    result.status = mapped.status;
+    result.message = mapped.message;
+    result.retryable = mapped.retryable;
+    result.startTimestamp = transaction->impl_->transaction.StartTs();
+    if (status == TxnStatus::Ok) result.entries = std::move(entries);
+    return result;
+  } catch (const std::exception& error) {
+    result.status = Status::kUnavailable;
+    result.message = error.what();
+    result.retryable = true;
+    return result;
+  }
+}
+
 Result Client::GetForUpdate(const std::shared_ptr<Transaction>& transaction,
                             const std::string& key) {
   if (transaction == nullptr || transaction->impl_ == nullptr || transaction->impl_->finished ||

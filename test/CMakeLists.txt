@@ -265,6 +265,10 @@ add_executable(stratakv-test-sdk-contract-unit sdk/sdk_contract_unit_check.cpp)
 target_link_libraries(stratakv-test-sdk-contract-unit PRIVATE stratakv_sdk pthread)
 add_test(NAME stratakv-test-sdk-contract-unit COMMAND stratakv-test-sdk-contract-unit)
 
+add_executable(stratakv-test-sdk-scan-unit sdk/sdk_scan_unit_check.cpp)
+target_link_libraries(stratakv-test-sdk-scan-unit PRIVATE stratakv_sdk pthread)
+add_test(NAME stratakv-test-sdk-scan-unit COMMAND stratakv-test-sdk-scan-unit)
+
 add_executable(stratakv-test-txn-contention-benchmark performance/txn_contention_benchmark.cpp)
 target_link_libraries(stratakv-test-txn-contention-benchmark PRIVATE stratakv_sdk pthread)
 

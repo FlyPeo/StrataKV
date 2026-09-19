@@ -1398,6 +1398,60 @@ void RegionPeer::TxnGet(google::protobuf::RpcController *controller, const ::raf
   done->Run();
 }
 
+void RegionPeer::TxnScan(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnScanArgs *request,
+                         ::raftKVRpcProctoc::TxnScanReply *response, ::google::protobuf::Closure *done) {
+  // 调用方(SDK)保证起点落在本 Region;空起点表示从本 Region 下界开始,
+  // 仅当 Region 下界本身无界("")时合法;终点在 Region 上界内裁剪。
+  bool startInside = false;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_descriptorMutex);
+    startInside = request->startkey().empty()
+                      ? m_regionStartKey.empty()
+                      : OwnsKey(request->startkey());
+  }
+  if (!startInside) {
+    PopulateKeyNotInRegion(this, response);
+    done->Run();
+    return;
+  }
+  std::string endKey = request->endkey();
+  {
+    std::shared_lock<std::shared_mutex> lock(m_descriptorMutex);
+    if (!m_regionEndKey.empty() && (endKey.empty() || endKey > m_regionEndKey)) {
+      endKey = m_regionEndKey;
+    }
+  }
+  if (!endKey.empty() && endKey <= request->startkey()) {
+    response->set_err(std::to_string(static_cast<int>(TxnStatus::Ok)));
+    done->Run();
+    return;
+  }
+
+  int term = -1;
+  if (!LinearizableReadBarrier(RequestDeadline(0), &term)) {
+    response->set_err(ErrWrongLeader);
+    done->Run();
+    return;
+  }
+
+  std::vector<std::pair<std::string, std::string>> entries;
+  const TxnStatus status = m_mvccStorage->Scan(request->startkey(), endKey, request->readts(),
+                                               request->limit(), &entries);
+  if (!m_raftNode->IsLeaderInTerm(term)) {
+    response->set_err(ErrWrongLeader);
+  } else {
+    response->set_err(std::to_string(static_cast<int>(status)));
+    if (status == TxnStatus::Ok) {
+      for (auto& entry : entries) {
+        auto* kv = response->add_entries();
+        kv->set_key(std::move(entry.first));
+        kv->set_value(std::move(entry.second));
+      }
+    }
+  }
+  done->Run();
+}
+
 void RegionPeer::TxnPrewrite(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnPrewriteArgs *request,
                            ::raftKVRpcProctoc::TxnPrewriteReply *response, ::google::protobuf::Closure *done) {
   if (!OwnsKey(request->key())) {

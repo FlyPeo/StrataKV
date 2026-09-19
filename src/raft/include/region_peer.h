@@ -279,6 +279,9 @@ class RegionPeer : public TxnRegionExecutor {
   void TxnGet(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnGetArgs *request,
               ::raftKVRpcProctoc::TxnGetReply *response, ::google::protobuf::Closure *done);
 
+  void TxnScan(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnScanArgs *request,
+               ::raftKVRpcProctoc::TxnScanReply *response, ::google::protobuf::Closure *done);
+
   void TxnPrewrite(google::protobuf::RpcController *controller, const ::raftKVRpcProctoc::TxnPrewriteArgs *request,
                    ::raftKVRpcProctoc::TxnPrewriteReply *response, ::google::protobuf::Closure *done);
   void TxnBatchPrewrite(google::protobuf::RpcController*, const ::raftKVRpcProctoc::TxnBatchPrewriteArgs*,

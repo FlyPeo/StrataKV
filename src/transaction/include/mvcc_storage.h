@@ -151,6 +151,11 @@ class MvccStorage {
   virtual ~MvccStorage() = default;
 
   virtual TxnStatus Get(const std::string& key, uint64_t readTs, std::string* value);
+  // 快照范围读:[startKey, endKey),endKey 为空表示无界,limit 为 0 表示
+  // 不限量。可见性规则与 Get 完全一致;范围内任一键存在快照下的未完成锁时,
+  // 整批返回 LockConflict,不做静默跳过。
+  virtual TxnStatus Scan(const std::string& startKey, const std::string& endKey, uint64_t readTs,
+                         size_t limit, std::vector<std::pair<std::string, std::string>>* entries);
   virtual TxnStatus Prewrite(const std::string& key, const std::string& value, const std::string& primaryKey, uint64_t startTs,
                      uint64_t ttlMs, uint64_t forUpdateTs = 0,
                      uint64_t remainingBudgetMs = 0);

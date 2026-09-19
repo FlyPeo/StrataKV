@@ -39,6 +39,11 @@ std::vector<std::string> RequestKeys(const raftKVRpcProctoc::ListArgs&) { return
 std::vector<std::string> RequestKeys(const raftKVRpcProctoc::TxnGetArgs& request) {
   return {request.key()};
 }
+std::vector<std::string> RequestKeys(const raftKVRpcProctoc::TxnScanArgs& request) {
+  // The caller guarantees the (clipped) range stays inside this Region, so
+  // header validation only needs the inclusive range start.
+  return {request.startkey()};
+}
 std::vector<std::string> RequestKeys(const raftKVRpcProctoc::TxnPrewriteArgs& request) {
   return {request.key()};
 }
@@ -503,6 +508,7 @@ DISPATCH_KV(PutAppend, PutAppendArgs, PutAppendReply)
 DISPATCH_KV(Get, GetArgs, GetReply)
 DISPATCH_KV(List, ListArgs, ListReply)
 DISPATCH_KV(TxnGet, TxnGetArgs, TxnGetReply)
+DISPATCH_KV(TxnScan, TxnScanArgs, TxnScanReply)
 DISPATCH_KV(TxnPrewrite, TxnPrewriteArgs, TxnPrewriteReply)
 DISPATCH_KV(TxnBatchPrewrite, TxnBatchPrewriteArgs, TxnBatchPrewriteReply)
 DISPATCH_KV(TxnCommit, TxnCommitArgs, TxnCommitReply)

@@ -4,17 +4,18 @@ set -eu
 
 deploy_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # 源码树模式:脚本位于 deploy/,上级是仓库根(存在 CMakeLists.txt),可现场构建。
-# 发行包模式:脚本位于 <包根>/scripts/,包内无源码,直接使用 <包根>/bin/ 的成品。
+# 发行包模式:脚本位于 <包根>/server/scripts/,包内无源码,直接使用
+# <包根>/server/bin/ 的成品,运行时数据写 <包根>/server/runtime/。
 if [ -f "${deploy_dir}/../CMakeLists.txt" ]; then
   deployment_mode=source
+  pkg_dir=$(CDPATH= cd -- "${deploy_dir}/.." && pwd)
+  bin_dir="${pkg_dir}/bin"
+  runtime_root="${deploy_dir}/runtime"
 else
   deployment_mode=package
-fi
-repo_dir=$(CDPATH= cd -- "${deploy_dir}/.." && pwd)
-if [ "$deployment_mode" = package ]; then
-  runtime_root="${repo_dir}/runtime"
-else
-  runtime_root="${deploy_dir}/runtime"
+  pkg_dir=$(CDPATH= cd -- "${deploy_dir}/../.." && pwd)
+  bin_dir="${pkg_dir}/server/bin"
+  runtime_root="${pkg_dir}/server/runtime"
 fi
 
 usage() {
@@ -97,25 +98,26 @@ selected_node=all
 inspect_prefix=
 build_enabled=true
 
+explicit_opts=" "
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --nodes) nodes=${2:?--nodes requires a value}; shift 2 ;;
-    --replicas) replicas=${2:?--replicas requires a value}; shift 2 ;;
+    --nodes) explicit_opts="nodes $explicit_opts"; nodes=${2:?--nodes requires a value}; shift 2 ;;
+    --replicas) explicit_opts="replicas $explicit_opts"; replicas=${2:?--replicas requires a value}; shift 2 ;;
     --project) project=${2:?--project requires a value}; shift 2 ;;
-    --tso-port) tso_port=${2:?--tso-port requires a value}; shift 2 ;;
-    --topology-mode)
+    --tso-port) explicit_opts="tso_port $explicit_opts"; tso_port=${2:?--tso-port requires a value}; shift 2 ;;
+    --topology-mode) explicit_opts="topology_mode $explicit_opts";
       case "$2" in
         static|dynamic) topology_mode=$2 ;;
         *) echo "--topology-mode must be static or dynamic" >&2; exit 2 ;;
       esac
       shift 2 ;;
-    --metadata-port) metadata_port=${2:?--metadata-port requires a value}; shift 2 ;;
-    --tso-range-size) tso_range_size=${2:?--tso-range-size requires a value}; shift 2 ;;
-    --raft-log-gc-threshold) raft_log_gc_threshold=${2:?--raft-log-gc-threshold requires a value}; shift 2 ;;
-    --raft-log-gc-count-limit) raft_log_gc_count_limit=${2:?--raft-log-gc-count-limit requires a value}; shift 2 ;;
-    --raft-log-gc-size-limit) raft_log_gc_size_limit=${2:?--raft-log-gc-size-limit requires a value}; shift 2 ;;
-    --raft-log-gc-tick-interval-ms) raft_log_gc_tick_interval_ms=${2:?--raft-log-gc-tick-interval-ms requires a value}; shift 2 ;;
-    --max-raft-state) raft_log_gc_size_limit=${2:?--max-raft-state requires a value}; shift 2 ;;
+    --metadata-port) explicit_opts="metadata_port $explicit_opts"; metadata_port=${2:?--metadata-port requires a value}; shift 2 ;;
+    --tso-range-size) explicit_opts="tso_range_size $explicit_opts"; tso_range_size=${2:?--tso-range-size requires a value}; shift 2 ;;
+    --raft-log-gc-threshold) explicit_opts="gc $explicit_opts"; raft_log_gc_threshold=${2:?--raft-log-gc-threshold requires a value}; shift 2 ;;
+    --raft-log-gc-count-limit) explicit_opts="gc $explicit_opts"; raft_log_gc_count_limit=${2:?--raft-log-gc-count-limit requires a value}; shift 2 ;;
+    --raft-log-gc-size-limit) explicit_opts="gc $explicit_opts"; raft_log_gc_size_limit=${2:?--raft-log-gc-size-limit requires a value}; shift 2 ;;
+    --raft-log-gc-tick-interval-ms) explicit_opts="gc $explicit_opts"; raft_log_gc_tick_interval_ms=${2:?--raft-log-gc-tick-interval-ms requires a value}; shift 2 ;;
+    --max-raft-state) explicit_opts="gc $explicit_opts"; raft_log_gc_size_limit=${2:?--max-raft-state requires a value}; shift 2 ;;
     --node) selected_node=${2:?--node requires a value}; shift 2 ;;
     --prefix) inspect_prefix=${2:?--prefix requires a value}; shift 2 ;;
     --no-build) build_enabled=false; shift ;;
@@ -125,6 +127,31 @@ while [ "$#" -gt 0 ]; do
 done
 
 is_project "$project" || { echo "--project may use only letters, digits, _ and -." >&2; exit 2; }
+
+# `up` 重启既有项目时,未显式传入的选项继承 runtime.conf 里保存的值
+# (README 承诺的"运行值保存在 runtime.conf");显式传入的选项覆盖保存值。
+inherit_saved_settings() {
+  [ -f "$settings_file" ] || return 0
+  arg_topology_mode=$topology_mode
+  arg_tso_port=$tso_port
+  arg_metadata_port=$metadata_port
+  arg_tso_range_size=$tso_range_size
+  arg_raft_log_gc_threshold=$raft_log_gc_threshold
+  arg_raft_log_gc_count_limit=$raft_log_gc_count_limit
+  arg_raft_log_gc_size_limit=$raft_log_gc_size_limit
+  arg_raft_log_gc_tick_interval_ms=$raft_log_gc_tick_interval_ms
+  load_settings
+  case "$explicit_opts" in *" topology_mode "*) topology_mode=$arg_topology_mode ;; esac
+  case "$explicit_opts" in *" tso_port "*) tso_port=$arg_tso_port ;; esac
+  case "$explicit_opts" in *" metadata_port "*) metadata_port=$arg_metadata_port ;; esac
+  case "$explicit_opts" in *" tso_range_size "*) tso_range_size=$arg_tso_range_size ;; esac
+  if [ "${explicit_opts#* gc }" != "$explicit_opts" ]; then
+    raft_log_gc_threshold=$arg_raft_log_gc_threshold
+    raft_log_gc_count_limit=$arg_raft_log_gc_count_limit
+    raft_log_gc_size_limit=$arg_raft_log_gc_size_limit
+    raft_log_gc_tick_interval_ms=$arg_raft_log_gc_tick_interval_ms
+  fi
+}
 # 发行包内构建请求一律被改为免构建:up 默认即免构建,--no-build 保留为兼容 no-op;
 # 只有 rebuild 显式把 build_enabled 置回 true,由 build_programs 给出可执行错误。
 if [ "$deployment_mode" = package ] && [ "$build_enabled" = true ]; then
@@ -135,10 +162,10 @@ regions_file="${runtime_dir}/regions.conf"
 settings_file="${runtime_dir}/runtime.conf"
 pids_dir="${runtime_dir}/pids"
 logs_dir="${runtime_dir}/logs"
-node_bin="${repo_dir}/bin/stratakv-node"
-meta_bin="${repo_dir}/bin/stratakv-meta"
-tso_bin="${repo_dir}/bin/stratakv-tso"
-admin_bin="${repo_dir}/bin/stratakv-admin"
+node_bin="${bin_dir}/stratakv-node"
+meta_bin="${bin_dir}/stratakv-meta"
+tso_bin="${bin_dir}/stratakv-tso"
+admin_bin="${bin_dir}/stratakv-admin"
 check_package_binaries
 
 load_settings() {
@@ -224,8 +251,8 @@ build_programs() {
     exit 2
   fi
   asan=${STRATAKV_ENABLE_ASAN:-OFF}
-  build_dir="${repo_dir}/build/stratakv/release"
-  cmake -S "$repo_dir" -B "$build_dir" \
+  build_dir="${pkg_dir}/build/stratakv/release"
+  cmake -S "$pkg_dir" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
     -DSTRATAKV_ENABLE_ASAN="$asan"
   cmake --build "$build_dir" -j"$(nproc)" \
@@ -532,6 +559,7 @@ generate() {
 }
 
 start_all() {
+  inherit_saved_settings
   generate
   build_programs
   # A previous run can leave orphaned members behind (for example TSO processes

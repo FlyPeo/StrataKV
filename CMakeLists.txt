@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(StrataKV VERSION 1.0.0)
+project(StrataKV VERSION 1.2.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,7 +39,9 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
 # 只作用于 install 出来的副本,不影响 build tree 内的二进制。
 # 默认的 DT_RUNPATH 不沿依赖链传递(librocksdb 的 libsnappy 等会绕过包内
 # lib/ 落回系统目录),因此统一改用可传递的 DT_RPATH。
-set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
+# 发行包把 bin 安排到 server/bin 与 client/bin(比 lib 深一级),打包脚本以
+# -DCMAKE_INSTALL_RPATH='$ORIGIN/../../lib' 覆盖此默认值。
+set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib" CACHE STRING "Install-time RPATH")
 add_link_options(-Wl,--disable-new-dtags)
 
 # 1. 查找依赖
@@ -129,6 +131,11 @@ target_link_libraries(stratakv-meta PRIVATE stratakv_core)
 add_executable(stratakv-admin src/admin/admin_main.cpp)
 target_link_libraries(stratakv-admin PRIVATE stratakv_core stratakv_rpc)
 
+# 面向业务的常驻命令行客户端:连接一次常驻复用,命令走事务 SDK。
+# 与 stratakv-admin 的边界:client 只做业务读写,admin 做底层运维。
+add_executable(stratakv-client src/client/client_main.cpp)
+target_link_libraries(stratakv-client PRIVATE stratakv_sdk stratakv_core stratakv_rpc)
+
 # Public developer SDK.  It deliberately exposes transactions, not the internal
 # Raft RPC protocol used between StrataKV nodes.
 add_library(stratakv_sdk STATIC src/sdk/client.cpp)
@@ -142,6 +149,7 @@ install(TARGETS
     stratakv-tso
     stratakv-meta
     stratakv-admin
+    stratakv-client
     RUNTIME DESTINATION bin
 )
 install(TARGETS stratakv_sdk stratakv_core ARCHIVE DESTINATION lib)

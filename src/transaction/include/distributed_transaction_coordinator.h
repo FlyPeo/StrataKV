@@ -35,6 +35,11 @@ class DistributedTransactionCoordinator {
   TxnStatus Validate(Transaction* txn, const TxnOptions& options = TxnOptions());
   TxnStatus Get(Transaction* txn, const std::string& key, std::string* value,
                 const TxnOptions& options = TxnOptions());
+  // 快照范围读:[startKey, endKey),endKey 为空表示无界;limit 为 0 表示
+  // 不限量。跨 Region 聚合,输出按键升序;任一 Region 冲突即整批 LockConflict。
+  TxnStatus Scan(Transaction* txn, const std::string& startKey, const std::string& endKey,
+                 size_t limit, std::vector<std::pair<std::string, std::string>>* entries,
+                 const TxnOptions& options = TxnOptions());
   TxnStatus PessimisticLock(Transaction* txn, const std::string& key, const TxnOptions& options = TxnOptions());
   PessimisticLockResult GetForUpdate(Transaction* txn, const std::string& key,
                                      const TxnOptions& options = TxnOptions());

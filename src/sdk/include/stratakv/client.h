@@ -56,6 +56,18 @@ struct BatchResult {
   bool retryable = false;
 };
 
+// Snapshot range scan result. Entries are ascending by key and reflect the
+// transaction's start timestamp only.
+struct ScanResult {
+  Status status = Status::kOk;
+  std::vector<std::pair<std::string, std::string>> entries;
+  std::string message;
+  bool retryable = false;
+  uint64_t startTimestamp = 0;
+
+  bool ok() const { return status == Status::kOk; }
+};
+
 enum class TransactionRecordState {
   kLocked,
   kCommitted,
@@ -108,6 +120,11 @@ class Client {
 
   std::shared_ptr<Transaction> Begin(uint64_t lockTtlMs = 120000, uint64_t rpcBudgetMs = 5000);
   Result Get(const std::shared_ptr<Transaction>& transaction, const std::string& key);
+  // Snapshot range scan over [startKey, endKey); empty bounds are open.
+  // limit 0 means unlimited. On LockConflict the outcome is retryable and
+  // entries is left empty (no partial silent results).
+  ScanResult Scan(const std::shared_ptr<Transaction>& transaction, const std::string& startKey,
+                  const std::string& endKey, size_t limit = 0);
   Result GetForUpdate(const std::shared_ptr<Transaction>& transaction, const std::string& key);
   BatchResult BatchGetForUpdate(const std::shared_ptr<Transaction>& transaction,
                                 const std::vector<std::string>& keys);

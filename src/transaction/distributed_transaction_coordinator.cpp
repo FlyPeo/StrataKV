@@ -179,6 +179,40 @@ TxnStatus DistributedTransactionCoordinator::Get(Transaction* txn, const std::st
   }
 }
 
+TxnStatus DistributedTransactionCoordinator::Scan(Transaction* txn, const std::string& startKey,
+                                                  const std::string& endKey, size_t limit,
+                                                  std::vector<std::pair<std::string, std::string>>* entries,
+                                                  const TxnOptions& options) {
+  if (entries == nullptr) return TxnStatus::StorageError;
+  if (!endKey.empty() && endKey <= startKey) return TxnStatus::StorageError;
+  const TxnStatus active = CheckActiveAndDeadline(txn, options);
+  if (active != TxnStatus::Ok) return active;
+  try {
+    const auto regions = router_->RegionsInRange(startKey, endKey);
+    for (const auto& route : regions) {
+      if (limit != 0 && entries->size() >= limit) break;
+      // 裁剪到该 Region 与请求区间的交集;空 endKey 表示无界,交给对端按
+      // Region 上界截断。
+      std::string clipStart = startKey;
+      if (clipStart.empty() || clipStart < route.metadata.startKey) clipStart = route.metadata.startKey;
+      std::string clipEnd = endKey;
+      if (!route.metadata.endKey.empty() && (clipEnd.empty() || clipEnd > route.metadata.endKey)) {
+        clipEnd = route.metadata.endKey;
+      }
+      if (!clipEnd.empty() && clipEnd <= clipStart) continue;
+      const size_t remaining = limit == 0 ? 0 : limit - entries->size();
+      const TxnStatus status =
+          route.storage->Scan(clipStart, clipEnd, txn->StartTs(), remaining, entries);
+      if (status != TxnStatus::Ok) return status;
+    }
+    return TxnStatus::Ok;
+  } catch (const std::out_of_range& error) {
+    std::cerr << "{\"trace\":\"scan_route_failed\",\"start_ts\":" << txn->StartTs()
+              << ",\"what\":\"" << error.what() << "\"}" << std::endl;
+    throw;
+  }
+}
+
 BatchLockingReadResult DistributedTransactionCoordinator::AcquireKeys(
     Transaction* txn, const std::vector<std::string>& requestedKeys, bool returnValues,
     const TxnOptions& options) {

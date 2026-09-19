@@ -42,6 +42,9 @@ class ShardRouter {
   // 返回 key 对应的分片编号，用于调试、统计或分布式协调。
   size_t ShardId(const std::string& key) const;
   int RegionId(const std::string& key) const;
+  // [startKey, endKey) 覆盖的全部 Region,按 startKey 升序;endKey 为空表示
+  // 无界。供范围扫描逐 Region 裁剪聚合使用。
+  std::vector<RegionRoute> RegionsInRange(const std::string& startKey, const std::string& endKey) const;
   // 暴露当前路由器持有的全部分片，供协调器扫描或恢复使用。
   std::vector<std::shared_ptr<MvccStorage>> Shards() const;
   // 动态模式下暴露底层 cache，供协调器在 regroup 前刷新拓扑。

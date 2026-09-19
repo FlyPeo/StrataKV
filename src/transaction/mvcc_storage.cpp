@@ -316,6 +316,60 @@ TxnStatus MvccStorage::Get(const std::string& key, uint64_t readTs, std::string*
   return TxnStatus::NotFound;
 }
 
+TxnStatus MvccStorage::Scan(const std::string& startKey, const std::string& endKey, uint64_t readTs,
+                            size_t limit, std::vector<std::pair<std::string, std::string>>* entries) {
+  if (entries == nullptr || (!endKey.empty() && endKey <= startKey)) {
+    return TxnStatus::StorageError;
+  }
+  std::shared_lock<std::shared_mutex> lock(mutex_);
+
+  // Candidate keys come from the unordered write index plus the lock table
+  // (a locked key with no committed version would otherwise be invisible to
+  // the conflict check); sort once so the output is ascending.
+  std::vector<std::string> names;
+  names.reserve(writes_.size() + locks_.size());
+  for (const auto& item : writes_) {
+    const std::string& key = item.first;
+    if (key < startKey) continue;
+    if (!endKey.empty() && key >= endKey) continue;
+    names.push_back(key);
+  }
+  for (const auto& item : locks_) {
+    const std::string& key = item.first;
+    if (key < startKey) continue;
+    if (!endKey.empty() && key >= endKey) continue;
+    names.push_back(key);
+  }
+  std::sort(names.begin(), names.end());
+  names.erase(std::unique(names.begin(), names.end()), names.end());
+
+  for (const std::string& key : names) {
+    if (limit != 0 && entries->size() >= limit) break;
+    const auto lockIt = locks_.find(key);
+    if (lockIt != locks_.end() && lockIt->second.startTs <= readTs) {
+      const auto writeItForLock = writes_.find(key);
+      bool hasFinishedWrite = false;
+      if (writeItForLock != writes_.end()) {
+        for (const auto& item : writeItForLock->second) {
+          if (item.second.startTs == lockIt->second.startTs) {
+            hasFinishedWrite = true;
+            break;
+          }
+        }
+      }
+      if (!hasFinishedWrite) {
+        // 冲突语义与 Get 对齐:整批失败,不返回部分结果。
+        entries->clear();
+        return TxnStatus::LockConflict;
+      }
+    }
+    std::string value;
+    const TxnStatus status = ReadCommittedLocked(key, readTs, &value, nullptr);
+    if (status == TxnStatus::Ok) entries->emplace_back(key, std::move(value));
+  }
+  return TxnStatus::Ok;
+}
+
 TxnStatus MvccStorage::Prewrite(const std::string& key, const std::string& value, const std::string& primaryKey,
                                 uint64_t startTs, uint64_t ttlMs, uint64_t forUpdateTs,
                                 uint64_t remainingBudgetMs) {

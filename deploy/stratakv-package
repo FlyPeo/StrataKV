@@ -103,7 +103,8 @@ trim_ldd_line() {
 # was copied, which terminates the loop.
 collect_pass() {
   copied=0
-  for elf in "${staging}"/bin/* "${lib_dir}"/*.so "${lib_dir}"/*.so.*; do
+  for elf in "${staging}"/server/bin/* "${staging}"/client/bin/* \
+             "${lib_dir}"/*.so "${lib_dir}"/*.so.*; do
     [ -f "$elf" ] || continue
     dep_report=$(mktemp)
     if ! ldd "$elf" >"$dep_report" 2>&1; then
@@ -155,7 +156,7 @@ collect_pass() {
 # must resolve to a file inside the package; anything else means the closure
 # pass missed a library.
 verify_self_contained() {
-  for elf in "${staging}"/bin/*; do
+  for elf in "${staging}"/server/bin/* "${staging}"/client/bin/*; do
     [ -f "$elf" ] || continue
     while IFS= read -r raw_line; do
       dep_line=$(trim_ldd_line "$raw_line")
@@ -197,8 +198,8 @@ on_exit() {
   rc=$?
   set +e
   if [ -n "$acceptance_pkg" ]; then
-    "${acceptance_pkg}/scripts/stratakv-server" down --project "$acceptance_project" >/dev/null 2>&1
-    "${acceptance_pkg}/scripts/stratakv-server" reset --project "$acceptance_project" >/dev/null 2>&1
+    "${acceptance_pkg}/server/scripts/stratakv-server" down --project "$acceptance_project" >/dev/null 2>&1
+    "${acceptance_pkg}/server/scripts/stratakv-server" reset --project "$acceptance_project" >/dev/null 2>&1
   fi
   if [ -n "$acceptance_root" ]; then
     rm -rf "$acceptance_root"
@@ -224,7 +225,9 @@ check_acceptance_ports
 echo "Building Release binaries..."
 build_dir="${repo_dir}/build/stratakv/release"
 if [ "${skip_build:-false}" != true ]; then
-  cmake -S "$repo_dir" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release >/dev/null
+  # bin 布局在 server/bin 与 client/bin(比 lib 深一级),rpath 相应多跳一级。
+  cmake -S "$repo_dir" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_RPATH='$ORIGIN/../../lib' >/dev/null
   cmake --build "$build_dir" -j"$(nproc)" \
     --target stratakv-node stratakv-tso stratakv-meta stratakv-admin >/dev/null
 fi
@@ -234,12 +237,19 @@ rm -rf "$staging" "$archive"
 cmake --install "$build_dir" --prefix "$staging" >/dev/null
 
 echo "Adding package-only content..."
-mkdir -p "$lib_dir" "${staging}/scripts" "${staging}/docs"
-cp "${deploy_dir}/stratakv-server" "${deploy_dir}/stratakvctl" "${staging}/scripts/"
-chmod +x "${staging}/scripts/stratakv-server" "${staging}/scripts/stratakvctl"
+mkdir -p "$lib_dir" "${staging}/server/bin" "${staging}/server/scripts" \
+         "${staging}/server/config" "${staging}/client/bin" "${staging}/client/examples" \
+         "${staging}/docs"
+for server_binary in stratakv-node stratakv-tso stratakv-meta stratakv-admin; do
+  mv "${staging}/bin/${server_binary}" "${staging}/server/bin/"
+done
+mv "${staging}/bin/stratakv-client" "${staging}/client/bin/"
+rmdir "${staging}/bin"
+cp "${deploy_dir}/stratakv-server" "${deploy_dir}/stratakvctl" "${staging}/server/scripts/"
+chmod +x "${staging}/server/scripts/stratakv-server" "${staging}/server/scripts/stratakvctl"
 cp "${deploy_dir}/QUICKSTART.md" "${staging}/docs/QUICKSTART.md"
-cp -R "${deploy_dir}/config" "${staging}/config"
-cp -R "${repo_dir}/examples" "${staging}/examples"
+cp -R "${deploy_dir}/config/." "${staging}/server/config/"
+cp -R "${repo_dir}/examples/." "${staging}/client/examples/"
 printf '%s\n' "$version" >"${staging}/VERSION"
 
 echo "Bundling third-party shared libraries..."
@@ -256,23 +266,28 @@ acceptance_root=$(mktemp -d "${TMPDIR:-/tmp}/stratakv-package-acceptance.XXXXXX"
 mkdir -p "$log_dir"
 tar -C "$acceptance_root" -xzf "$archive"
 acceptance_pkg="${acceptance_root}/${pkg_name}"
-acc_regions="${acceptance_pkg}/runtime/${acceptance_project}/regions.conf"
+acc_regions="${acceptance_pkg}/server/runtime/${acceptance_project}/regions.conf"
 acc_tso="127.0.0.1:26300,127.0.0.1:26301,127.0.0.1:26302"
+acc_client="${acceptance_pkg}/client/bin/stratakv-client"
 
-step up "${acceptance_pkg}/scripts/stratakv-server" up --project "$acceptance_project"
-step verify "${acceptance_pkg}/scripts/stratakv-server" verify --project "$acceptance_project"
+step up "${acceptance_pkg}/server/scripts/stratakv-server" up --project "$acceptance_project"
+step verify "${acceptance_pkg}/server/scripts/stratakv-server" verify --project "$acceptance_project"
 
-STRATAKV_REGION_CONFIG="$acc_regions" \
-  "${acceptance_pkg}/bin/stratakv-admin" put stratakv-acceptance-key stratakv-acceptance-value \
-  >"${log_dir}/put.log" 2>&1 || fail "acceptance put failed; see ${log_dir}/put.log."
-got_value=$(STRATAKV_REGION_CONFIG="$acc_regions" \
-  "${acceptance_pkg}/bin/stratakv-admin" get stratakv-acceptance-key \
-  2>"${log_dir}/get.log") || fail "acceptance get failed; see ${log_dir}/get.log."
+printf 'put stratakv-acceptance-key stratakv-acceptance-value\nquit\n' |
+  "$acc_client" "$acc_regions" "$acc_tso" >"${log_dir}/put.log" 2>&1 ||
+  fail "acceptance client put failed; see ${log_dir}/put.log."
+got_value=$(printf 'get stratakv-acceptance-key\nquit\n' |
+  "$acc_client" "$acc_regions" "$acc_tso" 2>"${log_dir}/get.log" | tail -n 1)
 [ "$got_value" = "stratakv-acceptance-value" ] ||
   fail "acceptance get mismatch: expected stratakv-acceptance-value, got '${got_value}'."
+printf 'list stratakv-acceptance\nquit\n' | "$acc_client" "$acc_regions" "$acc_tso" \
+  >"${log_dir}/list.log" 2>&1 ||
+  fail "acceptance list failed; see ${log_dir}/list.log."
+grep -q "^stratakv-acceptance-key	stratakv-acceptance-value$" "${log_dir}/list.log" ||
+  fail "acceptance list omits the written key; see ${log_dir}/list.log."
 
 echo "[acceptance] example build and run"
-cmake -S "${acceptance_pkg}/examples" -B "${acceptance_root}/example-build" \
+cmake -S "${acceptance_pkg}/client/examples" -B "${acceptance_root}/example-build" \
   -DCMAKE_PREFIX_PATH="$acceptance_pkg" >"${log_dir}/example-configure.log" 2>&1 ||
   fail "example configure failed; see ${log_dir}/example-configure.log."
 cmake --build "${acceptance_root}/example-build" >"${log_dir}/example-build.log" 2>&1 ||
@@ -281,6 +296,6 @@ cmake --build "${acceptance_root}/example-build" >"${log_dir}/example-build.log"
   >"${log_dir}/example-run.log" 2>&1 ||
   fail "example run failed; see ${log_dir}/example-run.log."
 
-step down "${acceptance_pkg}/scripts/stratakv-server" down --project "$acceptance_project"
+step down "${acceptance_pkg}/server/scripts/stratakv-server" down --project "$acceptance_project"
 
 echo "Release package ready: ${archive}"

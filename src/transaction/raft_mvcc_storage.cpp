@@ -252,6 +252,88 @@ TxnStatus RaftMvccStorage::Get(const std::string& key, uint64_t readTs, std::str
   }
 }
 
+TxnStatus RaftMvccStorage::Scan(const std::string& startKey, const std::string& endKey, uint64_t readTs,
+                                size_t limit, std::vector<std::pair<std::string, std::string>>* entries) {
+  if (entries == nullptr) return TxnStatus::StorageError;
+  const int reqId = requestId_.fetch_add(1, std::memory_order_relaxed) + 1;
+  std::vector<std::pair<std::string, std::string>> observed;
+  const auto collect = [&observed](raftKVRpcProctoc::TxnScanReply& reply, TxnStatus status) {
+    if (status != TxnStatus::Ok) return;
+    observed.reserve(observed.size() + reply.entries_size());
+    for (auto& entry : *reply.mutable_entries()) {
+      observed.emplace_back(std::move(*entry.mutable_key()), std::move(*entry.mutable_value()));
+    }
+  };
+  if (sender_) {
+    TxnStatus status = TxnStatus::StorageError;
+    const auto result = sender_->Send(
+        startKey, MakeRetryContext(0),
+        [&](raftKVRpcProctoc::kvServerRpc_Stub& stub, const RegionMetadata& descriptor, const RegionPeerLocation& peer,
+            uint64_t) -> DispatchOutcome {
+          raftKVRpcProctoc::TxnScanArgs args;
+          args.set_regionid(descriptor.regionId);
+          args.set_startkey(startKey);
+          args.set_endkey(endKey);
+          args.set_readts(readTs);
+          args.set_limit(static_cast<uint32_t>(limit));
+          FillRegionHeader(args.mutable_header(), descriptor, peer, clientId_, reqId);
+          raftKVRpcProctoc::TxnScanReply reply;
+          MprpcController controller;
+          stub.TxnScan(&controller, &args, &reply, nullptr);
+          if (controller.Failed()) return {RouteErrorKind::Transport, 0};
+          if (const auto regionError = ClassifyRegionReply(reply);
+              regionError.kind != RouteErrorKind::None) {
+            return regionError;
+          }
+          if (const RouteErrorKind parsed = ParseReplyStatus(reply.err(), &status);
+              parsed != RouteErrorKind::None) {
+            return {parsed, 0};
+          }
+          collect(reply, status);
+          return {RouteErrorKind::None, 0};
+        });
+    if (!result.ok()) return DefinitiveFailureStatus(result, status);
+    if (status == TxnStatus::Ok) {
+      // 协调器逐 Region 聚合,这里必须追加而不是覆盖调用方的累积结果。
+      entries->insert(entries->end(), observed.begin(), observed.end());
+    }
+    return status;
+  }
+  int server = recentLeaderId_.load(std::memory_order_relaxed);
+
+  int attempt = 0;
+  while (true) {
+    raftKVRpcProctoc::TxnScanArgs args;
+    args.set_regionid(shardId_);
+    args.set_startkey(startKey);
+    args.set_endkey(endKey);
+    args.set_readts(readTs);
+    args.set_limit(static_cast<uint32_t>(limit));
+    raftKVRpcProctoc::TxnScanReply reply;
+    MprpcController controller;
+    stubs_[server]->TxnScan(&controller, &args, &reply, nullptr);
+
+    if (controller.Failed() || reply.err() == "ErrWrongLeader") {
+      const int failedServer = server;
+      server = (server + 1) % stubs_.size();
+      ExponentialBackoff(attempt);
+      LogRpcRetry(shardId_, "Scan", failedServer, attempt, controller, reply.err());
+      if (attempt >= kMaxRpcAttempts) {
+        return TxnStatus::StorageError;
+      }
+      continue;
+    }
+
+    recentLeaderId_.store(server, std::memory_order_relaxed);
+    TxnStatus status = static_cast<TxnStatus>(std::stoi(reply.err()));
+    collect(reply, status);
+    if (status == TxnStatus::Ok) {
+      entries->insert(entries->end(), observed.begin(), observed.end());
+    }
+    return status;
+  }
+}
+
 TxnStatus RaftMvccStorage::Prewrite(const std::string& key, const std::string& value, const std::string& primaryKey,
                                    uint64_t startTs, uint64_t ttlMs,
                                    uint64_t forUpdateTs, uint64_t remainingBudgetMs) {
