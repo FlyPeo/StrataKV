@@ -109,7 +109,9 @@ print_plan() {
     cat <<'EOF'
 profile=interview-full status=implemented
 load=100000x1024B
-a1=direct-uniform-A/B/C/F@1/4/8/16/32,direct-zipfian-A/B@8,direct-uniform-A/C@8;20000opsx3
+# w32 dropped 2026-09-19: saturates the co-located WSL baseline (scheduler
+# queue-full rejections at F-w32); see report.py required-set note.
+a1=direct-uniform-A/B/C/F@1/4/8/16,direct-zipfian-A/B@8,direct-uniform-A/C@8;20000opsx3
 a2=cross-region-ratio-0/15/100;10000txx3
 a3=regions-1/2/3;10000txx3
 a4=optimistic/pessimisticx0/5/20;5000txx3

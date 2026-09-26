@@ -1,19 +1,17 @@
 // stratakv-client — 面向业务使用的常驻命令行客户端。
-// 与 stratakv-admin(底层 Region 运维工具)不同,本工具只做业务读写,
-// 全部命令走事务 SDK:连接一次常驻复用;SDK 能力全量暴露——
-// 事务会话(begin/commit/rollback)、跨分片原子写(multi)、悲观锁读
-// (get-for-update/batch-get-for-update/lock-keys)、范围扫描(scan/list)、
-// 事务状态查询(txn-status)与客户端指标(metrics)。
-//
+// 与 stratakv-admin (底层 Region 运维工具) 不同,本工具只做业务读写,
+// 全部命令走事务 SDK:连接一次常驻复用。
 // 用法:
 //   stratakv-client <regions.conf> [tso-endpoints]          (静态拓扑)
-//   STRATAKV_TOPOLOGY_MODE=dynamic STRATAKV_METADATA_ENDPOINTS=host:port,... \
+//   STRATAKV_TOPOLOGY_MODE=dynamic STRATAKV_METADATA_ENDPOINTS=host:port,...
 //     stratakv-client                                        (动态拓扑)
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -49,10 +47,8 @@ const char* kHelp =
     "  multi del <k> [<k>...]           one-shot atomic multi delete\n"
     "  txn-status                       query the session transaction's status\n"
     "  metrics                          client routing/retry counters\n"
-    "  quit                             exit (auto-rolls back an open session)";
     "  quit / exit                      exit (auto-rolls back an open session)";
 
-// 返回前缀之后最小的字符串;空结果表示前缀已覆盖到键空间尽头。
 std::string PrefixSuccessor(const std::string& prefix) {
   if (prefix.empty()) return "";
   std::string next = prefix;
@@ -105,16 +101,10 @@ stratakv::ConnectionOptions LoadOptions(int argc, char** argv) {
   return options;
 }
 
-// 单键自动提交写与 multi 写共用的冲突重试:冲突意味着事务作废,
-// 必须换全新事务重做全部暂存。
+// 冲突重试必须以新事务重新执行全部暂存操作。
 template <typename Stage>
 stratakv::Result RunWithRetry(stratakv::Client& client, Stage stage) {
   for (int attempt = 1;; ++attempt) {
-    auto tx = client.Begin();
-    const auto op = stage(tx);
-    if (!op.ok()) {
-      client.Rollback(tx);
-      return op;
     try {
       auto tx = client.Begin();
       const auto op = stage(tx);
@@ -125,15 +115,23 @@ stratakv::Result RunWithRetry(stratakv::Client& client, Stage stage) {
       const auto commit = client.Commit(tx);
       if (commit.ok() || !commit.retryable || attempt >= 5) return commit;
     } catch (const std::exception& e) {
-      stratakv::Result errResult;
-      errResult.status = stratakv::Status::kUnavailable;
-      errResult.message = e.what();
-      return errResult;
+      stratakv::Result error;
+      error.status = stratakv::Status::kUnavailable;
+      error.message = e.what();
+      return error;
     }
-    const auto commit = client.Commit(tx);
-    if (commit.ok() || !commit.retryable || attempt >= 5) return commit;
     std::this_thread::sleep_for(std::chrono::milliseconds(5 * attempt));
   }
+}
+
+void PrintResult(const stratakv::Result& result) {
+  if (result.ok()) {
+    std::cout << "OK\n";
+    return;
+  }
+  std::cout << "ERR " << stratakv::StatusName(result.status);
+  if (!result.message.empty()) std::cout << " (" << result.message << ")";
+  std::cout << '\n';
 }
 
 void PrintEntries(const stratakv::ScanResult& result) {
@@ -149,11 +147,9 @@ int main(int argc, char** argv) {
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
-  const stratakv::ConnectionOptions options = LoadOptions(argc, argv);
-
   std::shared_ptr<stratakv::Client> client;
   try {
-    client = stratakv::Client::Connect(options);
+    client = stratakv::Client::Connect(LoadOptions(argc, argv));
   } catch (const std::exception& e) {
     std::cerr << "connect failed: " << e.what() << '\n';
     return 1;
@@ -162,21 +158,10 @@ int main(int argc, char** argv) {
 
   std::shared_ptr<stratakv::Transaction> session;
   uint64_t sessionTtlMs = 120000;
-
-  const auto requireSession = [&]() -> const std::shared_ptr<stratakv::Transaction>& {
-    static const std::shared_ptr<stratakv::Transaction> none;
-    if (!session) std::cout << "ERR no active session; run 'begin' first\n";
-    return session ? session : none;
-  };
-
-  std::string line;
-  while (std::getline(std::cin, line)) {
   const bool interactive = isatty(STDIN_FILENO);
-
+  std::string line;
   while (!g_stop) {
-    if (interactive) {
-      std::cout << "stratakv> " << std::flush;
-    }
+    if (interactive) std::cout << "stratakv> " << std::flush;
     if (!std::getline(std::cin, line)) {
       if (interactive) std::cout << '\n';
       break;
@@ -185,31 +170,21 @@ int main(int argc, char** argv) {
 
     const auto args = SplitArgs(line);
     if (args.empty()) continue;
-    const std::string& cmd = args[0];
     const std::string cmd = ToLower(args[0]);
-
-    if (cmd == "quit" || cmd == "exit") {
-    if (cmd == "quit" || cmd == "exit" || cmd == "q") {
-      if (session) {
-        client->Rollback(session);
-        try { client->Rollback(session); } catch (...) {}
-        session.reset();
-        std::cout << "notice: open session rolled back on exit\n";
-      }
-      break;
-    }
-    if (cmd == "help") {
-    if (cmd == "help" || cmd == "?") {
-      std::cout << kHelp << '\n';
-      continue;
-    }
-
-    // ---- 会话管理 -------------------------------------------------------
-    if (cmd == "begin") {
-      if (session) {
-        std::cout << "ERR session already active (commit or rollback first)\n";
     try {
-      // ---- 会话管理 -------------------------------------------------------
+      if (cmd == "quit" || cmd == "exit" || cmd == "q") {
+        if (session) {
+          try { client->Rollback(session); } catch (...) {}
+          session.reset();
+          std::cout << "notice: open session rolled back on exit\n";
+        }
+        break;
+      }
+      if (cmd == "help" || cmd == "?") {
+        std::cout << kHelp << '\n';
+        continue;
+      }
+
       if (cmd == "begin") {
         if (session) {
           std::cout << "ERR session already active (commit or rollback first)\n";
@@ -220,139 +195,88 @@ int main(int argc, char** argv) {
         std::cout << "OK session started (lockTtlMs=" << sessionTtlMs << ")\n";
         continue;
       }
-      sessionTtlMs = args.size() >= 2 ? std::stoull(args[1]) : 120000;
-      session = client->Begin(sessionTtlMs);
-      std::cout << "OK session started (lockTtlMs=" << sessionTtlMs << ")\n";
-      continue;
-    }
-    if (cmd == "commit") {
-      if (!session) {
-        std::cout << "ERR no active session; run 'begin' first\n";
       if (cmd == "commit") {
         if (!session) {
           std::cout << "ERR no active session; run 'begin' first\n";
           continue;
         }
-        const auto r = client->Commit(session);
-        if (r.ok()) {
-          std::cout << "OK\n";
-        } else {
-          std::cout << "ERR " << stratakv::StatusName(r.status);
-          if (!r.message.empty()) std::cout << " (" << r.message << ")";
-          std::cout << '\n';
-        }
-        if (r.ok() || !r.retryable) session.reset();
+        const auto result = client->Commit(session);
+        PrintResult(result);
+        if (result.ok() || !result.retryable) session.reset();
         continue;
       }
-      const auto r = client->Commit(session);
-      std::cout << (r.ok() ? "OK" : std::string("ERR ") + stratakv::StatusName(r.status)) << '\n';
-      if (r.ok() || !r.retryable) session.reset();
-      continue;
-    }
-    if (cmd == "rollback") {
-      if (!session) {
-        std::cout << "ERR no active session; run 'begin' first\n";
       if (cmd == "rollback") {
         if (!session) {
           std::cout << "ERR no active session; run 'begin' first\n";
           continue;
         }
-        client->Rollback(session);
-        session.reset();
-        std::cout << "OK rolled back\n";
+        const auto result = client->Rollback(session);
+        if (result.ok()) {
+          std::cout << "OK rolled back\n";
+        } else {
+          PrintResult(result);
+        }
+        if (result.ok() || !result.retryable) session.reset();
         continue;
       }
-      client->Rollback(session);
-      session.reset();
-      std::cout << "OK rolled back\n";
-      continue;
-    }
 
-    // ---- 锁操作(要求会话)----------------------------------------------
-    if (cmd == "get-for-update" || cmd == "batch-get-for-update" || cmd == "lock-keys") {
-      const auto& tx = requireSession();
-      if (!tx) continue;
-      if (args.size() < 2) {
-        std::cout << "usage: " << cmd << " <key>...\n";
-      // ---- 锁操作(要求会话)----------------------------------------------
-      if (cmd == "get-for-update" || cmd == "batch-get-for-update" || cmd == "lock-keys") {
-        const auto& tx = requireSession();
-        if (!tx) continue;
+      if (cmd == "get-for-update" || cmd == "batch-get-for-update" ||
+          cmd == "lock-keys") {
+        if (!session) {
+          std::cout << "ERR no active session; run 'begin' first\n";
+          continue;
+        }
         if (args.size() < 2) {
           std::cout << "usage: " << cmd << " <key>...\n";
           continue;
         }
         const std::vector<std::string> keys(args.begin() + 1, args.end());
         if (cmd == "get-for-update") {
-          const auto r = client->GetForUpdate(tx, keys[0]);
-          if (r.ok() && r.found) {
-            std::cout << r.value << '\n';
-          } else if (r.status == stratakv::Status::kNotFound) {
+          const auto result = client->GetForUpdate(session, keys[0]);
+          if (result.ok() && result.found) {
+            std::cout << result.value << '\n';
+          } else if (result.status == stratakv::Status::kNotFound ||
+                     (result.ok() && !result.found)) {
             std::cout << "(not found)\n";
           } else {
-            std::cout << "ERR " << stratakv::StatusName(r.status);
-            if (!r.message.empty()) std::cout << " (" << r.message << ")";
-            std::cout << '\n';
+            PrintResult(result);
           }
         } else if (cmd == "batch-get-for-update") {
-          const auto r = client->BatchGetForUpdate(tx, keys);
-          for (const auto& [key, result] : r.values) {
-            std::cout << key << '\t'
-                      << (result.ok() && result.found ? result.value : stratakv::StatusName(result.status))
-                      << '\n';
-          }
-          if (r.status == stratakv::Status::kOk) {
-            std::cout << "OK\n";
-          } else {
-            std::cout << "ERR " << stratakv::StatusName(r.status);
-            if (!r.message.empty()) std::cout << " (" << r.message << ")";
+          const auto result = client->BatchGetForUpdate(session, keys);
+          for (const auto& [key, value] : result.values) {
+            std::cout << key << '\t';
+            if (value.ok() && value.found) {
+              std::cout << value.value;
+            } else if (value.status == stratakv::Status::kNotFound ||
+                       (value.ok() && !value.found)) {
+              std::cout << "(not found)";
+            } else {
+              std::cout << stratakv::StatusName(value.status);
+            }
             std::cout << '\n';
           }
+          stratakv::Result summary;
+          summary.status = result.status;
+          summary.message = result.message;
+          PrintResult(summary);
         } else {
-          const auto r = client->LockKeys(tx, keys);
-          if (r.ok()) {
-            std::cout << "OK\n";
-          } else {
-            std::cout << "ERR " << stratakv::StatusName(r.status);
-            if (!r.message.empty()) std::cout << " (" << r.message << ")";
-            std::cout << '\n';
-          }
+          PrintResult(client->LockKeys(session, keys));
         }
         continue;
       }
-      const std::vector<std::string> keys(args.begin() + 1, args.end());
-      if (cmd == "get-for-update") {
-        const auto r = client->GetForUpdate(tx, keys[0]);
-        if (r.ok() && r.found) std::cout << r.value << '\n';
-        else if (r.status == stratakv::Status::kNotFound) std::cout << "(not found)\n";
-        else std::cout << "ERR " << stratakv::StatusName(r.status) << '\n';
-      } else if (cmd == "batch-get-for-update") {
-        const auto r = client->BatchGetForUpdate(tx, keys);
-        for (const auto& [key, result] : r.values) {
-          std::cout << key << '\t'
-                    << (result.ok() && result.found ? result.value : stratakv::StatusName(result.status))
-                    << '\n';
 
-      // ---- multi 一次性原子写 ---------------------------------------------
       if (cmd == "multi") {
         if (session) {
           std::cout << "ERR session active; multi runs its own transaction (rollback first)\n";
           continue;
         }
-        std::cout << (r.status == stratakv::Status::kOk
-                          ? "OK"
-                          : std::string("ERR ") + stratakv::StatusName(r.status))
-                  << '\n';
-      } else {
-        const auto r = client->LockKeys(tx, keys);
-        std::cout << (r.ok() ? "OK" : std::string("ERR ") + stratakv::StatusName(r.status)) << '\n';
         if (args.size() < 3) {
           std::cout << "usage: multi put <k> <v> [<k> <v>...] | multi del <k> [<k>...]\n";
           continue;
         }
         const std::string subCmd = ToLower(args[1]);
-        const bool isPut = (subCmd == "put");
-        const bool isDel = (subCmd == "del" || subCmd == "delete");
+        const bool isPut = subCmd == "put";
+        const bool isDel = subCmd == "del" || subCmd == "delete";
         if (!isPut && !isDel) {
           std::cout << "usage: multi put <k> <v> ... | multi del <k> ...\n";
           continue;
@@ -361,134 +285,67 @@ int main(int argc, char** argv) {
           std::cout << "usage: multi put requires <key> <value> pairs\n";
           continue;
         }
-        const auto r = RunWithRetry(*client, [&](const std::shared_ptr<stratakv::Transaction>& tx) {
+        const auto result = RunWithRetry(*client, [&](const auto& tx) {
           for (size_t i = 2; i < args.size();) {
-            if (isPut) {
-              client->Put(tx, args[i], args[i + 1]);
-              i += 2;
-            } else {
-              client->Delete(tx, args[i]);
-              i += 1;
-            }
+            const auto staged = isPut
+                ? client->Put(tx, args[i], args[i + 1])
+                : client->Delete(tx, args[i]);
+            if (!staged.ok()) return staged;
+            i += isPut ? 2 : 1;
           }
           return stratakv::Result{};
         });
-        if (r.ok()) {
-          std::cout << "OK\n";
-        } else {
-          std::cout << "ERR " << stratakv::StatusName(r.status);
-          if (!r.message.empty()) std::cout << " (" << r.message << ")";
-          std::cout << '\n';
-        }
+        PrintResult(result);
         continue;
       }
-      continue;
-    }
 
-    // ---- multi 一次性原子写 ---------------------------------------------
-    if (cmd == "multi") {
-      if (session) {
-        std::cout << "ERR session active; multi runs its own transaction (rollback first)\n";
-      // ---- 会话内暂存,会话外自动提交 --------------------------------------
-      if (cmd == "put") {
-        if (args.size() < 3) {
-          std::cout << "usage: put <key> <value>\n";
+      if (cmd == "put" || cmd == "del" || cmd == "delete") {
+        const bool isPut = cmd == "put";
+        if (args.size() < (isPut ? 3U : 2U)) {
+          std::cout << (isPut ? "usage: put <key> <value>\n"
+                              : "usage: del <key>\n");
           continue;
         }
         if (session) {
-          const auto r = client->Put(session, args[1], args[2]);
-          if (r.ok()) {
+          const auto result = isPut
+              ? client->Put(session, args[1], args[2])
+              : client->Delete(session, args[1]);
+          if (result.ok()) {
             std::cout << "OK (staged in session)\n";
           } else {
-            std::cout << "ERR " << stratakv::StatusName(r.status);
-            if (!r.message.empty()) std::cout << " (" << r.message << ")";
-            std::cout << '\n';
+            PrintResult(result);
           }
         } else {
-          const auto r = RunWithRetry(*client,
-              [&](const std::shared_ptr<stratakv::Transaction>& tx) {
-                return client->Put(tx, args[1], args[2]);
-              });
-          if (r.ok()) {
-            std::cout << "OK\n";
-          } else {
-            std::cout << "ERR " << stratakv::StatusName(r.status);
-            if (!r.message.empty()) std::cout << " (" << r.message << ")";
-            std::cout << '\n';
-          }
+          const auto result = RunWithRetry(*client, [&](const auto& tx) {
+            return isPut ? client->Put(tx, args[1], args[2])
+                         : client->Delete(tx, args[1]);
+          });
+          PrintResult(result);
         }
         continue;
       }
-      if (args.size() < 3) {
-        std::cout << "usage: multi put <k> <v> [<k> <v>...] | multi del <k> [<k>...]\n";
-      if (cmd == "del" || cmd == "delete") {
-        if (args.size() < 2) {
-          std::cout << "usage: del <key>\n";
-          continue;
-        }
-        if (session) {
-          const auto r = client->Delete(session, args[1]);
-          if (r.ok()) {
-            std::cout << "OK (staged in session)\n";
-          } else {
-            std::cout << "ERR " << stratakv::StatusName(r.status);
-            if (!r.message.empty()) std::cout << " (" << r.message << ")";
-            std::cout << '\n';
-          }
-        } else {
-          const auto r = RunWithRetry(*client,
-              [&](const std::shared_ptr<stratakv::Transaction>& tx) {
-                return client->Delete(tx, args[1]);
-              });
-          if (r.ok()) {
-            std::cout << "OK\n";
-          } else {
-            std::cout << "ERR " << stratakv::StatusName(r.status);
-            if (!r.message.empty()) std::cout << " (" << r.message << ")";
-            std::cout << '\n';
-          }
-        }
-        continue;
-      }
-      const bool isPut = args[1] == "put";
-      const bool isDel = args[1] == "del";
-      if (!isPut && !isDel) {
-        std::cout << "usage: multi put <k> <v> ... | multi del <k> ...\n";
+
       if (cmd == "get") {
         if (args.size() < 2) {
           std::cout << "usage: get <key>\n";
           continue;
         }
-        auto ownTx = session ? session : client->Begin();  // 会话内 = read-your-writes
-        const auto r = client->Get(ownTx, args[1]);
-        if (r.ok() && r.found) {
-          std::cout << r.value << '\n';
-        } else if (r.status == stratakv::Status::kNotFound) {
+        auto tx = session ? session : client->Begin();
+        const auto result = client->Get(tx, args[1]);
+        if (result.ok() && result.found) {
+          std::cout << result.value << '\n';
+          } else if (result.status == stratakv::Status::kNotFound ||
+                     (result.ok() && !result.found)) {
           std::cout << "(not found)\n";
         } else {
-          std::cout << "ERR " << stratakv::StatusName(r.status);
-          if (!r.message.empty()) std::cout << " (" << r.message << ")";
-          std::cout << '\n';
+          PrintResult(result);
         }
-        if (!session && ownTx) {
-          try { client->Rollback(ownTx); } catch (...) {}
+        if (!session && tx) {
+          try { client->Rollback(tx); } catch (...) {}
         }
         continue;
       }
-      if (isPut && (args.size() - 2) % 2 != 0) {
-        std::cout << "usage: multi put requires <key> <value> pairs\n";
-        continue;
-      }
-      const auto r = RunWithRetry(*client, [&](const std::shared_ptr<stratakv::Transaction>& tx) {
-        for (size_t i = 2; i < args.size();) {
-          if (isPut) {
-            client->Put(tx, args[i], args[i + 1]);
-            i += 2;
-          } else {
-            client->Delete(tx, args[i]);
-            i += 1;
 
-      // ---- 范围扫描 --------------------------------------------------------
       if (cmd == "list" || cmd == "scan") {
         std::string start, end;
         size_t limit = 0;
@@ -504,151 +361,58 @@ int main(int argc, char** argv) {
           end = args[2];
           limit = args.size() >= 4 ? std::stoull(args[3]) : 0;
         }
-        return stratakv::Result{};
-      });
-      std::cout << (r.ok() ? "OK" : std::string("ERR ") + stratakv::StatusName(r.status)) << '\n';
-      continue;
-    }
-
-    // ---- 会话内暂存,会话外自动提交 --------------------------------------
-    if (cmd == "put") {
-      if (args.size() < 3) {
-        std::cout << "usage: put <key> <value>\n";
-        auto ownTx = session ? session : client->Begin();  // 会话内 = 会话快照
-        const auto r = client->Scan(ownTx, start, end, limit);
-        if (!r.ok()) {
-          std::cout << "ERR " << stratakv::StatusName(r.status)
-                    << (r.message.empty() ? "" : (" (" + r.message + ")"))
-                    << (r.retryable ? " (retryable)" : "") << '\n';
+        auto tx = session ? session : client->Begin();
+        const auto result = client->Scan(tx, start, end, limit);
+        if (result.ok()) {
+          PrintEntries(result);
         } else {
-          PrintEntries(r);
+          std::cout << "ERR " << stratakv::StatusName(result.status);
+          if (!result.message.empty()) std::cout << " (" << result.message << ")";
+          if (result.retryable) std::cout << " (retryable)";
+          std::cout << '\n';
         }
-        if (!session && ownTx) {
-          try { client->Rollback(ownTx); } catch (...) {}
+        if (!session && tx) {
+          try { client->Rollback(tx); } catch (...) {}
         }
         continue;
       }
-      if (session) {
-        client->Put(session, args[1], args[2]);
-        std::cout << "OK (staged in session)\n";
-      } else {
-        const auto r = RunWithRetry(*client,
-            [&](const std::shared_ptr<stratakv::Transaction>& tx) {
-              return client->Put(tx, args[1], args[2]);
-            });
-        std::cout << (r.ok() ? "OK" : std::string("ERR ") + stratakv::StatusName(r.status)) << '\n';
-      }
-      continue;
-    }
-    if (cmd == "del") {
-      if (args.size() < 2) {
-        std::cout << "usage: del <key>\n";
 
-      // ---- 观测 ------------------------------------------------------------
       if (cmd == "txn-status") {
-        const auto& tx = requireSession();
-        if (!tx) continue;
-        const auto r = client->QueryTransactionStatus(tx);
-        std::cout << "state=" << static_cast<int>(r.state)
-                  << " commitTimestamp=" << r.commitTimestamp
-                  << " status=" << stratakv::StatusName(r.status) << '\n';
-        continue;
-      }
-      if (session) {
-        client->Delete(session, args[1]);
-        std::cout << "OK (staged in session)\n";
-      } else {
-        const auto r = RunWithRetry(*client,
-            [&](const std::shared_ptr<stratakv::Transaction>& tx) {
-              return client->Delete(tx, args[1]);
-            });
-        std::cout << (r.ok() ? "OK" : std::string("ERR ") + stratakv::StatusName(r.status)) << '\n';
-      }
-      continue;
-    }
-    if (cmd == "get") {
-      if (args.size() < 2) {
-        std::cout << "usage: get <key>\n";
-      if (cmd == "metrics") {
-        const auto m = client->Metrics();
-        std::cout << "routingSends=" << m.routingSends
-                  << " routingAttempts=" << m.routingAttempts
-                  << " leaderRetries=" << m.leaderRetries
-                  << " epochRefreshes=" << m.epochRefreshes
-                  << " rollbackRegionCount=" << m.rollbackRegionCount << '\n';
-        continue;
-      }
-      auto ownTx = session ? session : client->Begin();  // 会话内 = read-your-writes
-      const auto r = client->Get(ownTx, args[1]);
-      if (r.ok() && r.found) std::cout << r.value << '\n';
-      else if (r.status == stratakv::Status::kNotFound) std::cout << "(not found)\n";
-      else std::cout << "ERR " << stratakv::StatusName(r.status) << '\n';
-      if (!session) client->Rollback(ownTx);
-      continue;
-    }
-
-    // ---- 范围扫描 --------------------------------------------------------
-    if (cmd == "list" || cmd == "scan") {
-      std::string start, end;
-      size_t limit = 0;
-      if (cmd == "list") {
-        start = args.size() >= 2 ? args[1] : std::string();
-        end = PrefixSuccessor(start);
-      std::cout << "unknown command. type 'help' for commands.\n";
-    } catch (const std::exception& e) {
-      const std::string msg = e.what();
-      if (msg.find("connect fail") != std::string::npos ||
-          msg.find("TSO") != std::string::npos ||
-          msg.find("RPC failed") != std::string::npos ||
-          msg.find("errno:111") != std::string::npos) {
-        std::cout << "ERR cluster unavailable: " << msg << '\n';
-      } else {
-        if (args.size() < 3) {
-          std::cout << "usage: scan <startKey> <endKey> [limit]\n";
+        if (!session) {
+          std::cout << "ERR no active session; run 'begin' first\n";
           continue;
         }
-        start = args[1];
-        end = args[2];
-        limit = args.size() >= 4 ? std::stoull(args[3]) : 0;
-        std::cout << "ERR " << msg << '\n';
+        const auto result = client->QueryTransactionStatus(session);
+        std::cout << "state=" << static_cast<int>(result.state)
+                  << " commitTimestamp=" << result.commitTimestamp
+                  << " status=" << stratakv::StatusName(result.status) << '\n';
+        continue;
       }
-      auto ownTx = session ? session : client->Begin();  // 会话内 = 会话快照
-      const auto r = client->Scan(ownTx, start, end, limit);
-      if (!r.ok()) {
-        std::cout << "ERR " << stratakv::StatusName(r.status)
-                  << (r.retryable ? " (retryable)" : "") << '\n';
+      if (cmd == "metrics") {
+        const auto metrics = client->Metrics();
+        std::cout << "routingSends=" << metrics.routingSends
+                  << " routingAttempts=" << metrics.routingAttempts
+                  << " leaderRetries=" << metrics.leaderRetries
+                  << " epochRefreshes=" << metrics.epochRefreshes
+                  << " rollbackRegionCount=" << metrics.rollbackRegionCount << '\n';
+        continue;
+      }
+      std::cout << "unknown command. type 'help' for commands.\n";
+    } catch (const std::exception& e) {
+      const std::string message = e.what();
+      if (message.find("connect fail") != std::string::npos ||
+          message.find("TSO") != std::string::npos ||
+          message.find("RPC failed") != std::string::npos ||
+          message.find("errno:111") != std::string::npos) {
+        std::cout << "ERR cluster unavailable: " << message << '\n';
       } else {
-        PrintEntries(r);
+        std::cout << "ERR " << message << '\n';
       }
-      if (!session) client->Rollback(ownTx);
-      continue;
     }
   }
 
-    // ---- 观测 ------------------------------------------------------------
-    if (cmd == "txn-status") {
-      const auto& tx = requireSession();
-      if (!tx) continue;
-      const auto r = client->QueryTransactionStatus(tx);
-      std::cout << "state=" << static_cast<int>(r.state)
-                << " commitTimestamp=" << r.commitTimestamp
-                << " status=" << stratakv::StatusName(r.status) << '\n';
-      continue;
-    }
-    if (cmd == "metrics") {
-      const auto m = client->Metrics();
-      std::cout << "routingSends=" << m.routingSends
-                << " routingAttempts=" << m.routingAttempts
-                << " leaderRetries=" << m.leaderRetries
-                << " epochRefreshes=" << m.epochRefreshes
-                << " rollbackRegionCount=" << m.rollbackRegionCount << '\n';
-      continue;
-    }
-
-    std::cout << "unknown command. type 'help' for commands.\n";
   if (session) {
     try { client->Rollback(session); } catch (...) {}
-    session.reset();
   }
   return 0;
 }

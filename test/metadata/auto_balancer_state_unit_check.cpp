@@ -5,7 +5,7 @@
  * 测试规模：3 组场景：心跳与配置、算子生命周期与恢复、旧版本快照向后兼容。
  * 验证内容：重复心跳按序列幂等去重、过期样本被忽略且 Region epoch 单调前进，算子重复提交幂等、
  *           竞争阶段迁移返回 CONFLICT，恢复出的快照能继续推进算子直至 success 并可重复取消，
- *           旧格式快照恢复后 balancer 配置安全默认关闭。
+ *           旧格式快照恢复后 balancer 配置默认开启。
  */
 #include <iostream>
 #include <stdexcept>

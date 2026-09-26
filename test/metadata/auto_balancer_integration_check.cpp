@@ -139,7 +139,17 @@ metadataRpcProtocol::SchedulingOperator CreateMoveOp(
 void CheckLegacyAndDisabledCompatibility() {
   MetadataStateMachine sm;
   sm.Apply(BootstrapCommand());
-  Require(!sm.View()->balancerConfig.enabled(), "balancer must be disabled by default");
+  Require(sm.View()->balancerConfig.enabled(), "balancer must be enabled by default");
+  auto config = sm.View()->balancerConfig;
+  config.set_enabled(false);
+  config.set_version(config.version() + 1);
+  metadataRpcProtocol::MetadataCommand disable;
+  disable.set_mutationid("disable-balancer-compatibility");
+  disable.set_expectedrevision(sm.View()->revision);
+  *disable.mutable_updateautobalancerconfig()->mutable_config() = config;
+  Require(sm.Apply(disable).error() == metadataRpcProtocol::METADATA_OK &&
+              !sm.View()->balancerConfig.enabled(),
+          "balancer must accept an explicit disable command");
 
   // Report heartbeats showing imbalance
   sm.Apply(MakeHeartbeat(1, 1, 10000, 1000));
@@ -147,7 +157,7 @@ void CheckLegacyAndDisabledCompatibility() {
   sm.Apply(MakeHeartbeat(3, 1, 10000, 1000));
   sm.Apply(MakeHeartbeat(4, 1, 10000, 9000));
 
-  // Attempting to admit an operator while balancer is disabled MUST fail with METADATA_UNAVAILABLE
+  // Disabled balancer must reject operator admission with a conflict.
   metadataRpcProtocol::MetadataCommand addOp;
   addOp.set_mutationid("op-disabled-test");
   addOp.set_expectedrevision(sm.View()->revision);

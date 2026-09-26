@@ -298,7 +298,7 @@ export STRATAKV_METADATA_ENDPOINTS="127.0.0.1:26580,127.0.0.1:26581,127.0.0.1:26
 # 查看当前自动均衡器状态、配置、节点心跳及活跃算子
 bin/stratakv-admin balancer-status
 
-# 启用 / 禁用自动调度器（默认处于禁用状态）
+# 启用 / 禁用自动调度器（默认处于启用状态）
 bin/stratakv-admin balancer-enable
 bin/stratakv-admin balancer-disable
 
