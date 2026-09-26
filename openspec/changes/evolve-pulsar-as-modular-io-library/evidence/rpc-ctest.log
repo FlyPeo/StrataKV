@@ -1,0 +1,26 @@
+Internal ctest changing into directory: /home/fly/_projects/2__StrataKV_pulsar_modular/build-pulsar-rpc
+Test project /home/fly/_projects/2__StrataKV_pulsar_modular/build-pulsar-rpc
+      Start  1: pulsar-rpc-legacy-interop
+ 1/10 Test  #1: pulsar-rpc-legacy-interop ..............   Passed   20.14 sec
+      Start  2: pulsar-sync-check
+ 2/10 Test  #2: pulsar-sync-check ......................   Passed    0.08 sec
+      Start  3: pulsar-fiber-context-check
+ 3/10 Test  #3: pulsar-fiber-context-check .............   Passed    0.00 sec
+      Start  4: pulsar-scheduler-work-stealing-check
+ 4/10 Test  #4: pulsar-scheduler-work-stealing-check ...   Passed    0.01 sec
+      Start  5: pulsar-stack-pool-check
+ 5/10 Test  #5: pulsar-stack-pool-check ................   Passed    0.01 sec
+      Start  6: pulsar-scheduler-cache-check
+ 6/10 Test  #6: pulsar-scheduler-cache-check ...........   Passed    0.01 sec
+      Start  7: pulsar-reuse-integration-check
+ 7/10 Test  #7: pulsar-reuse-integration-check .........   Passed    5.19 sec
+      Start  8: pulsar-net-check
+ 8/10 Test  #8: pulsar-net-check .......................   Passed    5.26 sec
+      Start  9: pulsar-rpc-echo
+ 9/10 Test  #9: pulsar-rpc-echo ........................   Passed    0.81 sec
+      Start 10: pulsar-rpc-fault-check
+10/10 Test #10: pulsar-rpc-fault-check .................   Passed    5.38 sec
+
+100% tests passed, 0 tests failed out of 10
+
+Total Test time (real) =  36.90 sec

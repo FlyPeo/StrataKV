@@ -1,0 +1,40 @@
+TSO benchmark: same binary/host, 3 Raft members, 8 clients, 2048 measured requests, 128 warm-up requests per case
+
+| mode | range | throughput (ops/s) | P50 (us) | P95 (us) | P99 (us) | Raft proposals | allocations/reservation |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| per-timestamp baseline | 1 | 120.0 | 61076.0 | 166254.9 | 179290.3 | 2157 | 0.9 |
+| range reservation | 4096 | 37170.6 | 78.2 | 126.0 | 388.8 | 1 | 2048.0 |
+
+Throughput speedup: 309.85x; proposal reduction: 99.95%
+TSO benchmark: same binary/host, 3 Raft members, 8 clients, 2048 measured requests, 128 warm-up requests per case
+
+| mode | range | throughput (ops/s) | P50 (us) | P95 (us) | P99 (us) | Raft proposals | allocations/reservation |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| per-timestamp baseline | 1 | 119.1 | 61547.7 | 161922.4 | 182788.7 | 2159 | 0.9 |
+| range reservation | 4096 | 39645.3 | 80.5 | 123.5 | 502.8 | 1 | 2048.0 |
+
+Throughput speedup: 332.94x; proposal reduction: 99.95%
+TSO benchmark: same binary/host, 3 Raft members, 8 clients, 2048 measured requests, 128 warm-up requests per case
+
+| mode | range | throughput (ops/s) | P50 (us) | P95 (us) | P99 (us) | Raft proposals | allocations/reservation |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| per-timestamp baseline | 1 | 118.1 | 62949.3 | 168460.4 | 180345.4 | 2160 | 0.9 |
+| range reservation | 4096 | 34157.3 | 89.6 | 141.6 | 461.6 | 1 | 2048.0 |
+
+Throughput speedup: 289.34x; proposal reduction: 99.95%
+TSO benchmark: same binary/host, 3 Raft members, 8 clients, 2048 measured requests, 128 warm-up requests per case
+
+| mode | range | throughput (ops/s) | P50 (us) | P95 (us) | P99 (us) | Raft proposals | allocations/reservation |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| per-timestamp baseline | 1 | 119.2 | 61177.5 | 160929.3 | 181114.9 | 2158 | 0.9 |
+| range reservation | 4096 | 41575.0 | 83.7 | 131.5 | 372.8 | 1 | 2048.0 |
+
+Throughput speedup: 348.81x; proposal reduction: 99.95%
+TSO benchmark: same binary/host, 3 Raft members, 8 clients, 2048 measured requests, 128 warm-up requests per case
+
+| mode | range | throughput (ops/s) | P50 (us) | P95 (us) | P99 (us) | Raft proposals | allocations/reservation |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| per-timestamp baseline | 1 | 119.7 | 61009.5 | 165016.4 | 180765.3 | 2159 | 0.9 |
+| range reservation | 4096 | 39598.9 | 79.2 | 133.9 | 561.7 | 1 | 2048.0 |
+
+Throughput speedup: 330.80x; proposal reduction: 99.95%

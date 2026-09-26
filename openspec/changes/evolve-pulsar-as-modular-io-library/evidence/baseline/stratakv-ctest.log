@@ -1,0 +1,129 @@
+Test project /home/fly/_projects/2__StrataKV_pulsar_modular/build/stratakv/release
+      Start  1: stratakv-test-fiber-sync
+ 1/59 Test  #1: stratakv-test-fiber-sync ...........................   Passed    0.06 sec
+      Start  2: stratakv-test-fiber-context
+ 2/59 Test  #2: stratakv-test-fiber-context ........................   Passed    0.00 sec
+      Start  3: stratakv-test-scheduler-work-stealing
+ 3/59 Test  #3: stratakv-test-scheduler-work-stealing ..............   Passed    0.02 sec
+      Start  4: stratakv-test-stack-pool
+ 4/59 Test  #4: stratakv-test-stack-pool ...........................   Passed    0.01 sec
+      Start  5: stratakv-test-scheduler-cache
+ 5/59 Test  #5: stratakv-test-scheduler-cache ......................   Passed    0.01 sec
+      Start  6: stratakv-test-reuse-integration
+ 6/59 Test  #6: stratakv-test-reuse-integration ....................   Passed    5.19 sec
+      Start  7: stratakv-test-bounded-thread-pool-unit
+ 7/59 Test  #7: stratakv-test-bounded-thread-pool-unit .............   Passed    0.00 sec
+      Start  8: stratakv-test-raft-log-gc-unit
+ 8/59 Test  #8: stratakv-test-raft-log-gc-unit .....................   Passed    0.00 sec
+      Start  9: stratakv-test-rocksdb-snapshot-unit
+ 9/59 Test  #9: stratakv-test-rocksdb-snapshot-unit ................   Passed    0.04 sec
+      Start 10: stratakv-test-raft-confchange-unit
+10/59 Test #10: stratakv-test-raft-confchange-unit .................   Passed    0.04 sec
+      Start 11: stratakv-test-replica-catchup-unit
+11/59 Test #11: stratakv-test-replica-catchup-unit .................   Passed    0.10 sec
+      Start 12: stratakv-test-node-migration-unit
+12/59 Test #12: stratakv-test-node-migration-unit ..................   Passed    0.04 sec
+      Start 13: stratakv-test-auto-balancer-state-unit
+13/59 Test #13: stratakv-test-auto-balancer-state-unit .............   Passed    0.00 sec
+      Start 14: stratakv-test-auto-balancer-planner-unit
+14/59 Test #14: stratakv-test-auto-balancer-planner-unit ...........   Passed    0.00 sec
+      Start 15: stratakv-test-auto-balancer-heartbeat-unit
+15/59 Test #15: stratakv-test-auto-balancer-heartbeat-unit .........   Passed    0.14 sec
+      Start 16: stratakv-test-auto-balancer-recovery-unit
+16/59 Test #16: stratakv-test-auto-balancer-recovery-unit ..........   Passed    0.00 sec
+      Start 17: stratakv-test-online-migration
+17/59 Test #17: stratakv-test-online-migration .....................   Passed    0.04 sec
+      Start 18: stratakv-test-auto-balancer-integration
+18/59 Test #18: stratakv-test-auto-balancer-integration ............***Failed    0.00 sec
+Auto-Balancer integration checks failed: balancer must be disabled by default
+
+      Start 19: stratakv-test-performance-support-unit
+19/59 Test #19: stratakv-test-performance-support-unit .............   Passed    0.00 sec
+      Start 20: stratakv-test-workload-runner-unit
+20/59 Test #20: stratakv-test-workload-runner-unit .................   Passed    0.02 sec
+      Start 21: stratakv-test-a1-matrix-unit
+21/59 Test #21: stratakv-test-a1-matrix-unit .......................   Passed    0.05 sec
+      Start 22: stratakv-test-a2-transaction-unit
+22/59 Test #22: stratakv-test-a2-transaction-unit ..................   Passed    0.02 sec
+      Start 23: stratakv-test-a3-fanout-unit
+23/59 Test #23: stratakv-test-a3-fanout-unit .......................   Passed    0.02 sec
+      Start 24: stratakv-test-a4-contention-unit
+24/59 Test #24: stratakv-test-a4-contention-unit ...................   Passed    0.00 sec
+      Start 25: stratakv-test-b3-barrier-unit
+25/59 Test #25: stratakv-test-b3-barrier-unit ......................   Passed    0.00 sec
+      Start 26: stratakv-test-b3-recovery-unit
+26/59 Test #26: stratakv-test-b3-recovery-unit .....................   Passed    0.01 sec
+      Start 27: stratakv-test-c1-transfer-unit
+27/59 Test #27: stratakv-test-c1-transfer-unit .....................   Passed    0.00 sec
+      Start 28: stratakv-test-c2-linearizability-unit
+28/59 Test #28: stratakv-test-c2-linearizability-unit ..............   Passed    0.04 sec
+      Start 29: stratakv-test-txn-scheduler-unit
+29/59 Test #29: stratakv-test-txn-scheduler-unit ...................   Passed    0.17 sec
+      Start 30: stratakv-test-txn-recovery-dynamic-unit
+30/59 Test #30: stratakv-test-txn-recovery-dynamic-unit ............   Passed    0.22 sec
+      Start 31: stratakv-test-dynamic-cluster
+31/59 Test #31: stratakv-test-dynamic-cluster ......................   Passed   36.09 sec
+      Start 32: stratakv-test-tso-integration
+32/59 Test #32: stratakv-test-tso-integration ......................   Passed   29.90 sec
+      Start 33: stratakv-test-timestamp-oracle-unit
+33/59 Test #33: stratakv-test-timestamp-oracle-unit ................   Passed    0.02 sec
+      Start 34: stratakv-test-transaction-coordinator-unit
+34/59 Test #34: stratakv-test-transaction-coordinator-unit .........   Passed    0.05 sec
+      Start 35: stratakv-test-mvcc-batch-unit
+35/59 Test #35: stratakv-test-mvcc-batch-unit ......................   Passed    0.00 sec
+      Start 36: stratakv-test-region-batch-coordinator-unit
+36/59 Test #36: stratakv-test-region-batch-coordinator-unit ........   Passed    0.07 sec
+      Start 37: stratakv-test-region-metadata-unit
+37/59 Test #37: stratakv-test-region-metadata-unit .................   Passed    0.00 sec
+      Start 38: stratakv-test-topology-config-unit
+38/59 Test #38: stratakv-test-topology-config-unit .................   Passed    0.00 sec
+      Start 39: stratakv-test-region-cache-unit
+39/59 Test #39: stratakv-test-region-cache-unit ....................   Passed    0.12 sec
+      Start 40: stratakv-test-region-registry-unit
+40/59 Test #40: stratakv-test-region-registry-unit .................   Passed    0.14 sec
+      Start 41: stratakv-test-region-dispatcher-unit
+41/59 Test #41: stratakv-test-region-dispatcher-unit ...............   Passed    0.08 sec
+      Start 42: stratakv-test-region-split-unit
+42/59 Test #42: stratakv-test-region-split-unit ....................   Passed    0.26 sec
+      Start 43: stratakv-test-node-split-unit
+43/59 Test #43: stratakv-test-node-split-unit ......................   Passed    0.06 sec
+      Start 44: stratakv-test-region-request-sender-unit
+44/59 Test #44: stratakv-test-region-request-sender-unit ...........   Passed    0.13 sec
+      Start 45: stratakv-test-region-cache-unit-stress-unit
+45/59 Test #45: stratakv-test-region-cache-unit-stress-unit ........   Passed    2.16 sec
+      Start 46: stratakv-test-region-envelope-compat-unit
+46/59 Test #46: stratakv-test-region-envelope-compat-unit ..........   Passed    0.00 sec
+      Start 47: stratakv-test-metadata-consensus-unit-fault-unit
+47/59 Test #47: stratakv-test-metadata-consensus-unit-fault-unit ...   Passed    0.00 sec
+      Start 48: stratakv-test-metadata-property-unit
+48/59 Test #48: stratakv-test-metadata-property-unit ...............   Passed    0.00 sec
+      Start 49: stratakv-test-region-data-path-unit
+49/59 Test #49: stratakv-test-region-data-path-unit ................   Passed    0.00 sec
+      Start 50: stratakv-test-node-bootstrap-unit
+50/59 Test #50: stratakv-test-node-bootstrap-unit ..................   Passed    0.18 sec
+      Start 51: stratakv-test-metadata-state-machine-unit
+51/59 Test #51: stratakv-test-metadata-state-machine-unit ..........   Passed    0.00 sec
+      Start 52: stratakv-test-metadata-consensus-unit
+52/59 Test #52: stratakv-test-metadata-consensus-unit ..............   Passed    0.00 sec
+      Start 53: stratakv-test-metadata-client-unit
+53/59 Test #53: stratakv-test-metadata-client-unit .................   Passed    0.89 sec
+      Start 54: stratakv-test-metadata-integration
+54/59 Test #54: stratakv-test-metadata-integration .................   Passed    9.03 sec
+      Start 55: stratakv-test-sdk-contract-unit
+55/59 Test #55: stratakv-test-sdk-contract-unit ....................   Passed    0.00 sec
+      Start 56: stratakv-test-sdk-scan-unit
+56/59 Test #56: stratakv-test-sdk-scan-unit ........................   Passed    0.00 sec
+      Start 57: stratakv-test-performance-script-integration
+57/59 Test #57: stratakv-test-performance-script-integration .......   Passed    0.03 sec
+      Start 58: stratakv-test-performance-report-integration
+58/59 Test #58: stratakv-test-performance-report-integration .......   Passed    0.36 sec
+      Start 59: stratakv-test-d1-compare-integration
+59/59 Test #59: stratakv-test-d1-compare-integration ...............   Passed    0.16 sec
+
+98% tests passed, 1 tests failed out of 59
+
+Total Test time (real) =  86.04 sec
+
+The following tests FAILED:
+	 18 - stratakv-test-auto-balancer-integration (Failed)
+Errors while running CTest

@@ -1,0 +1,9 @@
+# RPC validation
+
+The new optional archive contains only Pulsar core/net, Protobuf and standard C++/POSIX dependencies. It is built with `-DPULSAR_BUILD_RPC=ON`; the option defaults to OFF. A standalone example copied to `/tmp/pulsar-rpc-external` built using only the installed `Pulsar::rpc` CMake target and generated generic Echo service. Sixteen concurrent calls with 200 ms synchronous handlers passed with one I/O Worker and four bounded handler threads; an I/O heartbeat completed within 100 ms while all four handlers were occupied.
+
+The actual StrataKV `MprpcChannel` and `RpcProvider` were built into a separate legacy endpoint process. `pulsar-rpc-legacy-interop` ran three new-client → legacy-server calls and three legacy-client → new-server calls. The two generated `RPC::RpcHeader` implementations were never linked into one process.
+
+`pulsar-rpc-fault-check` covers invalid request varint, fragmented requests, two coalesced duplicate calls on one connection, response length overflow, truncated response, a one-slot client pool rejecting concurrent overload, application-visible leader change, request timeout, reconnection after server restart, and an asynchronous `done` callback after timeout and provider stop. `pulsar-net-check` covers concurrent connections, fragmented writes, read timeout, close while parked, connection limit and a non-reading peer causing bounded write timeout. The three network/RPC tests passed three consecutive repetitions.
+
+V1 retains one in-flight call per connection and no request ID. A failed call after sending any bytes has an unknown execution result and is never replayed by the transport. A service must call `done` exactly once and must outlive the provider and all its asynchronous callbacks; a callback that is never invoked cannot be reclaimed safely.

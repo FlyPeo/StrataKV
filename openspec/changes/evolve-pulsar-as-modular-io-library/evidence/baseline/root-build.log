@@ -1,0 +1,239 @@
+Consolidate compiler generated dependencies of target stratakv-test-bounded-thread-pool-unit
+Consolidate compiler generated dependencies of target pulsar
+Consolidate compiler generated dependencies of target stratakv_rpc
+[  4%] Built target stratakv-test-bounded-thread-pool-unit
+[  4%] Built target stratakv_proto_codegen
+[ 13%] Built target pulsar
+[ 13%] Built target stratakv_rpc
+Consolidate compiler generated dependencies of target stratakv-test-raft-log-gc-unit
+[ 14%] Built target stratakv-test-raft-log-gc-unit
+Consolidate compiler generated dependencies of target stratakv-test-fiber-context
+Consolidate compiler generated dependencies of target stratakv-test-fiber-sync
+[ 15%] Built target stratakv-test-fiber-context
+[ 16%] Built target stratakv-test-fiber-sync
+Consolidate compiler generated dependencies of target stratakv-test-scheduler-work-stealing
+[ 17%] Built target stratakv-test-scheduler-work-stealing
+Consolidate compiler generated dependencies of target stratakv-test-stack-pool
+Consolidate compiler generated dependencies of target stratakv-test-scheduler-cache
+Consolidate compiler generated dependencies of target stratakv-test-reuse-integration
+[ 19%] Built target stratakv-test-scheduler-cache
+[ 19%] Built target stratakv-test-stack-pool
+[ 20%] Built target stratakv-test-reuse-integration
+Consolidate compiler generated dependencies of target stratakv-test-fiber-benchmark
+Consolidate compiler generated dependencies of target stratakv-test-fiber-context-ab-benchmark
+Consolidate compiler generated dependencies of target stratakv_core
+[ 22%] Built target stratakv-test-fiber-context-ab-benchmark
+[ 22%] Built target stratakv-test-fiber-benchmark
+[ 41%] Built target stratakv_core
+Consolidate compiler generated dependencies of target stratakv-admin
+Consolidate compiler generated dependencies of target stratakv-node
+Consolidate compiler generated dependencies of target stratakv-meta
+Consolidate compiler generated dependencies of target stratakv-tso
+[ 42%] Built target stratakv-admin
+[ 43%] Built target stratakv-node
+[ 44%] Built target stratakv-meta
+[ 45%] Built target stratakv-tso
+Consolidate compiler generated dependencies of target stratakv_sdk
+Consolidate compiler generated dependencies of target stratakv-test-rocksdb-snapshot-unit
+Consolidate compiler generated dependencies of target stratakv-test-raft-confchange-unit
+[ 46%] Built target stratakv_sdk
+Consolidate compiler generated dependencies of target stratakv-test-replica-catchup-unit
+[ 47%] Built target stratakv-test-rocksdb-snapshot-unit
+[ 48%] Built target stratakv-test-raft-confchange-unit
+Consolidate compiler generated dependencies of target stratakv-test-node-migration-unit
+Consolidate compiler generated dependencies of target stratakv-test-auto-balancer-state-unit
+[ 49%] Built target stratakv-test-replica-catchup-unit
+Consolidate compiler generated dependencies of target stratakv-test-auto-balancer-planner-unit
+[ 50%] Built target stratakv-test-auto-balancer-state-unit
+[ 51%] Built target stratakv-test-node-migration-unit
+Consolidate compiler generated dependencies of target stratakv-test-auto-balancer-heartbeat-unit
+[ 52%] Built target stratakv-test-auto-balancer-planner-unit
+Consolidate compiler generated dependencies of target stratakv-test-auto-balancer-recovery-unit
+Consolidate compiler generated dependencies of target stratakv-test-online-migration
+Consolidate compiler generated dependencies of target stratakv-test-auto-balancer-integration
+[ 53%] Built target stratakv-test-auto-balancer-recovery-unit
+[ 54%] Built target stratakv-test-auto-balancer-heartbeat-unit
+[ 55%] Built target stratakv-test-online-migration
+[ 56%] Built target stratakv-test-auto-balancer-integration
+Consolidate compiler generated dependencies of target stratakv-test-b3-barrier-unit
+Consolidate compiler generated dependencies of target stratakv-test-performance-support
+Consolidate compiler generated dependencies of target stratakv-test-b3-recovery-unit
+[ 56%] Built target stratakv-test-b3-barrier-unit
+Consolidate compiler generated dependencies of target stratakv-test-txn-scheduler-unit
+[ 58%] Built target stratakv-test-performance-support
+[ 59%] Built target stratakv-test-b3-recovery-unit
+Consolidate compiler generated dependencies of target stratakv-test-txn-recovery-dynamic-unit
+[ 60%] Built target stratakv-test-txn-scheduler-unit
+Consolidate compiler generated dependencies of target stratakv-test-dynamic-cluster
+Consolidate compiler generated dependencies of target stratakv-test-tso-integration
+[ 61%] Built target stratakv-test-txn-recovery-dynamic-unit
+Consolidate compiler generated dependencies of target stratakv-test-tso-range-benchmark
+[ 62%] Built target stratakv-test-dynamic-cluster
+[ 63%] Built target stratakv-test-tso-integration
+Consolidate compiler generated dependencies of target stratakv-test-timestamp-oracle-unit
+[ 64%] Built target stratakv-test-tso-range-benchmark
+Consolidate compiler generated dependencies of target stratakv-test-transaction-coordinator-unit
+Consolidate compiler generated dependencies of target stratakv-test-mvcc-batch-unit
+[ 65%] Built target stratakv-test-timestamp-oracle-unit
+Consolidate compiler generated dependencies of target stratakv-test-region-batch-coordinator-unit
+[ 67%] Built target stratakv-test-transaction-coordinator-unit
+[ 67%] Built target stratakv-test-mvcc-batch-unit
+[ 68%] Built target stratakv-test-region-batch-coordinator-unit
+Consolidate compiler generated dependencies of target stratakv-test-region-metadata-unit
+Consolidate compiler generated dependencies of target stratakv-test-topology-config-unit
+Consolidate compiler generated dependencies of target stratakv-test-region-cache-unit
+[ 69%] Built target stratakv-test-topology-config-unit
+[ 70%] Built target stratakv-test-region-cache-unit
+Consolidate compiler generated dependencies of target stratakv-test-region-registry-unit
+[ 71%] Built target stratakv-test-region-metadata-unit
+Consolidate compiler generated dependencies of target stratakv-test-region-split-unit
+Consolidate compiler generated dependencies of target stratakv-test-region-dispatcher-unit
+[ 72%] Built target stratakv-test-region-registry-unit
+Consolidate compiler generated dependencies of target stratakv-test-node-split-unit
+[ 73%] Built target stratakv-test-region-dispatcher-unit
+[ 73%] Built target stratakv-test-region-split-unit
+Consolidate compiler generated dependencies of target stratakv-test-region-request-sender-unit
+[ 74%] Built target stratakv-test-node-split-unit
+Consolidate compiler generated dependencies of target stratakv-test-region-envelope-compat-unit
+[ 75%] Built target stratakv-test-region-request-sender-unit
+Consolidate compiler generated dependencies of target stratakv-test-region-cache-unit-stress-unit
+Consolidate compiler generated dependencies of target stratakv-test-metadata-consensus-unit-fault-unit
+[ 76%] Built target stratakv-test-region-envelope-compat-unit
+Consolidate compiler generated dependencies of target stratakv-test-metadata-property-unit
+[ 77%] Built target stratakv-test-metadata-consensus-unit-fault-unit
+[ 78%] Built target stratakv-test-region-cache-unit-stress-unit
+Consolidate compiler generated dependencies of target stratakv-test-region-data-path-unit
+[ 79%] Built target stratakv-test-metadata-property-unit
+Consolidate compiler generated dependencies of target stratakv-test-metadata-state-machine-unit
+Consolidate compiler generated dependencies of target stratakv-test-node-bootstrap-unit
+[ 80%] Built target stratakv-test-region-data-path-unit
+Consolidate compiler generated dependencies of target stratakv-test-metadata-consensus-unit
+[ 81%] Built target stratakv-test-metadata-state-machine-unit
+[ 81%] Built target stratakv-test-node-bootstrap-unit
+Consolidate compiler generated dependencies of target stratakv-test-metadata-client-unit
+Consolidate compiler generated dependencies of target stratakv-test-metadata-integration
+Consolidate compiler generated dependencies of target stratakv-test-sdk-contract-unit
+[ 82%] Built target stratakv-test-metadata-consensus-unit
+[ 83%] Built target stratakv-test-metadata-client-unit
+[ 84%] Built target stratakv-test-sdk-contract-unit
+[ 85%] Built target stratakv-test-metadata-integration
+Consolidate compiler generated dependencies of target stratakv-test-sdk-scan-unit
+Consolidate compiler generated dependencies of target stratakv-test-txn-contention-benchmark
+Consolidate compiler generated dependencies of target stratakv-test-region-2pc-benchmark
+Consolidate compiler generated dependencies of target stratakv-test-dynamic-sharding-benchmark
+[ 86%] Built target stratakv-test-txn-contention-benchmark
+[ 87%] Built target stratakv-test-sdk-scan-unit
+[ 88%] Built target stratakv-test-region-2pc-benchmark
+Consolidate compiler generated dependencies of target stratakv-test-reliability
+Consolidate compiler generated dependencies of target stratakv-test-kv-workload
+[ 89%] Built target stratakv-test-dynamic-sharding-benchmark
+[ 90%] Built target stratakv-test-reliability
+[ 91%] Built target stratakv-test-kv-workload
+Consolidate compiler generated dependencies of target stratakv-test-performance-support-unit
+Consolidate compiler generated dependencies of target stratakv-client
+[ 91%] Building CXX object CMakeFiles/stratakv-client.dir/src/client/client_main.cpp.o
+[ 92%] Built target stratakv-test-performance-support-unit
+[ 92%] Building CXX object test/CMakeFiles/stratakv-test-a1-matrix-unit.dir/performance/a1_matrix_unit_check.cpp.o
+[ 92%] Building CXX object test/CMakeFiles/stratakv-test-workload-runner-unit.dir/performance/workload_runner_unit_check.cpp.o
+[ 92%] Building CXX object test/CMakeFiles/stratakv-test-a2-transaction-unit.dir/performance/a2_transaction_unit_check.cpp.o
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:53:5: error: expected unqualified-id before string constant
+   53 |     "  quit / exit                      exit (auto-rolls back an open session)";
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp: In function ‘stratakv::Result {anonymous}::RunWithRetry(stratakv::Client&, Stage)’:
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:139:55: error: a function-definition is not allowed here before ‘{’ token
+  139 | void PrintEntries(const stratakv::ScanResult& result) {
+      |                                                       ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp: In function ‘int {anonymous}::main(int, char**)’:
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:189:23: error: conflicting declaration ‘const string cmd’
+  189 |     const std::string cmd = ToLower(args[0]);
+      |                       ^~~
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:188:24: note: previous declaration as ‘const string& cmd’
+  188 |     const std::string& cmd = args[0];
+      |                        ^~~
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:228:8: error: expected ‘catch’ before ‘(’ token
+  228 |     if (cmd == "commit") {
+      |        ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:228:9: error: ‘cmd’ does not name a type
+  228 |     if (cmd == "commit") {
+      |         ^~~
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:228:12: error: expected ‘)’ before ‘==’ token
+  228 |     if (cmd == "commit") {
+      |        ~   ^~~
+      |            )
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:228:13: error: expected ‘{’ before ‘==’ token
+  228 |     if (cmd == "commit") {
+      |             ^~
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:228:13: error: expected primary-expression before ‘==’ token
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:654:2: error: expected ‘}’ at end of input
+  654 | }
+      |  ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:209:20: note: to match this ‘{’
+  209 |       if (session) {
+      |                    ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:654:2: error: expected ‘}’ at end of input
+  654 | }
+      |  ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:208:25: note: to match this ‘{’
+  208 |     if (cmd == "begin") {
+      |                         ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:654:2: error: expected ‘}’ at end of input
+  654 | }
+      |  ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:201:24: note: to match this ‘{’
+  201 |     if (cmd == "help") {
+      |                        ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:654:2: error: expected ‘}’ at end of input
+  654 | }
+      |  ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:191:41: note: to match this ‘{’
+  191 |     if (cmd == "quit" || cmd == "exit") {
+      |                                         ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:654:2: error: expected ‘}’ at end of input
+  654 | }
+      |  ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:176:19: note: to match this ‘{’
+  176 |   while (!g_stop) {
+      |                   ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:654:2: error: expected ‘}’ at end of input
+  654 | }
+      |  ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:173:40: note: to match this ‘{’
+  173 |   while (std::getline(std::cin, line)) {
+      |                                        ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:654:2: error: expected ‘}’ at end of input
+  654 | }
+      |  ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:148:33: note: to match this ‘{’
+  148 | int main(int argc, char** argv) {
+      |                                 ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp: At global scope:
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:654:2: error: expected ‘}’ at end of input
+  654 | }
+      |  ^
+/home/fly/_projects/2__StrataKV_pulsar_modular/src/client/client_main.cpp:27:11: note: to match this ‘{’
+   27 | namespace {
+      |           ^
+gmake[2]: *** [CMakeFiles/stratakv-client.dir/build.make:76: CMakeFiles/stratakv-client.dir/src/client/client_main.cpp.o] Error 1
+gmake[2]: Target 'CMakeFiles/stratakv-client.dir/build' not remade because of errors.
+gmake[1]: *** [CMakeFiles/Makefile2:552: CMakeFiles/stratakv-client.dir/all] Error 2
+[ 92%] Building CXX object test/CMakeFiles/stratakv-test-a3-fanout-unit.dir/performance/a3_fanout_unit_check.cpp.o
+[ 93%] Linking CXX executable ../../../../bin/stratakv-test-workload-runner-unit
+[ 93%] Built target stratakv-test-workload-runner-unit
+[ 93%] Building CXX object test/CMakeFiles/stratakv-test-a4-contention-unit.dir/performance/a4_contention_unit_check.cpp.o
+[ 94%] Linking CXX executable ../../../../bin/stratakv-test-a1-matrix-unit
+[ 94%] Built target stratakv-test-a1-matrix-unit
+[ 95%] Building CXX object test/CMakeFiles/stratakv-test-c1-transfer-unit.dir/performance/c1_transfer_unit_check.cpp.o
+[ 96%] Linking CXX executable ../../../../bin/stratakv-test-a2-transaction-unit
+[ 96%] Built target stratakv-test-a2-transaction-unit
+[ 97%] Building CXX object test/CMakeFiles/stratakv-test-c2-linearizability-unit.dir/performance/c2_linearizability_unit_check.cpp.o
+[ 98%] Linking CXX executable ../../../../bin/stratakv-test-a3-fanout-unit
+[ 99%] Linking CXX executable ../../../../bin/stratakv-test-a4-contention-unit
+[ 99%] Built target stratakv-test-a3-fanout-unit
+[ 99%] Built target stratakv-test-a4-contention-unit
+[ 99%] Linking CXX executable ../../../../bin/stratakv-test-c2-linearizability-unit
+[ 99%] Built target stratakv-test-c2-linearizability-unit
+[ 99%] Linking CXX executable ../../../../bin/stratakv-test-c1-transfer-unit
+[ 99%] Built target stratakv-test-c1-transfer-unit
+gmake[1]: Target 'all' not remade because of errors.
+gmake: *** [Makefile:146: all] Error 2
+gmake: Target 'default_target' not remade because of errors.
