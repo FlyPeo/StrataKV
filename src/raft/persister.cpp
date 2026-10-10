@@ -158,6 +158,43 @@ void Persister::SaveRaftState(std::string data) {
   m_raftState = std::move(data);
 }
 
+bool Persister::AppendRaftState(uint64_t expectedOldLogCount, const std::string& headerBytes,
+                                const std::string& tailBytes) {
+  std::lock_guard<std::mutex> lg(m_mtx);
+  if (!HasBinaryHeader(m_raftState) || headerBytes.size() != kRaftPersistHeaderSize) {
+    return false;
+  }
+  constexpr size_t kSnapIdxOffset = sizeof(kRaftPersistMagic) - 1 + sizeof(int32_t) * 2;
+  constexpr size_t kLogCountOffset = sizeof(kRaftPersistMagic) - 1 + sizeof(int32_t) * 4;
+  int32_t oldSnapIdx = 0;
+  int32_t newSnapIdx = 0;
+  uint64_t persistedCount = 0;
+  std::memcpy(&oldSnapIdx, m_raftState.data() + kSnapIdxOffset, sizeof(int32_t));
+  std::memcpy(&newSnapIdx, headerBytes.data() + kSnapIdxOffset, sizeof(int32_t));
+  std::memcpy(&persistedCount, m_raftState.data() + kLogCountOffset, sizeof(uint64_t));
+  if (oldSnapIdx != newSnapIdx || persistedCount != expectedOldLogCount) {
+    return false;
+  }
+  if (!tailBytes.empty()) {
+    m_raftStateOutStream.write(tailBytes.data(), static_cast<std::streamsize>(tailBytes.size()));
+    m_raftStateOutStream.flush();
+    if (!m_raftStateOutStream.good()) return false;
+  }
+  std::fstream header(m_raftStateFileName,
+                      std::ios::binary | std::ios::in | std::ios::out);
+  if (!header.is_open()) return false;
+  header.write(headerBytes.data(), static_cast<std::streamsize>(kRaftPersistHeaderSize));
+  header.flush();
+  if (!header.good()) return false;
+
+  std::memcpy(m_raftState.data(), headerBytes.data(), kRaftPersistHeaderSize);
+  if (!tailBytes.empty()) {
+    m_raftState.append(tailBytes);
+  }
+  m_raftStateSize = m_raftState.size();
+  return true;
+}
+
 long long Persister::RaftStateSize() {
   std::lock_guard<std::mutex> lg(m_mtx);
 

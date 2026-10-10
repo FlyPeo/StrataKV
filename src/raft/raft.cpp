@@ -70,6 +70,38 @@ std::string EncodePersistData(int currentTerm, int votedFor, int snapshotIndex,
   }
   return data;
 }
+
+std::string EncodePersistHeader(int currentTerm, int votedFor, int snapshotIndex,
+                                int snapshotTerm, uint64_t logCount) {
+  std::string header;
+  header.reserve(kRaftPersistMagicSize + sizeof(int32_t) * 4 + sizeof(uint64_t));
+  header.append(kRaftPersistMagic, kRaftPersistMagicSize);
+  AppendInt32(&header, currentTerm);
+  AppendInt32(&header, votedFor);
+  AppendInt32(&header, snapshotIndex);
+  AppendInt32(&header, snapshotTerm);
+  AppendUint64(&header, logCount);
+  return header;
+}
+
+std::string EncodePersistTail(const std::vector<raftRpcProctoc::LogEntry>& logs,
+                              size_t startOffset) {
+  size_t estimatedSize = 0;
+  for (size_t i = startOffset; i < logs.size(); ++i) {
+    estimatedSize += sizeof(int32_t) * 2 + sizeof(uint64_t) + logs[i].command().size();
+  }
+  std::string tail;
+  tail.reserve(estimatedSize);
+  for (size_t i = startOffset; i < logs.size(); ++i) {
+    const auto& item = logs[i];
+    const std::string& command = item.command();
+    AppendInt32(&tail, item.logterm());
+    AppendInt32(&tail, item.logindex());
+    AppendUint64(&tail, static_cast<uint64_t>(command.size()));
+    tail.append(command);
+  }
+  return tail;
+}
 }  // namespace
 
 void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpcProctoc::AppendEntriesReply* reply) {
@@ -81,6 +113,8 @@ void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpc
     return;
   }
   bool persistentStateChanged = false;
+  bool logTruncated = false;
+  const size_t oldLogSize = m_logs.size();
   reply->set_appstate(AppNormal);  // 能接收到代表网络是正常的
   if (args->term() < m_currentTerm) {
     reply->set_success(false);
@@ -96,7 +130,11 @@ void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpc
   // RPC handling behind disk I/O.
   DEFER {
     if (persistentStateChanged) {
-      persist();
+      if (!logTruncated) {
+        persistAppended(oldLogSize);
+      } else {
+        persist();
+      }
     }
   };
   if (args->term() > m_currentTerm) {
@@ -158,6 +196,7 @@ void Raft::AppendEntries1(const raftRpcProctoc::AppendEntriesArgs* args, raftRpc
           m_logs.erase(m_logs.begin() + sliceIndex, m_logs.end());
           m_logs.push_back(log);
           persistentStateChanged = true;
+          logTruncated = true;
         }
       }
     }
@@ -220,9 +259,7 @@ void Raft::applierTicker() {
     // while the Region queue may block.
     if (!applyMsgs.empty()) {
       DPrintf("[func- Raft::applierTicker()-raft{%d}] applyMsgs size: {%d}", m_me, applyMsgs.size());
-    }
-    for (auto& message : applyMsgs) {
-      applyChan->Push(message);
+      applyChan->PushBatch(applyMsgs);
     }
   }
 }
@@ -328,57 +365,19 @@ void Raft::doHeartBeat() {
       completeReadRoundIfQuorumLocked();
     }
 
-    // Enqueue one replication task per follower; dedicated workers serialize
-    // each peer's AppendEntries and snapshot traffic.
+    // Enqueue one lightweight replication trigger per follower; dedicated
+    // workers coalesce queued triggers and construct AppendEntries/Snapshot
+    // requests from the latest m_nextIndex[i] right before sending.
     for (int i = 0; i < m_peers.size(); i++) {
       if (i == m_me || isRemovedLocked(i)) {
         continue;
       }
       DPrintf("[func-Raft::doHeartBeat()-Leader: {%d}] Leader的心跳定时器触发了 index:{%d}\n", m_me, i);
       myAssert(m_nextIndex[i] >= 1, format("nextIndex[%d] = {%d}", i, m_nextIndex[i]));
-      if (m_nextIndex[i] <= m_lastSnapshotIncludeIndex) {
-        ReplicationTask task;
-        task.type = ReplicationTaskType::Snapshot;
-        m_replicationQueues[i]->Push(task);
-        continue;
-      }
-      int preLogIndex = -1;
-      int PrevLogTerm = -1;
-      getPrevLogInfo(i, &preLogIndex, &PrevLogTerm);
-      std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> appendEntriesArgs =
-          std::make_shared<raftRpcProctoc::AppendEntriesArgs>();
-      appendEntriesArgs->set_term(m_currentTerm);
-      appendEntriesArgs->set_leaderid(m_me);
-      appendEntriesArgs->set_prevlogindex(preLogIndex);
-      appendEntriesArgs->set_prevlogterm(PrevLogTerm);
-      appendEntriesArgs->clear_entries();
-      appendEntriesArgs->set_leadercommit(m_commitIndex);
-      if (m_activeReadRound && m_activeReadRound->term == m_currentTerm) {
-        appendEntriesArgs->set_readcontext(m_activeReadRound->context);
-      }
-      if (preLogIndex != m_lastSnapshotIncludeIndex) {
-        for (int j = getSlicesIndexFromLogIndex(preLogIndex) + 1; j < m_logs.size(); ++j) {
-          raftRpcProctoc::LogEntry* sendEntryPtr = appendEntriesArgs->add_entries();
-          *sendEntryPtr = m_logs[j];
-        }
-      } else {
-        for (const auto& item : m_logs) {
-          raftRpcProctoc::LogEntry* sendEntryPtr = appendEntriesArgs->add_entries();
-          *sendEntryPtr = item;
-        }
-      }
-      int lastLogIndex = getLastLogIndex();
-      myAssert(appendEntriesArgs->prevlogindex() + appendEntriesArgs->entries_size() == lastLogIndex,
-               format("appendEntriesArgs.PrevLogIndex{%d}+len(appendEntriesArgs.Entries){%d} != lastLogIndex{%d}",
-                      appendEntriesArgs->prevlogindex(), appendEntriesArgs->entries_size(), lastLogIndex));
-      const std::shared_ptr<raftRpcProctoc::AppendEntriesReply> appendEntriesReply =
-          std::make_shared<raftRpcProctoc::AppendEntriesReply>();
-      appendEntriesReply->set_appstate(Disconnected);
-
       ReplicationTask task;
-      task.type = ReplicationTaskType::AppendEntries;
-      task.appendEntriesArgs = appendEntriesArgs;
-      task.appendEntriesReply = appendEntriesReply;
+      task.type = (m_nextIndex[i] <= m_lastSnapshotIncludeIndex)
+                      ? ReplicationTaskType::Snapshot
+                      : ReplicationTaskType::AppendEntries;
       m_replicationQueues[i]->Push(task);
     }
     m_lastResetHearBeatTime = now();  // leader发送心跳，就不是随机时间了
@@ -815,37 +814,78 @@ void Raft::replicationWorker(int server) {
     if (!m_replicationQueues[server]->timeOutPop(100, &task)) {
       continue;
     }
+    // Coalesce any redundant triggers queued while the previous RPC was in flight.
+    (void)m_replicationQueues[server]->PopBatch(1024);
+
     if (m_removed.load(std::memory_order_acquire) ||
         m_shutdown.load(std::memory_order_acquire)) {
       break;
     }
+    bool sendSnapshot = false;
+    std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> appendEntriesArgs;
+    std::shared_ptr<raftRpcProctoc::AppendEntriesReply> appendEntriesReply;
     {
       std::lock_guard<std::mutex> lock(m_mtx);
       if (isRemovedLocked(server)) {
         break;
       }
+      if (m_status != Leader) {
+        continue;
+      }
+      if (!m_activeReadRound && !m_pendingReadWaiters.empty() &&
+          hasCommittedEntryInCurrentTermLocked()) {
+        auto round = std::make_shared<ReadRound>();
+        round->context = ++m_nextReadContext;
+        if (round->context == 0) round->context = ++m_nextReadContext;
+        round->term = m_currentTerm;
+        round->readIndex = m_commitIndex;
+        round->acknowledgedPeers.insert(m_me);
+        round->waiters.swap(m_pendingReadWaiters);
+        m_activeReadRound = std::move(round);
+        ++m_readIndexRounds;
+        completeReadRoundIfQuorumLocked();
+      }
+      myAssert(m_nextIndex[server] >= 1, format("nextIndex[%d] = {%d}", server, m_nextIndex[server]));
+      if (m_nextIndex[server] <= m_lastSnapshotIncludeIndex) {
+        sendSnapshot = true;
+      } else {
+        int preLogIndex = -1;
+        int PrevLogTerm = -1;
+        getPrevLogInfo(server, &preLogIndex, &PrevLogTerm);
+        appendEntriesArgs = std::make_shared<raftRpcProctoc::AppendEntriesArgs>();
+        appendEntriesArgs->set_term(m_currentTerm);
+        appendEntriesArgs->set_leaderid(m_me);
+        appendEntriesArgs->set_prevlogindex(preLogIndex);
+        appendEntriesArgs->set_prevlogterm(PrevLogTerm);
+        appendEntriesArgs->clear_entries();
+        appendEntriesArgs->set_leadercommit(m_commitIndex);
+        if (m_activeReadRound && m_activeReadRound->term == m_currentTerm) {
+          appendEntriesArgs->set_readcontext(m_activeReadRound->context);
+        }
+        if (preLogIndex != m_lastSnapshotIncludeIndex) {
+          for (int j = getSlicesIndexFromLogIndex(preLogIndex) + 1; j < m_logs.size(); ++j) {
+            raftRpcProctoc::LogEntry* sendEntryPtr = appendEntriesArgs->add_entries();
+            *sendEntryPtr = m_logs[j];
+          }
+        } else {
+          for (const auto& item : m_logs) {
+            raftRpcProctoc::LogEntry* sendEntryPtr = appendEntriesArgs->add_entries();
+            *sendEntryPtr = item;
+          }
+        }
+        int lastLogIndex = getLastLogIndex();
+        myAssert(appendEntriesArgs->prevlogindex() + appendEntriesArgs->entries_size() == lastLogIndex,
+                 format("appendEntriesArgs.PrevLogIndex{%d}+len(appendEntriesArgs.Entries){%d} != lastLogIndex{%d}",
+                        appendEntriesArgs->prevlogindex(), appendEntriesArgs->entries_size(), lastLogIndex));
+        appendEntriesReply = std::make_shared<raftRpcProctoc::AppendEntriesReply>();
+        appendEntriesReply->set_appstate(Disconnected);
+      }
     }
-    if (task.type == ReplicationTaskType::Snapshot) {
+    if (sendSnapshot) {
       leaderSendSnapShot(server);
       continue;
     }
-    bool staleAfterCompaction = false;
-    bool needsSnapshot = false;
-    {
-      std::lock_guard<std::mutex> lock(m_mtx);
-      staleAfterCompaction = task.appendEntriesArgs &&
-                             task.appendEntriesArgs->prevlogindex() < m_lastSnapshotIncludeIndex;
-      needsSnapshot = staleAfterCompaction && m_status == Leader &&
-                      m_nextIndex[server] <= m_lastSnapshotIncludeIndex;
-    }
-    if (staleAfterCompaction) {
-      // AppendEntries tasks are built before entering the per-follower queue.
-      // Once their prefix has been compacted, discard those stale copies and
-      // install the authoritative snapshot instead of replaying removed logs.
-      if (needsSnapshot) leaderSendSnapShot(server);
-      continue;
-    }
-    sendAppendEntries(server, task.appendEntriesArgs, task.appendEntriesReply);
+    sendAppendEntries(server, appendEntriesArgs, appendEntriesReply);
   }
 }
 
@@ -888,6 +928,23 @@ void Raft::persist() {
   auto data = persistData();
   m_persister->SaveRaftState(std::move(data));
   m_persistCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Raft::persistAppended(size_t oldLogSize) {
+  if (!m_persister) {
+    return;
+  }
+  if (oldLogSize <= m_logs.size()) {
+    const std::string header = EncodePersistHeader(
+        m_currentTerm, m_votedFor, m_lastSnapshotIncludeIndex,
+        m_lastSnapshotIncludeTerm, static_cast<uint64_t>(m_logs.size()));
+    const std::string tail = EncodePersistTail(m_logs, oldLogSize);
+    if (m_persister->AppendRaftState(static_cast<uint64_t>(oldLogSize), header, tail)) {
+      m_persistCount.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+  }
+  persist();
 }
 
 void Raft::RequestVote(const raftRpcProctoc::RequestVoteArgs* args, raftRpcProctoc::RequestVoteReply* reply) {
@@ -1274,10 +1331,16 @@ void Raft::raftPollerTicker() {
         m_shutdown.load(std::memory_order_acquire)) {
       break;
     }
-    std::vector<Op> batch = m_proposeQueue.PopBatch(100);
+    std::vector<Op> batch = m_proposeQueue.WaitPopBatch(100, 10);
     if (batch.empty()) {
-      sleepNMilliseconds(2);
       continue;
+    }
+    if (batch.size() <= 2) {
+      std::this_thread::sleep_for(std::chrono::microseconds(60));
+      auto more = m_proposeQueue.PopBatch(100 - static_cast<int>(batch.size()));
+      for (auto& op : more) {
+        batch.push_back(std::move(op));
+      }
     }
 
     {
@@ -1298,6 +1361,7 @@ void Raft::raftPollerTicker() {
         continue;
       }
 
+      const size_t oldLogSize = m_logs.size();
       int lastLogIndex = getLastLogIndex();
       for (const auto& command : batch) {
         if (command.Operation == "AdminSplit") {
@@ -1320,7 +1384,7 @@ void Raft::raftPollerTicker() {
         m_applyCond.notify_one();
       }
 
-      persist(); // Perform a single disk write for the entire batch
+      persistAppended(oldLogSize); // Perform a single incremental disk write for the entire batch
     }
 
     doHeartBeat(); // Enqueue replication tasks immediately after the batch is persisted.

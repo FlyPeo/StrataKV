@@ -208,6 +208,14 @@ class MvccStorage {
                           uint64_t appliedRaftIndex = 0);
   TxnStatus ApplyPreparedBatch(const PreparedMvccBatch& prepared,
                                uint64_t appliedRaftIndex = 0);
+  struct PreparedApplyCommand {
+    uint64_t raftIndex = 0;
+    bool isBatch = false;
+    std::string key;
+    PreparedMvccWrite single;
+    PreparedMvccBatch batch;
+  };
+  bool ApplyPreparedCommandsAtomically(const std::vector<PreparedApplyCommand>& commands);
   virtual TxnStatus AcquirePessimisticLock(const std::string& key, const std::string& primaryKey, uint64_t startTs,
                                    uint64_t ttlMs, uint64_t forUpdateTs = 0,
                                    uint64_t expireAtPhysicalMs = 0);

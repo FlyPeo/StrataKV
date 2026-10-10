@@ -63,6 +63,19 @@ class LockQueue {
     m_condvariable.notify_one();
   }
 
+  void PushBatch(const std::vector<T>& items) {
+    if (items.empty()) return;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const auto& item : items) {
+      m_queue.push(item);
+    }
+    m_condvariable.notify_one();
+  }
+
+  void NotifyAll() {
+    m_condvariable.notify_all();
+  }
+
   // 一个线程读日志queue，写日志文件
   T Pop() {
     std::unique_lock<std::mutex> lock(m_mutex);
@@ -106,8 +119,27 @@ class LockQueue {
       return batch;
     }
     batch.reserve(max_batch_size);
-    while (!m_queue.empty() && batch.size() < max_batch_size) {
-      batch.push_back(m_queue.front());
+    while (!m_queue.empty() && batch.size() < static_cast<size_t>(max_batch_size)) {
+      batch.push_back(std::move(m_queue.front()));
+      m_queue.pop();
+    }
+    return batch;
+  }
+
+  std::vector<T> WaitPopBatch(int max_batch_size, int timeout_ms) {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    if (m_queue.empty()) {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+      while (m_queue.empty()) {
+        if (m_condvariable.wait_until(lock, deadline) == std::cv_status::timeout) {
+          return {};
+        }
+      }
+    }
+    std::vector<T> batch;
+    batch.reserve(std::min<size_t>(m_queue.size(), static_cast<size_t>(max_batch_size)));
+    while (!m_queue.empty() && batch.size() < static_cast<size_t>(max_batch_size)) {
+      batch.push_back(std::move(m_queue.front()));
       m_queue.pop();
     }
     return batch;

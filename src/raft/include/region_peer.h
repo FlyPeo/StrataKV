@@ -233,6 +233,7 @@ class RegionPeer : public TxnRegionExecutor {
   // Consumes one committed entry delivered by the local Raft applier. This is
   // the state-machine apply path, unrelated to the point-read Get above.
   bool GetCommandFromRaft(ApplyMsg message);
+  bool TryBatchApplyFromRaft(const std::vector<ApplyMsg>& messages);
 
   bool LinearizableReadBarrier(std::chrono::steady_clock::time_point deadline,
                                int* confirmedTerm = nullptr);

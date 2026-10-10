@@ -176,6 +176,7 @@ class Raft : public raftRpcProctoc::raftRpc {
   void leaderUpdateCommitIndex();
   bool matchLog(int logIndex, int logTerm);
   void persist();
+  void persistAppended(size_t oldLogSize);
   void RequestVote(const raftRpcProctoc::RequestVoteArgs *args, raftRpcProctoc::RequestVoteReply *reply);
   bool UpToDate(int index, int term);
   int getLastLogIndex();

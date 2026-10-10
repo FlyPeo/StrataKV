@@ -39,6 +39,8 @@ class Persister {
   void DiscardStagedSnapshot(const std::string& stagedPath);
   std::string ReadSnapshot();
   void SaveRaftState(std::string data);
+  bool AppendRaftState(uint64_t expectedOldLogCount, const std::string& headerBytes,
+                       const std::string& tailBytes);
   long long RaftStateSize();
   std::string ReadRaftState();
   explicit Persister(int me);

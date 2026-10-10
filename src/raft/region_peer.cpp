@@ -467,34 +467,123 @@ void RegionPeer::PutAppend(const raftKVRpcProctoc::PutAppendArgs *args, raftKVRp
   ReleaseWaitApplyQueue(reqKey, chForRaftIndex);
 }
 
+bool RegionPeer::TryBatchApplyFromRaft(const std::vector<ApplyMsg>& messages) {
+  if (messages.size() < 2) return false;
+  std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
+
+  std::vector<Op> parsedOps;
+  parsedOps.reserve(messages.size());
+  std::vector<MvccStorage::PreparedApplyCommand> preparedCmds;
+  preparedCmds.reserve(messages.size());
+
+  for (const auto& message : messages) {
+    if (!message.CommandValid || message.ProposalRejected || message.SnapshotValid ||
+        message.CommandIndex <= m_lastSnapShotRaftLogIndex) {
+      return false;
+    }
+    Op op;
+    if (!op.parseFromString(message.Command) || op.Operation.rfind("TxnPrepared", 0) != 0) {
+      return false;
+    }
+    MvccStorage::PreparedApplyCommand cmd;
+    cmd.raftIndex = static_cast<uint64_t>(message.CommandIndex);
+    if (op.Operation.rfind("TxnPreparedBatch", 0) == 0) {
+      cmd.isBatch = true;
+      if (!cmd.batch.Parse(op.Value)) return false;
+    } else {
+      cmd.isBatch = false;
+      cmd.key = op.Key;
+      if (!cmd.single.Parse(op.Value)) return false;
+    }
+    parsedOps.push_back(std::move(op));
+    preparedCmds.push_back(std::move(cmd));
+  }
+
+  {
+    std::lock_guard<std::mutex> lg(m_mtx);
+    std::unordered_map<std::string, int> stagedLastRequestId;
+    for (const auto& op : parsedOps) {
+      auto stagedIt = stagedLastRequestId.find(op.ClientId);
+      if (stagedIt != stagedLastRequestId.end()) {
+        if (op.RequestId <= stagedIt->second) return false;
+      } else {
+        auto it = m_lastRequestId.find(op.ClientId);
+        if (it != m_lastRequestId.end() && op.RequestId <= it->second) {
+          return false;
+        }
+      }
+      stagedLastRequestId[op.ClientId] = op.RequestId;
+    }
+  }
+
+  if (!m_mvccStorage->ApplyPreparedCommandsAtomically(preparedCmds)) {
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lg(m_mtx);
+    for (const auto& op : parsedOps) {
+      m_lastRequestId[op.ClientId] = op.RequestId;
+    }
+  }
+  m_txnRaftApplies.fetch_add(parsedOps.size(), std::memory_order_relaxed);
+
+  const auto scheduler = m_nodeTxnScheduler.lock();
+  for (size_t i = 0; i < parsedOps.size(); ++i) {
+    parsedOps[i].Status = std::to_string(static_cast<int>(TxnStatus::Ok));
+    if (IsNodeScheduledTxn(parsedOps[i].Operation)) {
+      if (scheduler) scheduler->OnApplied(m_regionId, parsedOps[i], messages[i].CommandIndex);
+    } else {
+      SendMessageToWaitChan(
+          parsedOps[i], parsedOps[i].ClientId + "_" + std::to_string(parsedOps[i].RequestId));
+    }
+  }
+  AdvanceStateMachineApplied(messages.back().CommandIndex);
+  return true;
+}
+
 void RegionPeer::ReadRaftApplyCommandLoop() {
   while (!m_stopRequested.load(std::memory_order_acquire)) {
     //如果只操作applyChan不用拿锁，因为applyChan自己带锁
-    auto message = applyChan->Pop();  //阻塞弹出
+    auto messages = applyChan->WaitPopBatch(128, 50);
     if (m_stopRequested.load(std::memory_order_acquire)) break;
-    DPrintf(
-        "---------------tmp-------------[func-RegionPeer::ReadRaftApplyCommandLoop()-kvserver{%d}] 收到了下raft的消息",
-        m_me);
-    // listen to every command applied by its raft ,delivery to relative RPC Handler
+    if (messages.empty()) continue;
+    if (messages.size() == 1) {
+      std::this_thread::yield();
+      auto more = applyChan->PopBatch(128 - static_cast<int>(messages.size()));
+      for (auto& m : more) messages.push_back(std::move(m));
+    }
 
-    if (message.CommandValid) {
-      std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
-      if (!GetCommandFromRaft(message)) {
-        MarkStateMachineUnhealthy();
-        return;
-      }
-      AdvanceStateMachineApplied(message.CommandIndex);
+    if (messages.size() > 1 && TryBatchApplyFromRaft(messages)) {
+      continue;
     }
-    if (message.ProposalRejected) {
-      Op rejected;
-      if (rejected.parseFromString(message.Command) && IsNodeScheduledTxn(rejected.Operation)) {
-        const auto scheduler = m_nodeTxnScheduler.lock();
-        if (scheduler) scheduler->OnProposalRejected(m_regionId, rejected);
+
+    for (auto& message : messages) {
+      if (m_stopRequested.load(std::memory_order_acquire)) break;
+      DPrintf(
+          "---------------tmp-------------[func-RegionPeer::ReadRaftApplyCommandLoop()-kvserver{%d}] 收到了下raft的消息",
+          m_me);
+      // listen to every command applied by its raft ,delivery to relative RPC Handler
+
+      if (message.CommandValid) {
+        std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
+        if (!GetCommandFromRaft(message)) {
+          MarkStateMachineUnhealthy();
+          return;
+        }
+        AdvanceStateMachineApplied(message.CommandIndex);
       }
-    }
-    if (message.SnapshotValid) {
-      std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
-      GetSnapShotFromRaft(message);
+      if (message.ProposalRejected) {
+        Op rejected;
+        if (rejected.parseFromString(message.Command) && IsNodeScheduledTxn(rejected.Operation)) {
+          const auto scheduler = m_nodeTxnScheduler.lock();
+          if (scheduler) scheduler->OnProposalRejected(m_regionId, rejected);
+        }
+      }
+      if (message.SnapshotValid) {
+        std::lock_guard<std::mutex> executionLock(m_stateMachineExecutionMutex);
+        GetSnapShotFromRaft(message);
+      }
     }
   }
 }

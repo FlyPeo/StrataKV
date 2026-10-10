@@ -967,6 +967,95 @@ TxnStatus MvccStorage::ApplyPreparedBatch(const PreparedMvccBatch& prepared,
   return TxnStatus::Ok;
 }
 
+bool MvccStorage::ApplyPreparedCommandsAtomically(
+    const std::vector<PreparedApplyCommand>& commands) {
+  if (commands.empty()) return false;
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+
+  std::unordered_map<std::string, uint64_t> stagedRevisions;
+  auto currentOrStagedRevision = [&](const std::string& key) -> uint64_t {
+    auto it = stagedRevisions.find(key);
+    if (it != stagedRevisions.end()) return it->second;
+    return CurrentRevisionLocked(key);
+  };
+
+  std::vector<KVBatchOp> combinedModifications;
+  uint64_t prevRaftIndex = appliedRaftIndex_;
+  for (const auto& cmd : commands) {
+    if (cmd.raftIndex == 0 || cmd.raftIndex <= prevRaftIndex) {
+      return false;
+    }
+    prevRaftIndex = cmd.raftIndex;
+
+    if (!cmd.isBatch) {
+      const auto& prepared = cmd.single;
+      if ((prepared.commandVersion != PreparedMvccWrite::kLegacyCommandVersion &&
+           prepared.commandVersion != PreparedMvccWrite::kCommandVersion) ||
+          prepared.status != TxnStatus::Ok || prepared.modifications.empty() ||
+          prepared.newRevision != prepared.expectedRevision + 1 ||
+          currentOrStagedRevision(cmd.key) != prepared.expectedRevision) {
+        return false;
+      }
+      stagedRevisions[cmd.key] = prepared.newRevision;
+      combinedModifications.insert(combinedModifications.end(),
+                                   prepared.modifications.begin(),
+                                   prepared.modifications.end());
+    } else {
+      const auto& prepared = cmd.batch;
+      if (prepared.commandVersion != PreparedMvccBatch::kCommandVersion ||
+          prepared.status != TxnStatus::Ok || prepared.items.empty()) {
+        return false;
+      }
+      std::string previousKey;
+      for (const auto& item : prepared.items) {
+        if (item.key.empty() || (!previousKey.empty() && item.key <= previousKey) ||
+            item.prepared.status != TxnStatus::Ok) {
+          return false;
+        }
+        previousKey = item.key;
+        if (item.prepared.modifications.empty()) continue;
+        if (item.prepared.newRevision != item.prepared.expectedRevision + 1 ||
+            currentOrStagedRevision(item.key) != item.prepared.expectedRevision) {
+          return false;
+        }
+        stagedRevisions[item.key] = item.prepared.newRevision;
+        combinedModifications.insert(combinedModifications.end(),
+                                     item.prepared.modifications.begin(),
+                                     item.prepared.modifications.end());
+      }
+    }
+  }
+
+  if (combinedModifications.empty()) return false;
+  const uint64_t finalRaftIndex = commands.back().raftIndex;
+  combinedModifications.push_back(
+      {KVBatchOpType::Put, "meta/mvcc_applied_raft_index", std::to_string(finalRaftIndex)});
+  if (!engine_->WriteBatch(combinedModifications)) {
+    return false;
+  }
+  writeBatchCount_.fetch_add(1, std::memory_order_relaxed);
+  for (const auto& cmd : commands) {
+    if (!cmd.isBatch) {
+      for (const auto& modification : cmd.single.modifications) {
+        ApplyMetadataMutationLocked(modification);
+      }
+    } else {
+      for (const auto& item : cmd.batch.items) {
+        for (const auto& modification : item.prepared.modifications) {
+          ApplyMetadataMutationLocked(modification);
+        }
+      }
+    }
+  }
+  for (const auto& [key, expectedRev] : stagedRevisions) {
+    if (CurrentRevisionLocked(key) != expectedRev) {
+      return false;
+    }
+  }
+  appliedRaftIndex_ = finalRaftIndex;
+  return true;
+}
+
 TxnStatus MvccStorage::BatchPrewrite(const std::vector<MvccMutation>& mutations,
                                      const std::string& primaryKey, uint64_t startTs,
                                      uint64_t ttlMs, uint64_t forUpdateTs,
